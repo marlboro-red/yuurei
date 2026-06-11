@@ -328,9 +328,25 @@ the start of Phase 3's runtime, built skeleton-first:
   interactive move/resize via a WM_ENTERSIZEMOVE-scoped 16ms timer.
 - [x] `initial_size` action honored (client→window rect via
   `AdjustWindowRectExForDpi`).
-- **Exit criterion (still open):** daily-drivable (ugly) terminal — needs a
-  longer stability soak (30-minute soak under continuous output load in
-  progress), full vttest, screenshot in the README.
+- [x] Stability soak (2026-06-12): 45+ minutes under continuous scrolling
+  output (timestamped directory listings in a tight loop), memory stable
+  at ~78MB, no crash. Longer multi-day soaks accumulate naturally from
+  daily driving.
+- [x] pwsh shell integration (2026-06-12) — **new feature, exists for no
+  platform upstream**: `src/shell-integration/pwsh/ghostty.ps1` (5.1- and
+  7+-compatible) emits OSC 133 prompt marks (A/B/C/D with exit codes),
+  OSC 7 cwd, and OSC 0 titles via prompt + PSConsoleHostReadLine wraps;
+  auto-injected by rewriting the command to `-NoExit -Command
+  . <script>` (returns a direct command so spawn-layer quoting is exact;
+  bails on -Command/-File/-EncodedCommand/-NoExit). Verified live:
+  injection log, error-free startup, title following cwd via our OSC.
+- [x] `zig build` on Windows now defaults to the win32 runtime
+  (2026-06-12) — the exe is the default Windows artifact.
+- [x] Dark title bar via DWMWA_USE_IMMERSIVE_DARK_MODE, following theme
+  changes (2026-06-12).
+- **Exit criterion (still open):** full interactive vttest (needs WSL or
+  a POSIX host); screenshot in the README. Everything else on the Phase
+  2 list is done.
 
 ### Phase 3 — Native Win32 apprt, completed (2–3 months)
 

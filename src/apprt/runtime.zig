@@ -21,6 +21,8 @@ pub const Runtime = enum {
             // The Linux and FreeBSD default is GTK because it is a full
             // featured application.
             .linux, .freebsd => .gtk,
+            // Windows builds the native win32 runtime.
+            .windows => .win32,
             // Otherwise, we do NONE so we don't create an exe and we create
             // libghostty. On macOS, Xcode is used to build the app that links
             // to libghostty.
