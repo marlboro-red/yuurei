@@ -316,9 +316,21 @@ the start of Phase 3's runtime, built skeleton-first:
   Verified: live window spawns pwsh. (Shell-integration injection for
   pwsh does not exist upstream for any platform — new work, tracked under
   Phase 3's shell-integration item.)
+- [~] VT conformance (2026-06-12): a vttest-style probe through the live
+  window passed cleanly — cursor addressing, SGR attribute set
+  (bold/italic/underline/reverse/strike), 16/256/truecolor, DEC special
+  graphics line drawing, CJK wide characters, emoji, DECSTBM scroll
+  regions (verified exact post-scroll state), right-margin wrap, OSC
+  title. Still open: the full interactive vttest — needs WSL (not
+  installed on the dev machine) or a POSIX host to run vttest inside
+  Ghostty.
+- [x] Modal-loop timer (2026-06-12): core app keeps ticking during
+  interactive move/resize via a WM_ENTERSIZEMOVE-scoped 16ms timer.
+- [x] `initial_size` action honored (client→window rect via
+  `AdjustWindowRectExForDpi`).
 - **Exit criterion (still open):** daily-drivable (ugly) terminal — needs a
-  multi-day stability soak and a proper vttest pass through ConPTY;
-  screenshot in the README.
+  longer stability soak (30-minute soak under continuous output load in
+  progress), full vttest, screenshot in the README.
 
 ### Phase 3 — Native Win32 apprt, completed (2–3 months)
 
