@@ -365,6 +365,15 @@ runtime like `gtk.zig`.
   output keeps flowing during drags, PMv2 DPI awareness **queried at window
   creation**, `WM_DPICHANGED`. *(The prior attempt's frame code validated this
   recipe in Zig — salvage the knowledge, rewrite against generated bindings.)*
+  - [x] Prerequisite landed (2026-06-12): the GL surface renders into a
+    disabled child window ("ghostty-host") instead of the top-level
+    window, so the parent can own GDI-painted chrome (tab strip, caption
+    buttons) that the GL swap chain can't overdraw. Verified zero
+    behavioral change: rendering, input passthrough (disabled child →
+    parent), resize tracking.
+  - Remaining: `WM_NCCALCSIZE` top-frame removal, `WM_NCHITTEST` caption/
+    resize hit testing, GDI tab strip + caption buttons in the reclaimed
+    strip, Mica/backdrop. Tabs and chrome are one design unit.
 - **Input gets disproportionate budget — it is where real terminals fail:**
   - The `TranslateMessage` ordering trap (handled `WM_KEYDOWN` must swallow its
     queued `WM_CHAR`).

@@ -56,6 +56,16 @@ pub fn init(
     };
     if (winapi.RegisterClassExW(&class) == 0) return error.RegisterClassFailed;
 
+    // The GL host child class (see Surface.host_class_name).
+    const host_class: winapi.WNDCLASSEXW = .{
+        .style = winapi.CS_OWNDC,
+        .lpfnWndProc = Surface.hostWndProc,
+        .hInstance = hinstance,
+        .hbrBackground = null,
+        .lpszClassName = Surface.host_class_name,
+    };
+    if (winapi.RegisterClassExW(&host_class) == 0) return error.RegisterClassFailed;
+
     // Load our configuration
     var config = try Config.load(core_app.alloc);
     errdefer config.deinit();

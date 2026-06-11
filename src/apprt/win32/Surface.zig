@@ -21,14 +21,42 @@ const log = std.log.scoped(.win32);
 /// The window class name, registered once by App.
 pub const class_name = std.unicode.utf8ToUtf16LeStringLiteral("ghostty");
 
+/// The class for the GL host child window. The terminal renders into
+/// this child rather than the top-level window so the parent can later
+/// own GDI-painted chrome (tab strip, caption buttons) that the GL
+/// swap chain can't stomp.
+pub const host_class_name = std.unicode.utf8ToUtf16LeStringLiteral("ghostty-host");
+
+/// Window procedure for the GL host child. It renders nothing itself
+/// (the renderer thread owns its pixels) and, being disabled, passes
+/// mouse input through to the parent.
+pub fn hostWndProc(
+    hwnd: winapi.HWND,
+    msg: winapi.UINT,
+    wparam: winapi.WPARAM,
+    lparam: winapi.LPARAM,
+) callconv(.winapi) winapi.LRESULT {
+    switch (msg) {
+        winapi.WM_ERASEBKGND => return 1,
+        winapi.WM_PAINT => {
+            _ = winapi.ValidateRect(hwnd, null);
+            return 0;
+        },
+        else => return winapi.DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
 /// The app we're part of.
 app: *App,
 
 /// The core surface backing this one.
 core_surface: CoreSurface,
 
-/// Win32 window and GL state.
+/// Win32 window and GL state. `hwnd` is the top-level window; `host`
+/// is the disabled child the OpenGL context renders into (see
+/// host_class_name for why), and `hdc` is the host's DC.
 hwnd: winapi.HWND,
+host: winapi.HWND,
 hdc: winapi.HDC,
 gl_context: winapi.HGLRC,
 
@@ -79,9 +107,28 @@ pub fn init(self: *Self, app: *App) !void {
     ) orelse return error.CreateWindowFailed;
     errdefer _ = winapi.DestroyWindow(hwnd);
 
+    // The GL host child fills the client area. Destroying the parent
+    // destroys it, so no errdefer of its own.
+    var client: winapi.RECT = undefined;
+    _ = winapi.GetClientRect(hwnd, &client);
+    const host = winapi.CreateWindowExW(
+        0,
+        host_class_name,
+        std.unicode.utf8ToUtf16LeStringLiteral(""),
+        winapi.WS_CHILD | winapi.WS_VISIBLE | winapi.WS_DISABLED,
+        0,
+        0,
+        client.right - client.left,
+        client.bottom - client.top,
+        hwnd,
+        null,
+        app.hinstance,
+        null,
+    ) orelse return error.CreateWindowFailed;
+
     // CS_OWNDC on the class means this DC is ours for the window's
     // lifetime and is what WGL renders into.
-    const hdc = winapi.GetDC(hwnd) orelse return error.GetDCFailed;
+    const hdc = winapi.GetDC(host) orelse return error.GetDCFailed;
 
     // A boring double-buffered RGBA format. No depth/stencil: the
     // renderer draws textured quads back-to-front.
@@ -110,6 +157,7 @@ pub fn init(self: *Self, app: *App) !void {
         .app = app,
         .core_surface = undefined,
         .hwnd = hwnd,
+        .host = host,
         .hdc = hdc,
         .gl_context = gl_context,
     };
@@ -268,7 +316,7 @@ pub fn deinit(self: *Self) void {
     self.core_surface.deinit();
 
     _ = winapi.wglDeleteContext(self.gl_context);
-    _ = winapi.ReleaseDC(self.hwnd, self.hdc);
+    _ = winapi.ReleaseDC(self.host, self.hdc);
 
     // Detach the window proc user data before destroying so any
     // stray messages during destruction don't reach freed memory.
@@ -553,6 +601,18 @@ pub fn wndProc(
                 log.err("error querying window size err={}", .{err});
                 return 0;
             };
+
+            // Keep the GL host child covering the client area.
+            _ = winapi.SetWindowPos(
+                self.host,
+                null,
+                0,
+                0,
+                @intCast(size.width),
+                @intCast(size.height),
+                winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
+            );
+
             self.core_surface.sizeCallback(size) catch |err| {
                 log.err("error in size callback err={}", .{err});
             };
