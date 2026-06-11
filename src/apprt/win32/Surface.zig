@@ -1,30 +1,25 @@
-/// Win32 apprt Surface: one top-level window per surface, hosting the
-/// OpenGL renderer through a WGL context. Modeled on the deleted GLFW
-/// apprt (the historical minimal runtime; see fb9c52ecf~1) adapted to
-/// raw Win32. Phase 2 of WINDOWS_PORT_PLAN.md: deliberately crude where
-/// crude is honest — no IME, no AltGr discrimination, no dead keys, no
-/// custom frame yet. Those land in Phase 3 with the regression checklist.
+/// Win32 apprt Surface: one terminal tab. Owns the GL host child
+/// window, the WGL context, and the core surface; the containing
+/// Window (Window.zig) owns the top-level window, chrome, and input
+/// routing.
 const Self = @This();
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const apprt = @import("../../apprt.zig");
-const input = @import("../../input.zig");
 const internal_os = @import("../../os/main.zig");
 const terminal = @import("../../terminal/main.zig");
 const CoreSurface = @import("../../Surface.zig");
 const App = @import("App.zig");
+const Window = @import("Window.zig");
 const winapi = @import("winapi.zig");
 
 const log = std.log.scoped(.win32);
 
-/// The window class name, registered once by App.
-pub const class_name = std.unicode.utf8ToUtf16LeStringLiteral("ghostty");
-
 /// The class for the GL host child window. The terminal renders into
-/// this child rather than the top-level window so the parent can later
-/// own GDI-painted chrome (tab strip, caption buttons) that the GL
-/// swap chain can't stomp.
+/// this child rather than the top-level window so the parent can own
+/// GDI-painted chrome (tab strip, caption buttons) that the GL swap
+/// chain can't stomp.
 pub const host_class_name = std.unicode.utf8ToUtf16LeStringLiteral("ghostty-host");
 
 /// Window procedure for the GL host child. It renders nothing itself
@@ -49,98 +44,49 @@ pub fn hostWndProc(
 /// The app we're part of.
 app: *App,
 
-/// The core surface backing this one.
+/// The window (tab container) we belong to.
+window: *Window,
+
+/// The core surface backing this tab.
 core_surface: CoreSurface,
 
-/// Win32 window and GL state. `hwnd` is the top-level window; `host`
-/// is the disabled child the OpenGL context renders into (see
-/// host_class_name for why), and `hdc` is the host's DC.
-hwnd: winapi.HWND,
+/// The GL host child and its GL state.
 host: winapi.HWND,
 hdc: winapi.HDC,
 gl_context: winapi.HGLRC,
 
-/// Flagged by WM_CLOSE; the App run loop performs the actual close
-/// outside of the window procedure to avoid freeing the surface while
-/// a message for it is still on the stack.
+/// Flagged for close; the App run loop performs the actual teardown.
 should_close: bool = false,
 
-/// Title storage so getTitle can return stable memory.
+/// Title storage; doubles as the tab label.
 title_text: ?[:0]const u8 = null,
 
-/// The key event from the last WM_KEYDOWN that the core did not consume.
-/// WM_CHAR (which TranslateMessage posts right after) completes it with
-/// the layout-cooked UTF-8 text and resubmits. Mirrors the GLFW apprt's
-/// key/char callback pairing.
-pending_key_event: ?input.KeyEvent = null,
-
-/// Buffer backing pending_key_event.utf8 across the KEYDOWN→CHAR pair.
-utf8_buf: [4]u8 = undefined,
-
-/// Pending high surrogate from WM_CHAR, awaiting its low half.
-high_surrogate: ?u16 = null,
-
-/// The cursor for the client area, set by the core's mouse_shape
-/// action and applied on WM_SETCURSOR. System cursors are shared
-/// objects and are never destroyed.
+/// The terminal-area cursor, set by the mouse_shape action and applied
+/// by the Window on WM_SETCURSOR. System cursors are shared objects
+/// and are never destroyed.
 cursor: ?winapi.HCURSOR = null,
 
-/// Current hover state of the caption buttons.
-hover_button: ?CaptionButton = null,
-
-/// Timer id used to keep the core app ticking while the window is in
-/// a DefWindowProc modal loop (interactive move/resize), during which
-/// App.run's message loop never regains control.
-const modal_tick_timer_id: usize = 1;
-
-/// Custom frame: the standard title bar is removed (WM_NCCALCSIZE) and
-/// the top of the client area becomes our title strip with caption
-/// buttons. Logical (96-dpi) strip height; scaled by the window DPI.
-const titlebar_height_logical: i32 = 36;
-
-/// Caption button width, logical.
-const caption_button_width_logical: i32 = 46;
-
-/// Which caption button the mouse is over, for hover painting.
-const CaptionButton = enum { minimize, maximize, close };
-
-pub fn init(self: *Self, app: *App) !void {
-    const hwnd = winapi.CreateWindowExW(
-        0,
-        class_name,
-        std.unicode.utf8ToUtf16LeStringLiteral("Ghostty"),
-        winapi.WS_OVERLAPPEDWINDOW,
-        winapi.CW_USEDEFAULT,
-        winapi.CW_USEDEFAULT,
-        800,
-        600,
-        null,
-        null,
-        app.hinstance,
-        null,
-    ) orelse return error.CreateWindowFailed;
-    errdefer _ = winapi.DestroyWindow(hwnd);
-
+pub fn init(self: *Self, app: *App, window: *Window) !void {
     // The GL host child fills the client area below the title strip.
-    // Destroying the parent destroys it, so no errdefer of its own.
+    // It is created hidden; activateTab shows the active one.
     var client: winapi.RECT = undefined;
-    _ = winapi.GetClientRect(hwnd, &client);
-    const dpi: i32 = @intCast(winapi.GetDpiForWindow(hwnd));
-    const strip = @divTrunc(titlebar_height_logical * dpi, 96);
+    _ = winapi.GetClientRect(window.hwnd, &client);
+    const strip = window.titlebarHeight();
     const host = winapi.CreateWindowExW(
         0,
         host_class_name,
         std.unicode.utf8ToUtf16LeStringLiteral(""),
-        winapi.WS_CHILD | winapi.WS_VISIBLE | winapi.WS_DISABLED,
+        winapi.WS_CHILD | winapi.WS_DISABLED,
         0,
         strip,
         client.right - client.left,
         @max(0, client.bottom - client.top - strip),
-        hwnd,
+        window.hwnd,
         null,
         app.hinstance,
         null,
     ) orelse return error.CreateWindowFailed;
+    errdefer _ = winapi.DestroyWindow(host);
 
     // CS_OWNDC on the class means this DC is ours for the window's
     // lifetime and is what WGL renders into.
@@ -171,8 +117,8 @@ pub fn init(self: *Self, app: *App) !void {
 
     self.* = .{
         .app = app,
+        .window = window,
         .core_surface = undefined,
-        .hwnd = hwnd,
         .host = host,
         .hdc = hdc,
         .gl_context = gl_context,
@@ -199,339 +145,6 @@ pub fn init(self: *Self, app: *App) !void {
         self,
     );
     errdefer self.core_surface.deinit();
-
-    // Only now wire the window procedure to us and show the window:
-    // ShowWindow synchronously dispatches messages (WM_SETFOCUS,
-    // WM_SIZE, ...) that call into core_surface, which must be
-    // initialized first.
-    _ = winapi.SetWindowLongPtrW(
-        hwnd,
-        winapi.GWLP_USERDATA,
-        @bitCast(@intFromPtr(self)),
-    );
-
-    // The window's initial frame was computed before our window
-    // procedure was wired up, i.e. with the standard title bar. Force a
-    // frame recalculation so our WM_NCCALCSIZE removes it.
-    _ = winapi.SetWindowPos(
-        hwnd,
-        null,
-        0,
-        0,
-        0,
-        0,
-        winapi.SWP_NOMOVE | winapi.SWP_NOSIZE | winapi.SWP_NOZORDER |
-            winapi.SWP_NOACTIVATE | winapi.SWP_FRAMECHANGED,
-    );
-
-    _ = winapi.ShowWindow(hwnd, winapi.SW_SHOWDEFAULT);
-
-    // Report the OS theme so `window-theme = auto` and conditional
-    // config (light/dark) work. Changes arrive via WM_SETTINGCHANGE.
-    self.notifyColorScheme();
-}
-
-// ---------------------------------------------------------------------
-// Custom frame geometry & painting
-
-/// The title strip height in physical pixels for the current DPI.
-fn titlebarHeight(self: *const Self) i32 {
-    const dpi: i32 = @intCast(winapi.GetDpiForWindow(self.hwnd));
-    return @divTrunc(titlebar_height_logical * dpi, 96);
-}
-
-/// The rect of a caption button in parent client coordinates.
-fn captionButtonRect(self: *const Self, button: CaptionButton) winapi.RECT {
-    var client: winapi.RECT = undefined;
-    _ = winapi.GetClientRect(self.hwnd, &client);
-    const dpi: i32 = @intCast(winapi.GetDpiForWindow(self.hwnd));
-    const w = @divTrunc(caption_button_width_logical * dpi, 96);
-    const h = self.titlebarHeight();
-    const index: i32 = switch (button) {
-        .close => 1,
-        .maximize => 2,
-        .minimize => 3,
-    };
-    return .{
-        .left = client.right - index * w,
-        .top = 0,
-        .right = client.right - (index - 1) * w,
-        .bottom = h,
-    };
-}
-
-fn captionButtonAt(self: *const Self, x: i32, y: i32) ?CaptionButton {
-    inline for (.{ .minimize, .maximize, .close }) |button| {
-        const r = self.captionButtonRect(button);
-        if (x >= r.left and x < r.right and y >= r.top and y < r.bottom)
-            return button;
-    }
-    return null;
-}
-
-/// Paint the title strip: background, centered title, caption buttons
-/// using Segoe MDL2 Assets glyphs (the standard Windows caption icons).
-fn paintTitlebar(self: *Self, hdc: winapi.HDC) void {
-    var client: winapi.RECT = undefined;
-    _ = winapi.GetClientRect(self.hwnd, &client);
-    var strip: winapi.RECT = .{
-        .left = 0,
-        .top = 0,
-        .right = client.right,
-        .bottom = self.titlebarHeight(),
-    };
-
-    const light = winapi.appsUseLightTheme();
-    const bg: u32 = if (light) 0x00F3F3F3 else 0x00202020;
-    const fg: u32 = if (light) 0x00000000 else 0x00FFFFFF;
-
-    const bg_brush = winapi.CreateSolidBrush(bg) orelse return;
-    defer _ = winapi.DeleteObject(bg_brush);
-    _ = winapi.FillRect(hdc, &strip, bg_brush);
-
-    _ = winapi.SetBkMode(hdc, winapi.TRANSPARENT_BK);
-    _ = winapi.SetTextColor(hdc, fg);
-
-    const dpi: i32 = @intCast(winapi.GetDpiForWindow(self.hwnd));
-
-    // Title text, centered in the strip, away from the buttons.
-    if (self.title_text) |title| title: {
-        const font = winapi.CreateFontW(
-            @divTrunc(-12 * dpi, 96),
-            0,
-            0,
-            0,
-            400,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            5, // CLEARTYPE_QUALITY
-            0,
-            std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI"),
-        ) orelse break :title;
-        defer _ = winapi.DeleteObject(font);
-        const old_font = winapi.SelectObject(hdc, font);
-        defer if (old_font) |f| {
-            _ = winapi.SelectObject(hdc, f);
-        };
-
-        var buf: [512]u16 = undefined;
-        const len = std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], title) catch
-            break :title;
-        buf[len] = 0;
-
-        const btns = 3 * @divTrunc(caption_button_width_logical * dpi, 96);
-        var text_rect: winapi.RECT = .{
-            .left = btns,
-            .top = 0,
-            .right = client.right - btns,
-            .bottom = strip.bottom,
-        };
-        _ = winapi.DrawTextW(
-            hdc,
-            buf[0..len :0],
-            @intCast(len),
-            &text_rect,
-            winapi.DT_CENTER | winapi.DT_VCENTER |
-                winapi.DT_SINGLELINE | winapi.DT_END_ELLIPSIS,
-        );
-    }
-
-    // Caption buttons.
-    const glyph_font = winapi.CreateFontW(
-        @divTrunc(-10 * dpi, 96),
-        0,
-        0,
-        0,
-        400,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        5,
-        0,
-        std.unicode.utf8ToUtf16LeStringLiteral("Segoe MDL2 Assets"),
-    );
-    defer if (glyph_font) |f| {
-        _ = winapi.DeleteObject(f);
-    };
-    if (glyph_font) |f| {
-        const old_font = winapi.SelectObject(hdc, f);
-        defer if (old_font) |of| {
-            _ = winapi.SelectObject(hdc, of);
-        };
-
-        inline for (.{ .minimize, .maximize, .close }) |button| {
-            var rect = self.captionButtonRect(button);
-
-            if (self.hover_button == @as(CaptionButton, button)) {
-                const hover_bg: u32 = if (button == .close)
-                    0x002311E8 // close hovers red (COLORREF is BGR)
-                else if (light)
-                    0x00DADADA
-                else
-                    0x002D2D2D;
-                const hover_brush = winapi.CreateSolidBrush(hover_bg);
-                if (hover_brush) |hb| {
-                    defer _ = winapi.DeleteObject(hb);
-                    _ = winapi.FillRect(hdc, &rect, hb);
-                }
-                _ = winapi.SetTextColor(
-                    hdc,
-                    if (button == .close) 0x00FFFFFF else fg,
-                );
-            } else {
-                _ = winapi.SetTextColor(hdc, fg);
-            }
-
-            // Segoe MDL2 Assets: ChromeMinimize/Maximize/Restore/Close.
-            const glyph: []const u16 = switch (@as(CaptionButton, button)) {
-                .minimize => &.{0xE921},
-                .maximize => if (winapi.IsZoomed(self.hwnd) != 0)
-                    &.{0xE923}
-                else
-                    &.{0xE922},
-                .close => &.{0xE8BB},
-            };
-            var glyph_buf: [2:0]u16 = .{ glyph[0], 0 };
-            _ = winapi.DrawTextW(
-                hdc,
-                &glyph_buf,
-                1,
-                &rect,
-                winapi.DT_CENTER | winapi.DT_VCENTER | winapi.DT_SINGLELINE,
-            );
-        }
-    }
-}
-
-/// Handle a click on a caption button.
-fn captionButtonClick(self: *Self, button: CaptionButton) void {
-    switch (button) {
-        .minimize => _ = winapi.ShowWindow(self.hwnd, winapi.SW_MINIMIZE),
-        .maximize => _ = winapi.ShowWindow(
-            self.hwnd,
-            if (winapi.IsZoomed(self.hwnd) != 0)
-                winapi.SW_RESTORE
-            else
-                winapi.SW_MAXIMIZE,
-        ),
-        .close => self.should_close = true,
-    }
-}
-
-/// Move the IME composition point to the terminal cursor cell so
-/// candidate windows pop up next to where text is being typed.
-fn imePositionWindow(self: *Self) void {
-    const himc = winapi.ImmGetContext(self.hwnd) orelse return;
-    defer _ = winapi.ImmReleaseContext(self.hwnd, himc);
-
-    // imePoint is relative to the terminal surface (the GL host); the
-    // composition window position is relative to the top-level window.
-    const pos = self.core_surface.imePoint();
-    _ = winapi.ImmSetCompositionWindow(himc, &.{
-        .dwStyle = winapi.CFS_POINT,
-        .ptCurrentPos = .{
-            .x = @intFromFloat(@max(0, pos.x)),
-            .y = @as(i32, @intFromFloat(@max(0, pos.y))) + self.titlebarHeight(),
-        },
-        .rcArea = std.mem.zeroes(winapi.RECT),
-    });
-}
-
-/// Handle WM_IME_COMPOSITION: result text commits to the terminal as a
-/// key event; composition text becomes inline preedit. Both can be
-/// present in one message (commit + start of the next composition).
-fn imeComposition(self: *Self, lparam: winapi.LPARAM) void {
-    const flags: winapi.DWORD = @truncate(@as(usize, @bitCast(lparam)));
-    const himc = winapi.ImmGetContext(self.hwnd) orelse return;
-    defer _ = winapi.ImmReleaseContext(self.hwnd, himc);
-
-    const alloc = self.core_surface.alloc;
-
-    if (flags & winapi.GCS_RESULTSTR != 0) result: {
-        const text = imeGetString(alloc, himc, winapi.GCS_RESULTSTR) orelse
-            break :result;
-        defer alloc.free(text);
-
-        // Clear the preedit before committing so the committed text
-        // doesn't render on top of a stale preedit.
-        self.core_surface.preeditCallback(null) catch {};
-
-        const key_event: input.KeyEvent = .{
-            .action = .press,
-            .key = .unidentified,
-            .utf8 = text,
-        };
-        _ = self.core_surface.keyCallback(key_event) catch |err| {
-            log.err("error in key callback err={}", .{err});
-        };
-    }
-
-    if (flags & winapi.GCS_COMPSTR != 0) comp: {
-        const text = imeGetString(alloc, himc, winapi.GCS_COMPSTR) orelse
-            break :comp;
-        defer alloc.free(text);
-
-        self.core_surface.preeditCallback(
-            if (text.len > 0) text else null,
-        ) catch |err| {
-            log.err("error in preedit callback err={}", .{err});
-        };
-    }
-
-    // Keep the composition UI tracking the cursor as text flows.
-    self.imePositionWindow();
-}
-
-/// Read an IME composition string as freshly-allocated UTF-8, or null
-/// if it is empty or unavailable.
-fn imeGetString(
-    alloc: Allocator,
-    himc: winapi.HIMC,
-    index: winapi.DWORD,
-) ?[]const u8 {
-    const bytes = winapi.ImmGetCompositionStringW(himc, index, null, 0);
-    if (bytes <= 0) return null;
-
-    const wide = alloc.alloc(u16, @intCast(@divExact(bytes, 2))) catch return null;
-    defer alloc.free(wide);
-    _ = winapi.ImmGetCompositionStringW(
-        himc,
-        index,
-        wide.ptr,
-        @intCast(bytes),
-    );
-
-    return std.unicode.utf16LeToUtf8Alloc(alloc, wide) catch null;
-}
-
-/// Read the OS theme and forward it to the core surface. Also keeps
-/// the title bar matched: DWM immersive dark mode follows the apps
-/// theme rather than defaulting to a white caption.
-fn notifyColorScheme(self: *Self) void {
-    const light = winapi.appsUseLightTheme();
-
-    const dark_titlebar: winapi.BOOL = if (light) winapi.FALSE else winapi.TRUE;
-    _ = winapi.DwmSetWindowAttribute(
-        self.hwnd,
-        winapi.DWMWA_USE_IMMERSIVE_DARK_MODE,
-        &dark_titlebar,
-        @sizeOf(winapi.BOOL),
-    );
-
-    const scheme: apprt.ColorScheme = if (light) .light else .dark;
-    self.core_surface.colorSchemeCallback(scheme) catch |err| {
-        log.err("error in color scheme callback err={}", .{err});
-    };
-
-    // Repaint the strip in the new theme colors.
-    _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
 }
 
 pub fn deinit(self: *Self) void {
@@ -547,11 +160,7 @@ pub fn deinit(self: *Self) void {
 
     _ = winapi.wglDeleteContext(self.gl_context);
     _ = winapi.ReleaseDC(self.host, self.hdc);
-
-    // Detach the window proc user data before destroying so any
-    // stray messages during destruction don't reach freed memory.
-    _ = winapi.SetWindowLongPtrW(self.hwnd, winapi.GWLP_USERDATA, 0);
-    _ = winapi.DestroyWindow(self.hwnd);
+    _ = winapi.DestroyWindow(self.host);
 }
 
 pub fn core(self: *Self) *CoreSurface {
@@ -562,13 +171,16 @@ pub fn rtApp(self: *Self) *App {
     return self.app;
 }
 
-/// Close this surface (called by core and by the App run loop for
-/// surfaces flagged by WM_CLOSE).
+/// Close this tab. The App run loop performs the actual teardown.
 pub fn close(self: *Self, process_active: bool) void {
     _ = process_active;
-    const alloc = self.app.core_app.alloc;
-    self.deinit();
-    alloc.destroy(self);
+    self.should_close = true;
+    self.app.wakeup();
+}
+
+/// Show or hide the GL host (tab activation).
+pub fn setVisible(self: *Self, visible: bool) void {
+    _ = winapi.ShowWindow(self.host, if (visible) 5 else 0); // SW_SHOW/SW_HIDE
 }
 
 // ---------------------------------------------------------------------
@@ -595,19 +207,16 @@ pub fn setTitle(self: *Self, slice: [:0]const u8) !void {
     if (self.title_text) |t| alloc.free(t);
     self.title_text = try alloc.dupeZ(u8, slice);
 
-    var buf: [512]u16 = undefined;
-    const len = std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], slice) catch return;
-    buf[len] = 0;
-    // Keeps the taskbar/alt-tab title correct; the visible strip is
-    // painted by us.
-    _ = winapi.SetWindowTextW(self.hwnd, buf[0..len :0]);
-    _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+    // The strip repaints the tab label; the OS title follows the
+    // active tab.
+    if (self.window.activeTab() == self) self.window.syncTitle();
+    _ = winapi.InvalidateRect(self.window.hwnd, null, winapi.FALSE);
 }
 
 pub fn getContentScale(self: *const Self) !apprt.ContentScale {
-    const dpi: f32 = @floatFromInt(winapi.GetDpiForWindow(self.hwnd));
-    const scale = dpi / 96.0;
-    return .{ .x = scale, .y = scale };
+    const dpi: f32 = @floatFromInt(winapi.GetDpiForWindow(self.window.hwnd));
+    const s = dpi / 96.0;
+    return .{ .x = s, .y = s };
 }
 
 pub fn getSize(self: *const Self) !apprt.SurfaceSize {
@@ -658,7 +267,7 @@ pub fn clipboardRequest(
     // like the GLFW apprt did. Always "unsafe" (no confirmation UI yet).
     const alloc = self.core_surface.alloc;
     const text: [:0]const u8 = text: {
-        if (winapi.OpenClipboard(self.hwnd) == 0) break :text "";
+        if (winapi.OpenClipboard(self.window.hwnd) == 0) break :text "";
         defer _ = winapi.CloseClipboard();
 
         const handle = winapi.GetClipboardData(winapi.CF_UNICODETEXT) orelse break :text "";
@@ -713,7 +322,7 @@ pub fn setClipboard(
         const dst: [*]u16 = @ptrCast(@alignCast(ptr));
         @memcpy(dst[0 .. wide.len + 1], wide.ptr[0 .. wide.len + 1]);
 
-        if (winapi.OpenClipboard(self.hwnd) == 0) break :copy;
+        if (winapi.OpenClipboard(self.window.hwnd) == 0) break :copy;
         defer _ = winapi.CloseClipboard();
         _ = winapi.EmptyClipboard();
         if (winapi.SetClipboardData(winapi.CF_UNICODETEXT, handle) != null) {
@@ -745,20 +354,20 @@ pub fn setInitialWindowSize(self: *const Self, width: u32, height: u32) !void {
         winapi.WS_OVERLAPPEDWINDOW,
         winapi.FALSE,
         0,
-        winapi.GetDpiForWindow(self.hwnd),
+        winapi.GetDpiForWindow(self.window.hwnd),
     );
     _ = winapi.SetWindowPos(
-        self.hwnd,
+        self.window.hwnd,
         null,
         0,
         0,
         rect.right - rect.left,
-        rect.bottom - rect.top,
+        rect.bottom - rect.top + self.window.titlebarHeight(),
         winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE | winapi.SWP_NOMOVE,
     );
 }
 
-/// Set the mouse cursor shape for the client area. Unmapped shapes
+/// Set the mouse cursor shape for the terminal area. Unmapped shapes
 /// keep the current cursor (the spec set is larger than the stock
 /// Windows cursor set).
 pub fn setMouseShape(self: *Self, shape: terminal.MouseShape) !void {
@@ -781,532 +390,7 @@ pub fn setMouseShape(self: *Self, shape: terminal.MouseShape) !void {
 
     const cursor = winapi.loadSystemCursor(id) orelse return;
     self.cursor = cursor;
-    // Apply immediately; otherwise it only takes effect on the next
-    // WM_SETCURSOR (i.e. next mouse move).
-    _ = winapi.SetCursor(cursor);
-}
-
-// ---------------------------------------------------------------------
-// Window procedure
-
-pub fn wndProc(
-    hwnd: winapi.HWND,
-    msg: winapi.UINT,
-    wparam: winapi.WPARAM,
-    lparam: winapi.LPARAM,
-) callconv(.winapi) winapi.LRESULT {
-    const self: *Self = self: {
-        const ptr = winapi.GetWindowLongPtrW(hwnd, winapi.GWLP_USERDATA);
-        if (ptr == 0) return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
-        break :self @ptrFromInt(@as(usize, @bitCast(ptr)));
-    };
-
-    switch (msg) {
-        winapi.WM_CLOSE => {
-            // Defer the actual close to the App run loop: destroying
-            // ourselves while our own message is being dispatched would
-            // free memory still on the stack.
-            self.should_close = true;
-            return 0;
-        },
-
-        winapi.WM_ERASEBKGND => return 1,
-
-        // Custom frame: remove the standard title bar but keep the
-        // left/right/bottom resize borders DefWindowProc computes.
-        winapi.WM_NCCALCSIZE => {
-            if (wparam == 0) return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
-            const params: *winapi.NCCALCSIZE_PARAMS = @ptrFromInt(
-                @as(usize, @bitCast(lparam)),
-            );
-            const original_top = params.rgrc[0].top;
-            const result = winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
-            if (result != 0) return result;
-            params.rgrc[0].top = original_top;
-
-            // When maximized the window extends past the monitor edge
-            // by the frame size; inset the top so the strip is visible.
-            if (winapi.IsZoomed(hwnd) != 0) {
-                const dpi = winapi.GetDpiForWindow(hwnd);
-                params.rgrc[0].top += winapi.GetSystemMetricsForDpi(
-                    winapi.SM_CYSIZEFRAME,
-                    dpi,
-                ) + winapi.GetSystemMetricsForDpi(
-                    winapi.SM_CXPADDEDBORDER,
-                    dpi,
-                );
-            }
-            return 0;
-        },
-
-        winapi.WM_NCHITTEST => {
-            // Coordinates are in screen space.
-            var pt: winapi.POINT = .{
-                .x = lparamX(lparam),
-                .y = lparamY(lparam),
-            };
-            _ = winapi.ScreenToClient(hwnd, &pt);
-
-            // Top resize border (the standard one was removed with the
-            // title bar).
-            if (winapi.IsZoomed(hwnd) == 0) {
-                const dpi = winapi.GetDpiForWindow(hwnd);
-                const frame_y = winapi.GetSystemMetricsForDpi(
-                    winapi.SM_CYSIZEFRAME,
-                    dpi,
-                ) + winapi.GetSystemMetricsForDpi(
-                    winapi.SM_CXPADDEDBORDER,
-                    dpi,
-                );
-                if (pt.y >= 0 and pt.y < frame_y)
-                    return winapi.HTTOP;
-            }
-
-            if (pt.y >= 0 and pt.y < self.titlebarHeight()) {
-                // Caption buttons are normal client clicks; the rest of
-                // the strip drags the window.
-                if (self.captionButtonAt(pt.x, pt.y) != null)
-                    return 1; // HTCLIENT
-                return winapi.HTCAPTION;
-            }
-
-            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
-        },
-
-        winapi.WM_SETCURSOR => {
-            const hit: u16 = @truncate(@as(usize, @bitCast(lparam)));
-            if (hit == winapi.HTCLIENT) {
-                if (self.cursor) |cursor| {
-                    _ = winapi.SetCursor(cursor);
-                    return 1;
-                }
-            }
-            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
-        },
-
-        winapi.WM_PAINT => {
-            var ps: winapi.PAINTSTRUCT = undefined;
-            if (winapi.BeginPaint(hwnd, &ps)) |hdc| {
-                self.paintTitlebar(hdc);
-                _ = winapi.EndPaint(hwnd, &ps);
-            }
-            self.core_surface.refreshCallback() catch |err| {
-                log.err("error in refresh callback err={}", .{err});
-            };
-            return 0;
-        },
-
-        winapi.WM_SIZE => {
-            // The GL host child fills the client area below the strip.
-            var client: winapi.RECT = undefined;
-            _ = winapi.GetClientRect(hwnd, &client);
-            const strip = self.titlebarHeight();
-            _ = winapi.SetWindowPos(
-                self.host,
-                null,
-                0,
-                strip,
-                client.right - client.left,
-                @max(0, client.bottom - client.top - strip),
-                winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
-            );
-            _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
-
-            const size = self.getSize() catch |err| {
-                log.err("error querying window size err={}", .{err});
-                return 0;
-            };
-            self.core_surface.sizeCallback(size) catch |err| {
-                log.err("error in size callback err={}", .{err});
-            };
-            return 0;
-        },
-
-        winapi.WM_SETFOCUS, winapi.WM_KILLFOCUS => {
-            self.core_surface.focusCallback(msg == winapi.WM_SETFOCUS) catch |err| {
-                log.err("error in focus callback err={}", .{err});
-            };
-            return 0;
-        },
-
-        winapi.WM_KEYDOWN,
-        winapi.WM_KEYUP,
-        winapi.WM_SYSKEYDOWN,
-        winapi.WM_SYSKEYUP,
-        => {
-            self.keyEvent(msg, wparam, lparam);
-            // Returning 0 for handled keys; we still let DefWindowProc
-            // see syskeys so alt+f4 and friends keep working.
-            if (msg == winapi.WM_SYSKEYDOWN or msg == winapi.WM_SYSKEYUP)
-                return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
-            return 0;
-        },
-
-        winapi.WM_CHAR => {
-            self.charEvent(@truncate(wparam));
-            return 0;
-        },
-
-        winapi.WM_MOUSEWHEEL => {
-            const delta: i16 = @bitCast(@as(u16, @truncate(wparam >> 16)));
-            const yoff: f64 = @as(f64, @floatFromInt(delta)) / 120.0;
-            self.core_surface.scrollCallback(0, yoff * 3, .{}) catch |err| {
-                log.err("error in scroll callback err={}", .{err});
-            };
-            return 0;
-        },
-
-        winapi.WM_MOUSEMOVE => {
-            const x = lparamX(lparam);
-            const y = lparamY(lparam);
-
-            // Hover tracking for the caption buttons.
-            const hover = self.captionButtonAt(x, y);
-            if (hover != self.hover_button) {
-                self.hover_button = hover;
-                _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
-            }
-
-            // Terminal coordinates are relative to the GL host.
-            self.core_surface.cursorPosCallback(.{
-                .x = @floatFromInt(x),
-                .y = @floatFromInt(y - self.titlebarHeight()),
-            }, currentMods()) catch |err| {
-                log.err("error in cursor pos callback err={}", .{err});
-            };
-            return 0;
-        },
-
-        winapi.WM_LBUTTONDOWN,
-        winapi.WM_LBUTTONUP,
-        winapi.WM_RBUTTONDOWN,
-        winapi.WM_RBUTTONUP,
-        winapi.WM_MBUTTONDOWN,
-        winapi.WM_MBUTTONUP,
-        => {
-            // Clicks in the title strip operate the caption buttons and
-            // never reach the terminal.
-            const cy = lparamY(lparam);
-            if (cy >= 0 and cy < self.titlebarHeight()) {
-                if (msg == winapi.WM_LBUTTONUP) {
-                    if (self.captionButtonAt(lparamX(lparam), cy)) |button| {
-                        self.captionButtonClick(button);
-                    }
-                }
-                return 0;
-            }
-
-            const button: input.MouseButton = switch (msg) {
-                winapi.WM_LBUTTONDOWN, winapi.WM_LBUTTONUP => .left,
-                winapi.WM_RBUTTONDOWN, winapi.WM_RBUTTONUP => .right,
-                else => .middle,
-            };
-            const state: input.MouseButtonState = switch (msg) {
-                winapi.WM_LBUTTONDOWN,
-                winapi.WM_RBUTTONDOWN,
-                winapi.WM_MBUTTONDOWN,
-                => .press,
-                else => .release,
-            };
-
-            // Capture the mouse while a button is held so drag-selection
-            // keeps receiving WM_MOUSEMOVE outside the client area.
-            switch (state) {
-                .press => _ = winapi.SetCapture(hwnd),
-                .release => _ = winapi.ReleaseCapture(),
-            }
-
-            _ = self.core_surface.mouseButtonCallback(
-                state,
-                button,
-                currentMods(),
-            ) catch |err| {
-                log.err("error in mouse button callback err={}", .{err});
-            };
-            return 0;
-        },
-
-        winapi.WM_DPICHANGED => {
-            // wParam carries the new DPI; lParam points at the suggested
-            // new window rect, which we must apply ourselves (PMv2).
-            const suggested: *const winapi.RECT = @ptrFromInt(
-                @as(usize, @bitCast(lparam)),
-            );
-            _ = winapi.SetWindowPos(
-                hwnd,
-                null,
-                suggested.left,
-                suggested.top,
-                suggested.right - suggested.left,
-                suggested.bottom - suggested.top,
-                winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
-            );
-
-            const dpi: f32 = @floatFromInt(wparam & 0xFFFF);
-            const scale = dpi / 96.0;
-            self.core_surface.contentScaleCallback(.{
-                .x = scale,
-                .y = scale,
-            }) catch |err| {
-                log.err("error in content scale callback err={}", .{err});
-            };
-            return 0;
-        },
-
-        winapi.WM_ENTERSIZEMOVE => {
-            // Interactive move/resize runs a modal loop inside
-            // DefWindowProc; tick the core app from a timer so
-            // actions and IO keep flowing during the drag.
-            _ = winapi.SetTimer(hwnd, modal_tick_timer_id, 16, null);
-            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
-        },
-
-        winapi.WM_EXITSIZEMOVE => {
-            _ = winapi.KillTimer(hwnd, modal_tick_timer_id);
-            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
-        },
-
-        winapi.WM_TIMER => {
-            if (wparam == modal_tick_timer_id) {
-                self.app.core_app.tick(self.app) catch |err| {
-                    log.err("error ticking app from modal loop err={}", .{err});
-                };
-                return 0;
-            }
-            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
-        },
-
-        winapi.WM_SETTINGCHANGE => {
-            // Fires for many settings; re-reading the theme is cheap
-            // and colorSchemeCallback de-dupes unchanged values.
-            self.notifyColorScheme();
-            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
-        },
-
-        winapi.WM_IME_STARTCOMPOSITION => {
-            // Position the (suppressed) composition/candidate UI at the
-            // terminal cursor cell. Returning without DefWindowProc
-            // keeps the IME's own composition window hidden; preedit
-            // renders inline via preeditCallback instead.
-            self.imePositionWindow();
-            return 0;
-        },
-
-        winapi.WM_IME_COMPOSITION => {
-            self.imeComposition(lparam);
-            return 0;
-        },
-
-        winapi.WM_IME_ENDCOMPOSITION => {
-            self.core_surface.preeditCallback(null) catch |err| {
-                log.err("error in preedit callback err={}", .{err});
-            };
-            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
-        },
-
-        // TODO: windows: TSF escalation if imm32 has CJK edge cases,
-        // drag and drop. Phase 3 with the REVIEW.md regression checklist.
-
-        else => {},
-    }
-
-    return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
-}
-
-/// Handle WM_KEYDOWN/WM_KEYUP/WM_SYSKEYDOWN/WM_SYSKEYUP. Submits a key
-/// event without text; if the core leaves it unconsumed we stash it so
-/// the WM_CHAR that TranslateMessage queued right behind us can complete
-/// it with the layout-cooked text. This mirrors the GLFW apprt pairing
-/// and is the documented TranslateMessage-ordering trap from the plan.
-fn keyEvent(
-    self: *Self,
-    msg: winapi.UINT,
-    wparam: winapi.WPARAM,
-    lparam: winapi.LPARAM,
-) void {
-    const vk: u8 = @truncate(wparam);
-    const released = msg == winapi.WM_KEYUP or msg == winapi.WM_SYSKEYUP;
-    const was_down = (lparam & (1 << 30)) != 0;
-
-    const action: input.Action = if (released)
-        .release
-    else if (was_down)
-        .repeat
-    else
-        .press;
-
-    // TODO: windows: AltGr discrimination (lParam bit 24 + scancode);
-    // for now AltGr reports as ctrl+alt which over-triggers keybinds on
-    // some European layouts. Honest known limitation for the skeleton.
-    const mods = currentMods();
-
-    // The unshifted codepoint of the key in the current layout. Keybind
-    // triggers match on this (e.g. ctrl+shift+c), so without it only
-    // physical-key triggers would ever fire. The high bit of the result
-    // flags a dead key; VK_TO_CHAR reports letters uppercase.
-    const unshifted: u21 = unshifted: {
-        const raw = winapi.MapVirtualKeyW(vk, winapi.MAPVK_VK_TO_CHAR);
-        if (raw == 0 or (raw & 0x80000000) != 0) break :unshifted 0;
-        const cp: u21 = @intCast(raw & 0x001FFFFF);
-        break :unshifted if (cp >= 'A' and cp <= 'Z') cp + ('a' - 'A') else cp;
-    };
-
-    const key_event: input.KeyEvent = .{
-        .action = action,
-        .key = vkToKey(vk, lparam),
-        .mods = mods,
-        .consumed_mods = .{},
-        .composing = false,
-        .utf8 = "",
-        .unshifted_codepoint = unshifted,
-    };
-
-    const effect = self.core_surface.keyCallback(key_event) catch |err| {
-        log.err("error in key callback err={}", .{err});
-        return;
-    };
-
-    // Surface closed.
-    if (effect == .closed) return;
-
-    // If it wasn't consumed, stash it so WM_CHAR can complete it with
-    // text. If it WAS consumed we must swallow the queued WM_CHAR —
-    // pending_key_event == null does exactly that in charEvent.
-    self.pending_key_event = null;
-    if (effect == .ignored and (action == .press or action == .repeat)) {
-        self.pending_key_event = key_event;
-    }
-}
-
-/// Handle WM_CHAR: complete the pending key event with cooked text.
-fn charEvent(self: *Self, unit: u16) void {
-    // UTF-16 surrogate pair reassembly across two WM_CHAR messages.
-    const codepoint: u21 = codepoint: {
-        if (unit >= 0xD800 and unit <= 0xDBFF) {
-            self.high_surrogate = unit;
-            return;
-        }
-        if (unit >= 0xDC00 and unit <= 0xDFFF) {
-            const high = self.high_surrogate orelse return;
-            self.high_surrogate = null;
-            break :codepoint 0x10000 +
-                (@as(u21, high - 0xD800) << 10) +
-                (unit - 0xDC00);
-        }
-        self.high_surrogate = null;
-        break :codepoint unit;
-    };
-
-    // A consumed keydown means this char must be swallowed (the
-    // TranslateMessage trap).
-    var key_event = self.pending_key_event orelse return;
-    self.pending_key_event = null;
-
-    const len = std.unicode.utf8Encode(codepoint, &self.utf8_buf) catch |err| {
-        log.err("error encoding codepoint={} err={}", .{ codepoint, err });
-        return;
-    };
-    key_event.utf8 = self.utf8_buf[0..len];
-    // The keydown already derived the unshifted codepoint from the
-    // layout; only fall back to the cooked char if it didn't.
-    if (key_event.unshifted_codepoint == 0 and
-        codepoint < 0x80 and !key_event.mods.shift)
-    {
-        key_event.unshifted_codepoint = codepoint;
-    }
-
-    _ = self.core_surface.keyCallback(key_event) catch |err| {
-        log.err("error in key callback err={}", .{err});
-    };
-}
-
-/// The currently held modifiers. GetKeyState reflects the state as of
-/// the message being processed, which is what core wants.
-fn currentMods() input.Mods {
-    return .{
-        .shift = winapi.GetKeyState(winapi.VK_SHIFT) < 0,
-        .ctrl = winapi.GetKeyState(winapi.VK_CONTROL) < 0,
-        .alt = winapi.GetKeyState(winapi.VK_MENU) < 0,
-        .super = winapi.GetKeyState(winapi.VK_LWIN) < 0 or
-            winapi.GetKeyState(winapi.VK_RWIN) < 0,
-    };
-}
-
-/// X/Y client coordinates from a mouse message lParam. These are signed:
-/// with mouse capture held they go negative outside the client area.
-fn lparamX(lparam: winapi.LPARAM) i16 {
-    return @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lparam)))));
-}
-
-fn lparamY(lparam: winapi.LPARAM) i16 {
-    return @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lparam)) >> 16)));
-}
-
-/// US-centric VK→Key map: enough for keybinds on physical keys.
-/// Layout-aware matching happens via the UTF-8 text, which comes from
-/// WM_CHAR and is always correct. Left/right modifier discrimination
-/// uses the extended-key bit (lParam bit 24) and the right-shift
-/// scancode, since WM_KEYDOWN only carries the generic VK.
-fn vkToKey(vk: u8, lparam: winapi.LPARAM) input.Key {
-    const extended = (lparam & (1 << 24)) != 0;
-    const scancode: u8 = @truncate(@as(usize, @bitCast(lparam)) >> 16);
-    return switch (vk) {
-        'A'...'Z' => |c| @enumFromInt(
-            @intFromEnum(input.Key.key_a) + (c - 'A'),
-        ),
-        '0'...'9' => |c| @enumFromInt(
-            @intFromEnum(input.Key.digit_0) + (c - '0'),
-        ),
-        winapi.VK_F1...winapi.VK_F1 + 23 => |c| @enumFromInt(
-            @intFromEnum(input.Key.f1) + (c - winapi.VK_F1),
-        ),
-        winapi.VK_NUMPAD0...winapi.VK_NUMPAD0 + 9 => |c| @enumFromInt(
-            @intFromEnum(input.Key.numpad_0) + (c - winapi.VK_NUMPAD0),
-        ),
-        winapi.VK_RETURN => if (extended) .numpad_enter else .enter,
-        winapi.VK_BACK => .backspace,
-        winapi.VK_TAB => .tab,
-        winapi.VK_ESCAPE => .escape,
-        winapi.VK_SPACE => .space,
-        winapi.VK_PRIOR => .page_up,
-        winapi.VK_NEXT => .page_down,
-        winapi.VK_END => .end,
-        winapi.VK_HOME => .home,
-        winapi.VK_LEFT => .arrow_left,
-        winapi.VK_UP => .arrow_up,
-        winapi.VK_RIGHT => .arrow_right,
-        winapi.VK_DOWN => .arrow_down,
-        winapi.VK_INSERT => .insert,
-        winapi.VK_DELETE => .delete,
-        // Right shift has scancode 0x36; the extended bit is not set
-        // for shift so the scancode is the only discriminator.
-        winapi.VK_SHIFT => if (scancode == 0x36) .shift_right else .shift_left,
-        winapi.VK_CONTROL => if (extended) .control_right else .control_left,
-        winapi.VK_MENU => if (extended) .alt_right else .alt_left,
-        winapi.VK_LWIN => .meta_left,
-        winapi.VK_RWIN => .meta_right,
-        winapi.VK_APPS => .context_menu,
-        winapi.VK_CAPITAL => .caps_lock,
-        winapi.VK_NUMLOCK => .num_lock,
-        winapi.VK_SCROLL => .scroll_lock,
-        winapi.VK_SNAPSHOT => .print_screen,
-        winapi.VK_PAUSE => .pause,
-        winapi.VK_MULTIPLY => .numpad_multiply,
-        winapi.VK_ADD => .numpad_add,
-        winapi.VK_SUBTRACT => .numpad_subtract,
-        winapi.VK_DECIMAL => .numpad_decimal,
-        winapi.VK_DIVIDE => .numpad_divide,
-        winapi.VK_OEM_1 => .semicolon,
-        winapi.VK_OEM_PLUS => .equal,
-        winapi.VK_OEM_COMMA => .comma,
-        winapi.VK_OEM_MINUS => .minus,
-        winapi.VK_OEM_PERIOD => .period,
-        winapi.VK_OEM_2 => .slash,
-        winapi.VK_OEM_3 => .backquote,
-        winapi.VK_OEM_4 => .bracket_left,
-        winapi.VK_OEM_5 => .backslash,
-        winapi.VK_OEM_6 => .bracket_right,
-        winapi.VK_OEM_7 => .quote,
-        else => .unidentified,
-    };
+    // Apply immediately when we're the active tab; otherwise it takes
+    // effect on the next WM_SETCURSOR.
+    if (self.window.activeTab() == self) _ = winapi.SetCursor(cursor);
 }

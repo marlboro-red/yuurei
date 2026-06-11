@@ -11,6 +11,7 @@ const Config = configpkg.Config;
 const CoreApp = @import("../../App.zig");
 const CoreSurface = @import("../../Surface.zig");
 const Surface = @import("Surface.zig");
+const Window = @import("Window.zig");
 const winapi = @import("winapi.zig");
 
 const log = std.log.scoped(.win32);
@@ -26,6 +27,9 @@ hinstance: winapi.HINSTANCE,
 
 /// The main (message loop) thread id, the wakeup target.
 thread_id: winapi.DWORD,
+
+/// All open windows (tab containers).
+windows: std.ArrayList(*Window) = .empty,
 
 /// Flips to true to quit on the next event loop tick.
 quit: bool = false,
@@ -43,16 +47,15 @@ pub fn init(
         return error.GetModuleHandleFailed;
     const hinstance: winapi.HINSTANCE = @ptrCast(module);
 
-    // One window class for all surfaces. CS_OWNDC gives every window a
-    // private DC, which WGL requires for a long-lived rendering DC.
+    // One window class for all top-level windows.
     const class: winapi.WNDCLASSEXW = .{
-        .style = winapi.CS_HREDRAW | winapi.CS_VREDRAW | winapi.CS_OWNDC,
-        .lpfnWndProc = Surface.wndProc,
+        .style = winapi.CS_HREDRAW | winapi.CS_VREDRAW,
+        .lpfnWndProc = Window.wndProc,
         .hInstance = hinstance,
-        // Null background brush: the GL surface covers the client area
-        // and a brush would only add flicker (WM_ERASEBKGND returns 1).
+        // Null background brush: the strip is painted on WM_PAINT and
+        // the GL hosts cover the rest (WM_ERASEBKGND returns 1).
         .hbrBackground = null,
-        .lpszClassName = Surface.class_name,
+        .lpszClassName = Window.class_name,
     };
     if (winapi.RegisterClassExW(&class) == 0) return error.RegisterClassFailed;
 
@@ -103,6 +106,8 @@ pub fn init(
 }
 
 pub fn terminate(self: *App) void {
+    while (self.windows.pop()) |window| window.destroy();
+    self.windows.deinit(self.core_app.alloc);
     self.config.deinit();
 }
 
@@ -133,21 +138,33 @@ pub fn run(self: *App) !void {
         // Tick the terminal app
         try self.core_app.tick(self);
 
-        // Close any surfaces that WM_CLOSE flagged. This is done here,
-        // not in the window procedure, so the surface memory isn't
-        // freed while one of its own messages is on the stack.
-        var i: usize = 0;
-        while (i < self.core_app.surfaces.items.len) {
-            const surface = self.core_app.surfaces.items[i];
-            if (surface.should_close) surface.close(false) else i += 1;
+        // Close anything flagged. This is done here, not in the window
+        // procedure, so memory isn't freed while one of its own
+        // messages is still on the stack.
+        var wi: usize = 0;
+        while (wi < self.windows.items.len) {
+            const window = self.windows.items[wi];
+
+            // A window-level close closes all its tabs.
+            if (window.should_close) {
+                for (window.tabs.items) |tab| tab.should_close = true;
+            }
+
+            var ti: usize = 0;
+            while (ti < window.tabs.items.len) {
+                const tab = window.tabs.items[ti];
+                if (tab.should_close) window.removeTab(tab) else ti += 1;
+            }
+
+            if (window.tabs.items.len == 0) {
+                window.destroy();
+                _ = self.windows.orderedRemove(wi);
+            } else wi += 1;
         }
 
-        // If the tick caused us to quit, then we're done. Close from
-        // the front since each close removes the surface from the list.
-        if (self.quit or self.core_app.surfaces.items.len == 0) {
-            while (self.core_app.surfaces.items.len > 0) {
-                self.core_app.surfaces.items[0].close(false);
-            }
+        // If the tick caused us to quit, then we're done.
+        if (self.quit or self.windows.items.len == 0) {
+            while (self.windows.pop()) |window| window.destroy();
             return;
         }
     }
@@ -181,20 +198,34 @@ pub fn performAction(
             .surface => |v| v,
         }),
 
-        // Interim: a real tab strip needs the custom-frame work (see
-        // WINDOWS_PORT_PLAN.md Phase 3); until then a new tab opens a
-        // new window, like the historical GLFW apprt did off-macOS.
-        .new_tab => {
-            log.info("tabs not yet implemented; opening a window", .{});
-            _ = try self.newSurface(switch (target) {
-                .app => null,
-                .surface => |v| v,
-            });
+        .new_tab => switch (target) {
+            // No focused surface: a tab in no window is a window.
+            .app => _ = try self.newSurface(null),
+            .surface => |parent| {
+                const surface = try parent.rt_surface.window.newTab();
+                if (self.config.@"window-inherit-font-size") {
+                    surface.core_surface.setFontSize(parent.font_size) catch |err| {
+                        log.warn("error inheriting font size err={}", .{err});
+                    };
+                }
+            },
+        },
+
+        .goto_tab => switch (target) {
+            .app => {},
+            .surface => |surface| surface.rt_surface.window.gotoTab(value),
+        },
+
+        .close_tab => switch (target) {
+            .app => {},
+            .surface => |surface| surface.rt_surface.should_close = true,
         },
 
         .close_window => switch (target) {
             .app => {},
-            .surface => |surface| surface.rt_surface.should_close = true,
+            .surface => |surface| {
+                surface.rt_surface.window.should_close = true;
+            },
         },
 
         .set_title => switch (target) {
@@ -260,18 +291,18 @@ fn reloadConfig(
 }
 
 fn newSurface(self: *App, parent_: ?*CoreSurface) !*Surface {
-    // Grab a surface allocation because we're going to need it.
-    var surface = try self.core_app.alloc.create(Surface);
-    errdefer self.core_app.alloc.destroy(surface);
+    const window = try Window.create(self.core_app.alloc, self);
+    errdefer window.destroy();
+    try self.windows.append(self.core_app.alloc, window);
 
-    // Create the surface -- because windows are surfaces for this apprt.
-    try surface.init(self);
-    errdefer surface.deinit();
+    const surface = window.activeTab().?;
 
     // If we have a parent, inherit some properties
     if (self.config.@"window-inherit-font-size") {
         if (parent_) |parent| {
-            try surface.core_surface.setFontSize(parent.font_size);
+            surface.core_surface.setFontSize(parent.font_size) catch |err| {
+                log.warn("error inheriting font size err={}", .{err});
+            };
         }
     }
 

@@ -383,9 +383,19 @@ runtime like `gtk.zig`.
     that. *(Test-harness note: PowerShell-driven clicks need
     `SetThreadDpiAwarenessContext(-4)` + foregrounding — coordinates are
     otherwise DPI-virtualized and clicks land on overlapping windows.)*
-  - Remaining: tab strip in the reclaimed area (the model: multiple core
-    surfaces per window), Mica/backdrop polish, snap-layouts hover on
-    the maximize button.
+  - [x] **Tabs (2026-06-12)**: the apprt split into `Window.zig` (one
+    top-level window owning frame, strip, input routing) and
+    `Surface.zig` (one tab: GL host child + WGL context + core
+    surface). The strip draws real tabs (active/hover states, per-tab
+    close, "+" button) ahead of the caption buttons; switching toggles
+    host-child visibility with focus callbacks. `new_tab`, `goto_tab`
+    (previous/next/last/index), `close_tab`, and `close_window` actions
+    wired. Verified live end-to-end: "+" spawned a second shell, typed
+    text landed only in the active tab, switching preserved both
+    sessions' content, closing a tab re-laid-out the strip with the
+    window surviving.
+  - Remaining polish: Mica/backdrop, snap-layouts hover on the maximize
+    button, tab drag-reorder, tab tooltips.
 - **Input gets disproportionate budget — it is where real terminals fail:**
   - The `TranslateMessage` ordering trap (handled `WM_KEYDOWN` must swallow its
     queued `WM_CHAR`).
@@ -481,7 +491,7 @@ to days; Phase 2's GLFW shortcut is gone but its replacement seeds Phase 3).
 | M0 | Fork Windows CI green on core (`apprt=none` build + tests) | CI badge | **Done 2026-06-11** |
 | M1 | Shell round-trip headless via ConPTY | CI integration test | ~3–5 weeks |
 | M2 | **Proof of life:** Ghostty/win32-skeleton running a live shell on Windows | Screenshot + daily use | **Render+input live 2026-06-11**; daily-drivability still open |
-| M3 | Win32 apprt completed, default Windows build | Tabs, IME, paste, DPI all real | ~5–6 months |
+| M3 | Win32 apprt completed, default Windows build | Tabs, IME, paste, DPI all real | **Tabs/IME/paste/DPI all landed 2026-06-12; default flipped. Remaining: CJK-user IME verification + polish** |
 | M4 | Signed v1 on winget | `winget install ghostty` | ~6–8 months |
 | M5+ | Splits, quick terminal, D3D11-if-needed, ARM64 | By user pain | post-v1 |
 
