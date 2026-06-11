@@ -94,6 +94,7 @@ pub const PIXELFORMATDESCRIPTOR = extern struct {
 pub const WS_OVERLAPPEDWINDOW: DWORD = 0x00CF0000;
 pub const CW_USEDEFAULT: i32 = @bitCast(@as(u32, 0x80000000));
 pub const FALSE = std.os.windows.FALSE;
+pub const TRUE = std.os.windows.TRUE;
 
 // Class styles
 pub const CS_HREDRAW: UINT = 0x0002;
@@ -323,6 +324,15 @@ pub extern "kernel32" fn GlobalFree(HANDLE) callconv(.winapi) ?HANDLE;
 pub extern "gdi32" fn ChoosePixelFormat(HDC, *const PIXELFORMATDESCRIPTOR) callconv(.winapi) i32;
 pub extern "gdi32" fn SetPixelFormat(HDC, i32, *const PIXELFORMATDESCRIPTOR) callconv(.winapi) BOOL;
 pub extern "gdi32" fn SwapBuffers(HDC) callconv(.winapi) BOOL;
+
+// DWM
+pub const DWMWA_USE_IMMERSIVE_DARK_MODE: DWORD = 20;
+pub extern "dwmapi" fn DwmSetWindowAttribute(
+    hwnd: HWND,
+    attr: DWORD,
+    value: *const anyopaque,
+    value_size: DWORD,
+) callconv(.winapi) i32;
 
 // IME (imm32)
 pub const HIMC = *opaque {};

@@ -236,12 +236,21 @@ fn imeGetString(
     return std.unicode.utf16LeToUtf8Alloc(alloc, wide) catch null;
 }
 
-/// Read the OS theme and forward it to the core surface.
+/// Read the OS theme and forward it to the core surface. Also keeps
+/// the title bar matched: DWM immersive dark mode follows the apps
+/// theme rather than defaulting to a white caption.
 fn notifyColorScheme(self: *Self) void {
-    const scheme: apprt.ColorScheme = if (winapi.appsUseLightTheme())
-        .light
-    else
-        .dark;
+    const light = winapi.appsUseLightTheme();
+
+    const dark_titlebar: winapi.BOOL = if (light) winapi.FALSE else winapi.TRUE;
+    _ = winapi.DwmSetWindowAttribute(
+        self.hwnd,
+        winapi.DWMWA_USE_IMMERSIVE_DARK_MODE,
+        &dark_titlebar,
+        @sizeOf(winapi.BOOL),
+    );
+
+    const scheme: apprt.ColorScheme = if (light) .light else .dark;
     self.core_surface.colorSchemeCallback(scheme) catch |err| {
         log.err("error in color scheme callback err={}", .{err});
     };
