@@ -49,15 +49,14 @@ pub fn init(b: *std.Build, cfg: *const Config, deps: *const SharedDeps) !Ghostty
     // OS-specific
     switch (cfg.target.result.os.tag) {
         .windows => {
-            // The win32 apprt skeleton uses the console subsystem: the
-            // MSVC CRT expects a WinMain entry under the Windows
-            // subsystem, and a visible console keeps logs in your face
-            // during bring-up. Flip to .Windows (plus the proper entry
-            // point) as part of Phase 3 polish (WINDOWS_PORT_PLAN.md).
-            exe.subsystem = switch (cfg.app_runtime) {
-                .win32 => .Console,
-                else => .Windows,
-            };
+            // GUI subsystem so launching Ghostty doesn't pop a console
+            // window. The MSVC CRT's WinMainCRTStartup would require a
+            // WinMain symbol, so we keep the console CRT entry, which
+            // works fine under the Windows subsystem; it just doesn't
+            // allocate a console. CLI use (`ghostty +version`) attaches
+            // to the parent console at startup instead (src/os/windows).
+            exe.subsystem = .Windows;
+            exe.entry = .{ .symbol_name = "mainCRTStartup" };
             exe.addWin32ResourceFile(.{
                 .file = b.path("dist/windows/ghostty.rc"),
             });

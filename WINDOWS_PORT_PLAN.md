@@ -250,11 +250,13 @@ the start of Phase 3's runtime, built skeleton-first:
   `renderer/OpenGL.zig` got `.win32` arms (panics, pending WGL);
   `zig build -Dapp-runtime=win32` produces a working `ghostty.exe` —
   `+version` reports runtime `.win32`, font engine `.freetype_windows`,
-  renderer OpenGL, libxev iocp; a bare launch boots global init + config
-  and dies at the honest message-loop panic. Built as the **console**
-  subsystem for now (MSVC CRT wants WinMain under the Windows subsystem;
-  flip in Phase 3 polish). In fork CI on every push. Not yet the Windows
-  default — that flip happens at this phase's exit criterion.
+  renderer OpenGL, libxev iocp. In fork CI on every push. Not yet the
+  Windows default — that flip happens at this phase's exit criterion.
+  *(2026-06-11, later: now a GUI-subsystem binary — no console window on
+  launch. The MSVC CRT's WinMain requirement is sidestepped by keeping
+  the console CRT entry (`/ENTRY:mainCRTStartup`) under
+  `/SUBSYSTEM:WINDOWS`, and CLI/log output from terminals works via
+  `AttachConsole(ATTACH_PARENT_PROCESS)` at startup.)*
 - [x] One window class, `CreateWindowExW`, bare message loop, **standard
   system frame**. Done 2026-06-11: `App.run` is a real
   `GetMessageW`/`PeekMessageW` loop modeled on the deleted GLFW apprt's

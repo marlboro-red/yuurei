@@ -24,6 +24,14 @@ const MainReturn = switch (build_config.artifact) {
 };
 
 pub fn main() !MainReturn {
+    // On Windows we're a GUI-subsystem binary, which never inherits the
+    // parent console. Attach to it (if there is one) before anything
+    // writes to stdout/stderr so CLI actions and logs are visible when
+    // run from a terminal.
+    if (comptime builtin.os.tag == .windows) {
+        @import("os/main.zig").windows.attachParentConsole();
+    }
+
     // We first start by initializing our global state. This will setup
     // process-level state we need to run the terminal. The reason we use
     // a global is because the C API needs to be able to access this state;

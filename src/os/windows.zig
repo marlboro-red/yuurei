@@ -32,8 +32,21 @@ pub const WAIT_FAILED = windows.WAIT_FAILED;
 pub const FALSE = windows.FALSE;
 pub const TRUE = windows.TRUE;
 
+/// Attach to the parent process console, if any. The Ghostty exe is a
+/// GUI-subsystem binary (no console window on launch), so when it is
+/// run from a terminal it must attach to that terminal's console for
+/// CLI output (`ghostty +version`) and logging to be visible. Called
+/// once at startup; a no-op when there is no parent console (launched
+/// from Explorer) or a console already exists.
+pub fn attachParentConsole() void {
+    if (exp.kernel32.GetConsoleWindow() != null) return;
+    _ = exp.kernel32.AttachConsole(exp.ATTACH_PARENT_PROCESS);
+}
+
 pub const exp = struct {
     pub const HPCON = windows.LPVOID;
+
+    pub const ATTACH_PARENT_PROCESS: windows.DWORD = 0xFFFFFFFF;
 
     pub const CREATE_UNICODE_ENVIRONMENT = 0x00000400;
     pub const EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
@@ -110,6 +123,10 @@ pub const exp = struct {
             nBufferLength: windows.DWORD,
             lpBuffer: windows.LPWSTR,
         ) callconv(.winapi) windows.DWORD;
+        pub extern "kernel32" fn GetConsoleWindow() callconv(.winapi) ?windows.HWND;
+        pub extern "kernel32" fn AttachConsole(
+            dwProcessId: windows.DWORD,
+        ) callconv(.winapi) windows.BOOL;
     };
 
     pub const PROC_THREAD_ATTRIBUTE_NUMBER = 0x0000FFFF;
