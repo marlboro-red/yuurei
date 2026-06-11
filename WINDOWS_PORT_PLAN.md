@@ -210,8 +210,13 @@ against a live shell end-to-end." Concrete work list from the audit:
   Still open: a test through the full `termio.Thread`/`Termio` stack
   (exercises `threadMainWindows` + `processExit` wiring), resize assertions,
   pwsh coverage.
-- [ ] Vendor OpenConsole/conpty.dll (MIT, from Windows Terminal repo); fall
-  back to OS ConPTY when absent.
+- [~] Vendor OpenConsole/conpty.dll (MIT, from Windows Terminal repo); fall
+  back to OS ConPTY when absent. *(2026-06-12: the loader side is done —
+  ConPTY entry points resolve at first use, preferring a conpty.dll next
+  to the exe via `LOAD_LIBRARY_SEARCH_APPLICATION_DIR` (no cwd
+  DLL-planting), falling back to kernel32; which provider loaded is
+  logged. Remaining: acquiring/shipping the OpenConsole binaries is a
+  Phase 4 packaging-pipeline step.)*
 
 Reference design (kept from v2.0 — measure upstream's code against this):
 - New PTY backend behind the existing abstraction in `termio/`:

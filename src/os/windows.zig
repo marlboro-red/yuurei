@@ -63,8 +63,96 @@ pub fn isOnPath(name: []const u8) bool {
     return len > 0 and len < buf.len;
 }
 
+/// ConPTY entry points, resolved on first use. A conpty.dll next to
+/// the executable (vendored OpenConsole; MIT, from the Windows Terminal
+/// project — see WINDOWS_PORT_PLAN.md) is preferred so ConPTY behavior
+/// ships on our release schedule rather than the user's Windows build;
+/// otherwise the OS console host via kernel32 is used. Only the
+/// application directory is searched for the DLL, never the working
+/// directory.
+pub const conpty = struct {
+    const log = std.log.scoped(.conpty);
+
+    const CreateFn = *const fn (
+        size: windows.COORD,
+        hInput: windows.HANDLE,
+        hOutput: windows.HANDLE,
+        dwFlags: windows.DWORD,
+        phPC: *exp.HPCON,
+    ) callconv(.winapi) windows.HRESULT;
+    const ResizeFn = *const fn (
+        hPC: exp.HPCON,
+        size: windows.COORD,
+    ) callconv(.winapi) windows.HRESULT;
+    const CloseFn = *const fn (hPC: exp.HPCON) callconv(.winapi) void;
+
+    var create_fn: CreateFn = undefined;
+    var resize_fn: ResizeFn = undefined;
+    var close_fn: CloseFn = undefined;
+    var once = std.once(resolve);
+
+    fn resolve() void {
+        vendored: {
+            const module = exp.kernel32.LoadLibraryExW(
+                std.unicode.utf8ToUtf16LeStringLiteral("conpty.dll"),
+                null,
+                exp.LOAD_LIBRARY_SEARCH_APPLICATION_DIR,
+            ) orelse break :vendored;
+            const create = windows.kernel32.GetProcAddress(
+                module,
+                "CreatePseudoConsole",
+            ) orelse break :vendored;
+            const resize = windows.kernel32.GetProcAddress(
+                module,
+                "ResizePseudoConsole",
+            ) orelse break :vendored;
+            const close = windows.kernel32.GetProcAddress(
+                module,
+                "ClosePseudoConsole",
+            ) orelse break :vendored;
+
+            create_fn = @ptrCast(create);
+            resize_fn = @ptrCast(resize);
+            close_fn = @ptrCast(close);
+            log.info("using vendored conpty.dll", .{});
+            return;
+        }
+
+        create_fn = exp.kernel32.CreatePseudoConsole;
+        resize_fn = exp.kernel32.ResizePseudoConsole;
+        close_fn = exp.kernel32.ClosePseudoConsole;
+        log.info("using OS ConPTY (kernel32)", .{});
+    }
+
+    pub fn createPseudoConsole(
+        size: windows.COORD,
+        hInput: windows.HANDLE,
+        hOutput: windows.HANDLE,
+        dwFlags: windows.DWORD,
+        phPC: *exp.HPCON,
+    ) windows.HRESULT {
+        once.call();
+        return create_fn(size, hInput, hOutput, dwFlags, phPC);
+    }
+
+    pub fn resizePseudoConsole(
+        hPC: exp.HPCON,
+        size: windows.COORD,
+    ) windows.HRESULT {
+        once.call();
+        return resize_fn(hPC, size);
+    }
+
+    pub fn closePseudoConsole(hPC: exp.HPCON) void {
+        once.call();
+        close_fn(hPC);
+    }
+};
+
 pub const exp = struct {
     pub const HPCON = windows.LPVOID;
+
+    pub const LOAD_LIBRARY_SEARCH_APPLICATION_DIR: windows.DWORD = 0x00000200;
 
     pub const ATTACH_PARENT_PROCESS: windows.DWORD = 0xFFFFFFFF;
 
@@ -144,6 +232,11 @@ pub const exp = struct {
             lpBuffer: windows.LPWSTR,
         ) callconv(.winapi) windows.DWORD;
         pub extern "kernel32" fn GetConsoleWindow() callconv(.winapi) ?windows.HWND;
+        pub extern "kernel32" fn LoadLibraryExW(
+            lpLibFileName: [*:0]const u16,
+            hFile: ?windows.HANDLE,
+            dwFlags: windows.DWORD,
+        ) callconv(.winapi) ?windows.HMODULE;
         pub extern "kernel32" fn AttachConsole(
             dwProcessId: windows.DWORD,
         ) callconv(.winapi) windows.BOOL;
