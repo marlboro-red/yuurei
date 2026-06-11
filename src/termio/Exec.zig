@@ -1380,6 +1380,22 @@ pub const ReadThread = struct {
                         // Check for a quit signal
                         .OPERATION_ABORTED => break,
 
+                        // The pipe is closed or closing. BROKEN_PIPE is the
+                        // documented result of reading a pipe whose write
+                        // side (held by the pseudoconsole) has closed, e.g.
+                        // after the child exits and the HPCON is closed.
+                        // INVALID_HANDLE can happen if our read handle is
+                        // closed by shutdown while we're blocked here. These
+                        // mirror NotOpenForReading/InputOutput in the POSIX
+                        // branch: we're done, exit gracefully.
+                        .BROKEN_PIPE,
+                        .HANDLE_EOF,
+                        .INVALID_HANDLE,
+                        => {
+                            log.info("io reader exiting", .{});
+                            return;
+                        },
+
                         else => {
                             log.err("io reader error err={}", .{err});
                             unreachable;

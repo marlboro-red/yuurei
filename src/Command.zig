@@ -897,6 +897,87 @@ test "Command: posix fork handles execveZ failure" {
     try testing.expect(exit.Exited == 1);
 }
 
+// The full ConPTY path: spawn a child attached to a pseudoconsole and
+// assert its output round-trips through the pty's output pipe and that
+// exit is detected via the process handle. This is the only test that
+// exercises the PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE spawn path.
+test "Command: windows pseudo console round-trip" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const Pty = @import("pty.zig").Pty;
+
+    var pty = try Pty.open(.{
+        .ws_row = 24,
+        .ws_col = 80,
+        .ws_xpixel = 1,
+        .ws_ypixel = 1,
+    });
+    defer pty.deinit();
+
+    const marker = "ghostty-conpty-roundtrip";
+    var cmd: Command = .{
+        .path = "C:\\Windows\\System32\\cmd.exe",
+        .args = &.{ "C:\\Windows\\System32\\cmd.exe", "/C", "echo " ++ marker },
+        .pseudo_console = pty.pseudo_console,
+        .os_pre_exec = null,
+        .rt_pre_exec = null,
+        .rt_post_fork = null,
+        .rt_pre_exec_info = undefined,
+        .rt_post_fork_info = undefined,
+    };
+
+    try cmd.testingStart();
+    try testing.expect(cmd.pid != null);
+
+    // Read the child's output from the pty output pipe until the marker
+    // shows up (ConPTY wraps it in VT sequences, so substring search).
+    // We can't read to EOF: ConPTY holds the pipe's write side open until
+    // ClosePseudoConsole, so a blocking read after the child exits would
+    // hang forever. Poll with a deadline instead.
+    var output: [64 * 1024]u8 = undefined;
+    var output_len: usize = 0;
+    var timer = try std.time.Timer.start();
+    while (mem.indexOf(u8, output[0..output_len], marker) == null) {
+        if (timer.read() > 30 * std.time.ns_per_s) break;
+
+        var avail: windows.DWORD = 0;
+        if (windows.exp.kernel32.PeekNamedPipe(
+            pty.out_pipe,
+            null,
+            0,
+            null,
+            &avail,
+            null,
+        ) == 0) return windows.unexpectedError(windows.kernel32.GetLastError());
+
+        if (avail == 0) {
+            std.Thread.sleep(10 * std.time.ns_per_ms);
+            continue;
+        }
+
+        const to_read: windows.DWORD = @intCast(@min(
+            @as(usize, avail),
+            output.len - output_len,
+        ));
+        try testing.expect(to_read > 0); // marker must fit in our buffer
+
+        var n: windows.DWORD = 0;
+        if (windows.kernel32.ReadFile(
+            pty.out_pipe,
+            output[output_len..].ptr,
+            to_read,
+            &n,
+            null,
+        ) == 0) return windows.unexpectedError(windows.kernel32.GetLastError());
+        output_len += n;
+    }
+    try testing.expect(mem.indexOf(u8, output[0..output_len], marker) != null);
+
+    // Exit must be detected via the process handle.
+    const exit = try cmd.wait(true);
+    try testing.expect(exit == .Exited);
+    try testing.expect(exit.Exited == 0);
+}
+
 // If cmd.start fails with error.ExecFailedInChild it's the _child_ process that is running. If it does not
 // terminate in response to that error both the parent and child will continue as if they _are_ the test suite
 // process.

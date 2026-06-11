@@ -1,0 +1,38 @@
+# Windows port CI for this fork (marlboro-red/yuurei).
+#
+# Upstream's Windows jobs in test.yml never run here: they are gated
+# `if: github.repository == 'ghostty-org/ghostty'` and run on namespace
+# cloud runners this fork doesn't have. This workflow is the fork's own
+# required check per WINDOWS_PORT_PLAN.md Rule 1: nothing exists until
+# it builds and tests on Windows, on every push.
+
+on:
+  push:
+    branches: [windows-port]
+  pull_request: {}
+  workflow_dispatch: {}
+
+name: Windows Port
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # Resolves the Zig version from build.zig.zon's minimum_zig_version,
+      # keeping us pinned to upstream's Zig (Plan §2 Rule / §3 Toolchain).
+      - name: Setup Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+
+      - name: Build core (apprt=none, native Windows)
+        run: zig build -Dapp-runtime=none
+
+      - name: Unit tests
+        run: zig build -Dapp-runtime=none test

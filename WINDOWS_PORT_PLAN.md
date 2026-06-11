@@ -3,7 +3,10 @@
 **Repo:** `marlboro-red/yuurei` (fork of `ghostty-org/ghostty`)
 **Working branch:** `windows-port` (`main` stays clean, tracking upstream)
 **Date:** 2026-06-11
-**Status:** Plan v2.0 — supersedes the standalone `yurei` attempt
+**Status:** Plan v2.1 — supersedes the standalone `yurei` attempt; updated same
+day with the findings of the in-tree audit (§4a), which moved Phase 0 to
+"mostly done upstream" and replaced Phase 2's GLFW vehicle (deleted upstream
+July 2025) with a minimal win32 apprt skeleton.
 
 ---
 
@@ -86,25 +89,117 @@ Estimates assume one developer, part-time-to-full-time, consistent with
 upstream's original 6–12 month framing. The difference from the old plan:
 a usable terminal exists at ~month 2–3, not at the end.
 
-### Phase 0 — Environment + core compiles for Windows (2–4 weeks)
+### 4a. Current-state audit (2026-06-11, this branch, Zig 0.15.2, Windows 11)
 
-**This is the actual critical path.** The enemy is not D3D11; it is pervasive
-POSIX assumptions in core (file descriptors in `termio/`, fork/exec, signals,
-paths in `src/os/`).
+The plan above was drafted from the previous attempt's worldview ("16k lines
+never compiled for Windows"). The in-tree reality is far better:
 
-- Windows 11 machine or VM; WinDbg; reference terminals installed.
-- GitHub Actions `windows-latest` workflow: build + unit tests, required on
-  every push to `windows-port`.
-- Target: `zig build -Dtarget=x86_64-windows -Dapp-runtime=none` compiles.
-  The existing `src/apprt/none.zig` runtime is the vehicle; let the compile
-  errors be the work list.
-- Chase POSIX-isms with small, self-contained fixes (`std.fs.File` handle
-  abstractions, `builtin.os` gates). Each is a candidate upstream PR (§5).
-- **Exit criterion:** core + `apprt=none` compiles for `x86_64-windows` in CI;
-  unit tests for platform-agnostic core pass on Windows.
+**What already works:**
+
+- `zig build -Dtarget=x86_64-windows -Dapp-runtime=none` **compiles and links
+  clean** on this machine, today, with zero changes. With `apprt=none` no exe
+  is produced by design (`build.zig:177` — "Runtime none is libghostty"); the
+  build emits `ghostty-internal.dll`/`-static.lib` (the full GUI core: App,
+  Surface, termio, font, OpenGL renderer, config, input — the same lib the
+  macOS app links) plus `ghostty-vt.dll` and headers. The feared "pervasive
+  POSIX assumptions in core" have largely been paid down by upstream.
+- **Upstream already carries real Windows scaffolding:**
+  - `src/pty.zig` — `WindowsPty` selected by `builtin.os.tag`: pipe creation,
+    `CreatePseudoConsole` / `ResizePseudoConsole` / `ClosePseudoConsole`.
+  - `src/Command.zig` — `startWindows()`: `CreateProcessW` with the
+    pseudoconsole attribute list, UTF-16 command line, handle inheritance.
+  - `src/termio/Exec.zig` — a `threadMainWindows` read-thread branch exists
+    (completeness audited in Phase 1 below).
+  - `src/os/` — `windows.zig` hand bindings (kernel32 + ConPTY surface);
+    `pipe.zig`, `file.zig`, `open.zig`, `path.zig` already gated for Windows.
+- **Upstream CI already tests Windows:** `test.yml` has `test-windows`
+  (`zig build -Dapp-runtime=none test` on a Windows runner) and
+  `build-libghostty-windows-gnu`. ConPTY/termio code is *unit*-tested upstream
+  on every push — to ghostty-org. All jobs are gated
+  `if: github.repository == 'ghostty-org/ghostty'` and run on namespace-cloud
+  runners, so **none of it runs on this fork**.
+
+**What the audit found missing (feeds the phases below):**
+
+- No CI on this fork (gated jobs + unavailable runners) → fork-own workflow.
+- `src/os/` is in better shape than a first-pass grep suggests (verified by
+  reading, not just searching): `hostname.zig` has a `GetComputerNameA` arm,
+  `homedir.zig` has `homeWindows`, and `passwd.zig`'s
+  `@compileError("not available on windows")` is an honest Rule-2 gate whose
+  only call sites are Darwin-gated. Remaining watch item: `env.zig` gate
+  coverage as new call sites appear.
+- `threadMainWindows` quit-pipe path calls `posix.close()` on a Windows
+  HANDLE; pipes are anonymous (`CreatePipe`), not overlapped named pipes —
+  whether that supports the wait model needs a runtime test, not a code read.
+- No headless ConPTY integration test anywhere (upstream's Windows tests are
+  unit tests only — nothing spawns a real shell and round-trips output).
+- **The GLFW apprt no longer exists.** Deleted upstream 2025-07-04
+  (`fb9c52ecf` "Nuke GLFW from Orbit"). The only runtimes are `none`
+  (libghostty) and `gtk`. Phase 2 as originally written is impossible; see the
+  revised Phase 2.
+
+### Phase 0 — Environment + fork CI green (days, not weeks)
+
+Originally scoped at 2–4 weeks as the critical path; the audit (§4a) shows
+upstream already did most of it. What remains:
+
+- [x] Windows 11 machine; Zig 0.15.2 (matches `minimum_zig_version`).
+- [x] `zig build -Dtarget=x86_64-windows -Dapp-runtime=none` compiles —
+  verified locally, zero changes needed.
+- [x] Fork CI: `.github/workflows/windows-port.yml` on `windows-latest`
+  (upstream's Windows jobs never run here, §4a): build `apprt=none` + run
+  `zig build -Dapp-runtime=none test` on every push to `windows-port`.
+  *Written; goes live on first push.*
+- [x] `zig build -Dapp-runtime=none test` passes on this machine — the full
+  unit suite is green natively on Windows with zero changes (2026-06-11).
+- [x] Close the known `src/os/` runtime gaps — audit found they were already
+  closed upstream (§4a): hostname, homedir, pipe, file, path, open all have
+  real Windows implementations; passwd is honestly comptime-gated and
+  unreachable on Windows.
+- **Exit criterion (unchanged):** core + `apprt=none` compiles for
+  `x86_64-windows` in *this fork's* CI; platform-agnostic unit tests pass on
+  Windows.
 
 ### Phase 1 — ConPTY backend in `src/termio/` (2–3 weeks)
 
+**Audit note (§4a): this is completion-and-verification work, not greenfield.**
+`WindowsPty`, `Command.startWindows()`, and `Exec.threadMainWindows` already
+exist upstream. The honest status is "written, unit-tested, never proven
+against a live shell end-to-end." Concrete work list from the audit:
+
+- [x] ~~Fix `threadMainWindows` quit-pipe teardown~~ Audited 2026-06-11: the
+  reported `posix.close()`-on-HANDLE is a false alarm — Zig's `std.posix.close`
+  calls `CloseHandle` on Windows. The *real* bug found: `ReadFile` failing
+  with `ERROR_BROKEN_PIPE` (the documented EOF when the pseudoconsole side
+  closes, i.e. every child exit) was routed to `unreachable` — a guaranteed
+  crash on shell exit. **Fixed**: `BROKEN_PIPE`/`HANDLE_EOF`/`INVALID_HANDLE`
+  now exit the read thread gracefully, mirroring the POSIX branch.
+- [x] Audit the pipe/wait model. Resolved 2026-06-11: upstream's design is
+  sound — the pty *input* pipe is already an overlapped **named** pipe
+  (required by libxev's IOCP stream writes; see comment in
+  `pty.zig:WindowsPty.open`); the *output* pipe is anonymous but read by a
+  dedicated thread with synchronous `ReadFile`, unblocked at shutdown by
+  `CancelIoEx` from `threadExit` (quit byte + cancel, then `join`). No
+  rewrite needed.
+- [x] Verify exit detection goes through the **process handle** — confirmed:
+  `Command.wait` uses `WaitForSingleObject(hProcess)` +
+  `GetExitCodeProcess`; covered by the new round-trip test.
+- [ ] Verify env block (`CREATE_UNICODE_ENVIRONMENT`), cwd, command-line
+  quoting and the 32K limit in `startWindows()` against the checklist below.
+  (Env/cwd/quoting have upstream unit tests; the 32K limit and quoting edge
+  cases still need targeted tests.)
+- [~] **The actual deliverable: headless ConPTY integration tests** — first
+  one landed 2026-06-11 (`Command.zig`: "windows pseudo console round-trip"):
+  spawns cmd.exe attached to a real pseudoconsole, asserts output round-trips
+  through the pty pipe with a polling deadline, asserts exit via the process
+  handle. Passing natively. Still open: a test through the full
+  `termio.Thread` stack (exercises `threadMainWindows`, xev stream writes,
+  resize, and the `processExit` path — note `xev.Process` on Windows is
+  unproven), plus pwsh coverage.
+- [ ] Vendor OpenConsole/conpty.dll (MIT, from Windows Terminal repo); fall
+  back to OS ConPTY when absent.
+
+Reference design (kept from v2.0 — measure upstream's code against this):
 - New PTY backend behind the existing abstraction in `termio/`:
   - **Named pipes with overlapped I/O** (anonymous pipes cannot participate in
     waits — proven the hard way last time).
@@ -118,32 +213,46 @@ paths in `src/os/`).
     resort. Exit detection via the process handle, never via read()-returns-0.
   - Wire into Ghostty's existing I/O thread model (`termio/Thread.zig`) — the
     threading architecture already exists upstream; do not invent one.
-- Vendor OpenConsole/conpty.dll; fall back to OS ConPTY if absent.
-- Headless integration tests on CI: spawn cmd.exe/pwsh, assert output
-  round-trips, resize, exit detection.
 - **Exit criterion:** CI proves a real shell spawns, echoes, resizes, and its
   death is detected — with no UI existing yet.
 
-### Phase 2 — Proof of life: GLFW bootstrap (2–4 weeks)
+### Phase 2 — Proof of life: minimal win32 apprt skeleton (3–5 weeks)
 
-The de-risking phase the previous attempt skipped. GLFW + OpenGL + FreeType +
-HarfBuzz are all already in tree and all work on Windows.
+**Revised (§4a): the GLFW vehicle no longer exists.** Upstream deleted the
+GLFW apprt on 2025-07-04 (`fb9c52ecf` "Nuke GLFW from Orbit"); resurrecting it
+in-fork was considered and rejected — it would mean reverting a deliberate
+upstream deletion, carrying a dead runtime through weekly rebases (Rule 5),
+against apprt interfaces that have drifted a year past it, for zero upstream
+value. The de-risking argument for GLFW is also weaker than when v2.0 was
+drafted: the core already compiles for Windows and upstream unit-tests it in
+CI, so there is much less left to de-risk.
 
-- Make `-Dapp-runtime=glfw -Dtarget=x86_64-windows` build and run, wired to the
-  Phase 1 ConPTY backend.
+Instead, proof of life is the **smallest possible `src/apprt/win32.zig`** —
+the start of Phase 3's runtime, built skeleton-first:
+
+- Register `.win32` in `src/apprt/runtime.zig` + build wiring; make it the
+  Windows default for the exe build (`-Dapp-runtime=win32`).
+- One window class, `CreateWindowExW`, bare message loop, **standard system
+  frame** (no DWM custom chrome yet).
+- WGL context creation hosting the existing OpenGL renderer.
+- Crude input only: `WM_CHAR` → core's existing `input/` encoding. No IME, no
+  AltGr correctness, no dead keys yet — gaps are `@panic("TODO: windows")`
+  per Rule 2, never silent wrong behavior.
 - Font discovery: minimal DirectWrite enumeration (or even a hardcoded font
   path at first — honestly labeled) to feed the existing FreeType/HarfBuzz
   stack.
-- **Deliverable: actual Ghostty** — real renderer, real shaping, real config,
-  real keybindings — running a real shell in an ugly window on Windows.
+- Wired to the Phase 1 ConPTY backend.
+- **Deliverable: actual Ghostty** — real renderer, real shaping, real config —
+  running a real shell in an ugly window on Windows.
 - From this point every change regresses against a known-good baseline instead
   of assembling a non-working system.
 - **Exit criterion:** daily-drivable (ugly) terminal; vttest reasonably clean
   through ConPTY; screenshot in the README.
 
-### Phase 3 — Native Win32 apprt (2–3 months)
+### Phase 3 — Native Win32 apprt, completed (2–3 months)
 
-`src/apprt/win32.zig`, a direct Zig runtime like `gtk.zig`.
+Fill out the Phase 2 skeleton in `src/apprt/win32.zig` until it is a real
+runtime like `gtk.zig`.
 
 - Window class, message loop, custom frame: `WM_NCCALCSIZE`/`WM_NCHITTEST`/
   DWM Mica/`DwmExtendFrameIntoClientArea`, the flicker trifecta (null
@@ -167,8 +276,9 @@ HarfBuzz are all already in tree and all work on Windows.
 - Theme detection (registry + `WM_SETTINGCHANGE`), `config` paths
   (`%APPDATA%\ghostty\config`), shell-integration injection for
   pwsh/cmd-via-Clink/WSL.
-- **Exit criterion:** `-Dapp-runtime=win32` is the default Windows build and
-  beats the GLFW build on every axis; GLFW remains as fallback.
+- **Exit criterion:** `-Dapp-runtime=win32` is the default Windows build with
+  tabs, IME, paste, and DPI all real — nothing on the Phase 2 skeleton's
+  `@panic("TODO")` list remains reachable in normal use.
 
 ### Phase 4 — Ship + polish strictly by user pain (ongoing)
 
@@ -229,7 +339,7 @@ audit) is retired as a codebase but mined for:
 | Upstream churn against apprt/termio interfaces | Continuous rebase tax | Weekly rebases; upstream small pieces early so the surface we depend on stabilizes around us |
 | POSIX assumptions run deeper than expected (Phase 0 overruns) | Schedule | Phase 0 is timeboxed to discovery first: a complete inventory of `posix.`/`fork`/fd usage before fixing; re-estimate at week 2 |
 | Zig-on-Windows toolchain maturity (linker, libc corner cases) | Build breakage | Pin Zig to upstream's version; CI catches immediately; upstream Zig issues promptly |
-| GL driver quality on Intel iGPUs / RDP | Rendering failures for a user slice | Known, bounded: GLFW fallback, software hints, and the explicit D3D11 escalation path |
+| GL driver quality on Intel iGPUs / RDP | Rendering failures for a user slice | Known, bounded: software-GL hints and the explicit D3D11 escalation path |
 | Code signing cost/process (SmartScreen) | Adoption at download | Budget the cert in Phase 4 week one, not at release |
 | Solo-developer review bottleneck for upstream PRs | Throughput | Keep fork releasable independently; upstreaming is parallel, never blocking |
 
@@ -237,12 +347,15 @@ audit) is retired as a codebase but mined for:
 
 ## 8. Milestone Summary
 
+Timelines re-baselined after the §4a audit (Phase 0 collapsed from ~1 month
+to days; Phase 2's GLFW shortcut is gone but its replacement seeds Phase 3).
+
 | # | Milestone | Proof | Cumulative timeline |
 |---|---|---|---|
-| M0 | Windows CI green on core (`apprt=none`) | CI badge | ~1 month |
-| M1 | Shell round-trip headless via ConPTY | CI integration test | ~1.5–2 months |
-| M2 | **Proof of life:** Ghostty/GLFW running pwsh on Windows | Screenshot + daily use | ~2–3 months |
-| M3 | Native Win32 apprt is the default Windows build | Tabs, IME, paste, DPI all real | ~5–6 months |
+| M0 | Fork Windows CI green on core (`apprt=none` build + tests) | CI badge | ~1 week |
+| M1 | Shell round-trip headless via ConPTY | CI integration test | ~3–5 weeks |
+| M2 | **Proof of life:** Ghostty/win32-skeleton running pwsh on Windows | Screenshot + daily use | ~2–3 months |
+| M3 | Win32 apprt completed, default Windows build | Tabs, IME, paste, DPI all real | ~5–6 months |
 | M4 | Signed v1 on winget | `winget install ghostty` | ~6–8 months |
 | M5+ | Splits, quick terminal, D3D11-if-needed, ARM64 | By user pain | post-v1 |
 
