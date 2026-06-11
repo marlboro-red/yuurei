@@ -188,14 +188,28 @@ against a live shell end-to-end." Concrete work list from the audit:
   quoting and the 32K limit in `startWindows()` against the checklist below.
   (Env/cwd/quoting have upstream unit tests; the 32K limit and quoting edge
   cases still need targeted tests.)
-- [~] **The actual deliverable: headless ConPTY integration tests** — first
-  one landed 2026-06-11 (`Command.zig`: "windows pseudo console round-trip"):
-  spawns cmd.exe attached to a real pseudoconsole, asserts output round-trips
-  through the pty pipe with a polling deadline, asserts exit via the process
-  handle. Passing natively. Still open: a test through the full
-  `termio.Thread` stack (exercises `threadMainWindows`, xev stream writes,
-  resize, and the `processExit` path — note `xev.Process` on Windows is
-  unproven), plus pwsh coverage.
+- [~] **The actual deliverable: headless ConPTY integration tests** — two
+  landed 2026-06-11, both passing natively:
+  1. `Command.zig` "windows pseudo console round-trip": cmd.exe on a real
+     pseudoconsole, output round-trips through the pty pipe, exit via the
+     process handle.
+  2. `termio/Exec.zig` "conpty shell exit via xev stream write and process
+     watcher": the exec stack minus Termio — input written to the pty's
+     overlapped named pipe through `xev.Stream` (IOCP) and exit detected by
+     `xev.Process` (job-object watcher), the two Windows paths nothing else
+     exercised. Confirmed `xev.Process` IS implemented for IOCP (job objects
+     + `GetExitCodeProcess`), retiring that open risk.
+
+  Found while writing #2 — **libxev IOCP pitfall**: `loop.run(.no_wait)`
+  never polls the completion port (`tick(0)` breaks before
+  `GetQueuedCompletionStatusEx`), so IO completions only ever arrive from
+  blocking runs. Real termio runs `.until_done` and is unaffected, but any
+  future Windows code that pumps `.no_wait` will silently never complete IO.
+  Candidate upstream libxev issue/fix.
+
+  Still open: a test through the full `termio.Thread`/`Termio` stack
+  (exercises `threadMainWindows` + `processExit` wiring), resize assertions,
+  pwsh coverage.
 - [ ] Vendor OpenConsole/conpty.dll (MIT, from Windows Terminal repo); fall
   back to OS ConPTY when absent.
 

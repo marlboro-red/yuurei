@@ -1872,3 +1872,147 @@ test "execCommand windows: direct command is passed through unchanged" {
     try testing.expectEqualStrings("C:\\tools\\foo.exe", result[0]);
     try testing.expectEqualStrings("arg with spaces", result[1]);
 }
+
+// Drains a pty output pipe without ever blocking so the child/conhost
+// can't stall on a full pipe and we can't deadlock on shutdown. Stops
+// when the flag is set.
+fn testDrainPipe(
+    out: windows.HANDLE,
+    stop: *std.atomic.Value(bool),
+    total: *std.atomic.Value(usize),
+) void {
+    var buf: [4096]u8 = undefined;
+    while (!stop.load(.acquire)) {
+        var avail: windows.DWORD = 0;
+        if (windows.exp.kernel32.PeekNamedPipe(out, null, 0, null, &avail, null) == 0) return;
+        if (avail == 0) {
+            std.Thread.sleep(5 * std.time.ns_per_ms);
+            continue;
+        }
+
+        var n: windows.DWORD = 0;
+        if (windows.kernel32.ReadFile(out, &buf, @min(avail, buf.len), &n, null) == 0) return;
+        _ = total.fetchAdd(n, .monotonic);
+    }
+}
+
+// The exec stack end-to-end on Windows minus Termio itself: a shell on a
+// real pseudoconsole, input written through an xev.Stream (IOCP overlapped
+// write to the pty's named pipe) and exit detected by xev.Process (job
+// object watcher) — the same calls threadEnter makes. These are the two
+// pieces of the Windows termio path that nothing else exercises.
+test "exec windows: conpty shell exit via xev stream write and process watcher" {
+    if (comptime builtin.os.tag != .windows) return error.SkipZigTest;
+    const testing = std.testing;
+
+    if (comptime xev.dynamic) try xev.detect();
+    var loop = try xev.Loop.init(.{});
+    defer loop.deinit();
+
+    var pty = try Pty.open(.{
+        .ws_row = 24,
+        .ws_col = 80,
+        .ws_xpixel = 1,
+        .ws_ypixel = 1,
+    });
+    defer pty.deinit();
+
+    var cmd: Command = .{
+        .path = "C:\\Windows\\System32\\cmd.exe",
+        .args = &.{"C:\\Windows\\System32\\cmd.exe"},
+        .pseudo_console = pty.pseudo_console,
+        .os_pre_exec = null,
+        .rt_pre_exec = null,
+        .rt_post_fork = null,
+        .rt_pre_exec_info = undefined,
+        .rt_post_fork_info = undefined,
+    };
+    try cmd.start(testing.allocator);
+
+    // Drain the output side so conhost never blocks on a full pipe.
+    var drain_stop = std.atomic.Value(bool).init(false);
+    var drain_total = std.atomic.Value(usize).init(0);
+    const drainer = try std.Thread.spawn(
+        .{},
+        testDrainPipe,
+        .{ pty.out_pipe, &drain_stop, &drain_total },
+    );
+    defer {
+        drain_stop.store(true, .release);
+        drainer.join();
+    }
+
+    const State = struct {
+        written: ?usize = null,
+        exit_code: ?u32 = null,
+        timed_out: bool = false,
+
+        fn onTimeout(
+            ud: ?*@This(),
+            _: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Timer.RunError!void,
+        ) xev.CallbackAction {
+            r catch unreachable;
+            ud.?.timed_out = true;
+            return .disarm;
+        }
+
+        fn onWrite(
+            ud: ?*@This(),
+            _: *xev.Loop,
+            _: *xev.Completion,
+            _: xev.Stream,
+            _: xev.WriteBuffer,
+            r: xev.WriteError!usize,
+        ) xev.CallbackAction {
+            ud.?.written = r catch |err| {
+                std.debug.panic("stream write failed err={}", .{err});
+            };
+            return .disarm;
+        }
+
+        fn onExit(
+            ud: ?*@This(),
+            _: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Process.WaitError!u32,
+        ) xev.CallbackAction {
+            ud.?.exit_code = r catch |err| {
+                std.debug.panic("process wait failed err={}", .{err});
+            };
+            return .disarm;
+        }
+    };
+    var state: State = .{};
+
+    var process = try xev.Process.init(cmd.pid.?);
+    defer process.deinit();
+    var process_c: xev.Completion = .{};
+    process.wait(&loop, &process_c, State, &state, State.onExit);
+
+    // "\r" is Enter through the ConPTY cooked input layer.
+    const input = "exit\r";
+    var stream = xev.Stream.initFd(pty.in_pipe);
+    defer stream.deinit();
+    var write_c: xev.Completion = .{};
+    stream.write(&loop, &write_c, .{ .slice = input }, State, &state, State.onWrite);
+
+    // Bound the test with an xev timer rather than a wall-clock pump:
+    // on the IOCP backend run(.no_wait) never polls the completion port
+    // (tick(0) breaks before GetQueuedCompletionStatusEx), so we must
+    // block in run(.once) like the real termio thread does, and the
+    // timer both bounds that wait and exercises the IOCP timer path.
+    var watchdog = try xev.Timer.init();
+    defer watchdog.deinit();
+    var watchdog_c: xev.Completion = .{};
+    watchdog.run(&loop, &watchdog_c, 60_000, State, &state, State.onTimeout);
+
+    while (state.exit_code == null and !state.timed_out) try loop.run(.once);
+
+    try testing.expectEqual(@as(?usize, input.len), state.written);
+    try testing.expectEqual(@as(?u32, 0), state.exit_code);
+
+    // The shell painted something (banner/prompt) through the pty.
+    try testing.expect(drain_total.load(.monotonic) > 0);
+}
