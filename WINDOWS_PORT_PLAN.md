@@ -286,9 +286,24 @@ the start of Phase 3's runtime, built skeleton-first:
   typed commands round-trip live; the shell sets the window title via OSC.
 - From this point every change regresses against a known-good baseline
   instead of assembling a non-working system.
-- **Exit criterion (still open):** daily-drivable (ugly) terminal — needs
-  mouse selection, more complete keys, stability soak; vttest reasonably
-  clean through ConPTY; screenshot in the README.
+- [x] Mouse: buttons + motion with capture (drag-selection works — verified
+  end-to-end by drag-selecting in the live window and reading the result
+  off the clipboard), wheel scrolling. Mouse-shape cursors still TODO.
+- [x] Keybinds actually fire: keybind triggers match on the unshifted
+  codepoint, so `WM_KEYDOWN` now derives it from the layout via
+  `MapVirtualKeyW(VK_TO_CHAR)`. Verified live: `ctrl+shift+c` copies the
+  selection, `ctrl+shift+v` pastes through the bracketed-paste path.
+- [x] Fuller VK map: OEM punctuation, numpad operators, locks,
+  print-screen/pause/menu, left/right modifier discrimination via the
+  extended-key bit and right-shift scancode, numpad enter.
+- [x] `WM_DPICHANGED` (the PMv2 manifest upstream already ships made us
+  per-monitor-aware from day one): apply the suggested rect, forward the
+  new scale to `contentScaleCallback`. (Single-monitor machine — code
+  follows the documented contract but a real multi-DPI drag is untested.)
+- [x] SGR colors verified rendering in the live window (16-color fg/bg).
+- **Exit criterion (still open):** daily-drivable (ugly) terminal — needs a
+  multi-day stability soak and a proper vttest pass through ConPTY;
+  screenshot in the README.
 
 ### Phase 3 — Native Win32 apprt, completed (2–3 months)
 

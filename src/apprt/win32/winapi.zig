@@ -108,6 +108,13 @@ pub const PM_REMOVE: UINT = 0x0001;
 // GetWindowLongPtr offsets
 pub const GWLP_USERDATA: i32 = -21;
 
+// SetWindowPos flags
+pub const SWP_NOZORDER: UINT = 0x0004;
+pub const SWP_NOACTIVATE: UINT = 0x0010;
+
+// MapVirtualKeyW translation types
+pub const MAPVK_VK_TO_CHAR: UINT = 2;
+
 // Messages
 pub const WM_NULL: UINT = 0x0000;
 pub const WM_DESTROY: UINT = 0x0002;
@@ -124,11 +131,83 @@ pub const WM_CHAR: UINT = 0x0102;
 pub const WM_SYSKEYDOWN: UINT = 0x0104;
 pub const WM_SYSKEYUP: UINT = 0x0105;
 pub const WM_SYSCHAR: UINT = 0x0106;
+pub const WM_MOUSEMOVE: UINT = 0x0200;
+pub const WM_LBUTTONDOWN: UINT = 0x0201;
+pub const WM_LBUTTONUP: UINT = 0x0202;
+pub const WM_RBUTTONDOWN: UINT = 0x0204;
+pub const WM_RBUTTONUP: UINT = 0x0205;
+pub const WM_MBUTTONDOWN: UINT = 0x0207;
+pub const WM_MBUTTONUP: UINT = 0x0208;
 pub const WM_MOUSEWHEEL: UINT = 0x020A;
+pub const WM_DPICHANGED: UINT = 0x02E0;
+pub const WM_SETCURSOR: UINT = 0x0020;
+pub const WM_SETTINGCHANGE: UINT = 0x001A;
+
+// WM_SETCURSOR hit-test results (low word of lParam)
+pub const HTCLIENT: u16 = 1;
+
+// System cursor ids for LoadCursorW(null, id)
+pub const IDC_ARROW: u16 = 32512;
+pub const IDC_IBEAM: u16 = 32513;
+pub const IDC_WAIT: u16 = 32514;
+pub const IDC_CROSS: u16 = 32515;
+pub const IDC_SIZENWSE: u16 = 32642;
+pub const IDC_SIZENESW: u16 = 32643;
+pub const IDC_SIZEWE: u16 = 32644;
+pub const IDC_SIZENS: u16 = 32645;
+pub const IDC_SIZEALL: u16 = 32646;
+pub const IDC_NO: u16 = 32648;
+pub const IDC_HAND: u16 = 32649;
+pub const IDC_APPSTARTING: u16 = 32650;
+pub const IDC_HELP: u16 = 32651;
+
+/// LoadCursorW for a system cursor id (MAKEINTRESOURCEW).
+pub fn loadSystemCursor(id: u16) ?HCURSOR {
+    return LoadCursorW(null, @ptrFromInt(@as(usize, id)));
+}
+
+/// Whether Windows is in light mode for apps, from the personalization
+/// registry key. Defaults to dark when the value is missing (pre-1809
+/// builds had no light mode).
+pub fn appsUseLightTheme() bool {
+    const key = std.unicode.utf8ToUtf16LeStringLiteral(
+        "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+    );
+    const value = std.unicode.utf8ToUtf16LeStringLiteral("AppsUseLightTheme");
+
+    var data: DWORD = 0;
+    var size: DWORD = @sizeOf(DWORD);
+    const status = RegGetValueW(
+        HKEY_CURRENT_USER,
+        key,
+        value,
+        RRF_RT_REG_DWORD,
+        null,
+        &data,
+        &size,
+    );
+    if (status != 0) return false;
+    return data != 0;
+}
+
+pub const HKEY = *opaque {};
+pub const HKEY_CURRENT_USER: HKEY = @ptrFromInt(0x80000001);
+pub const RRF_RT_REG_DWORD: DWORD = 0x00000010;
+pub extern "advapi32" fn RegGetValueW(
+    hkey: HKEY,
+    lpSubKey: ?[*:0]const u16,
+    lpValue: ?[*:0]const u16,
+    dwFlags: DWORD,
+    pdwType: ?*DWORD,
+    pvData: ?*anyopaque,
+    pcbData: ?*DWORD,
+) callconv(.winapi) i32;
 
 // Virtual keys (only those we map; see Surface.vkToKey)
 pub const VK_BACK: u8 = 0x08;
 pub const VK_TAB: u8 = 0x09;
+pub const VK_PAUSE: u8 = 0x13;
+pub const VK_CAPITAL: u8 = 0x14;
 pub const VK_RETURN: u8 = 0x0D;
 pub const VK_SHIFT: u8 = 0x10;
 pub const VK_CONTROL: u8 = 0x11;
@@ -143,12 +222,32 @@ pub const VK_LEFT: u8 = 0x25;
 pub const VK_UP: u8 = 0x26;
 pub const VK_RIGHT: u8 = 0x27;
 pub const VK_DOWN: u8 = 0x28;
+pub const VK_SNAPSHOT: u8 = 0x2C;
 pub const VK_INSERT: u8 = 0x2D;
 pub const VK_DELETE: u8 = 0x2E;
 pub const VK_LWIN: u8 = 0x5B;
 pub const VK_RWIN: u8 = 0x5C;
+pub const VK_APPS: u8 = 0x5D;
 pub const VK_NUMPAD0: u8 = 0x60;
+pub const VK_MULTIPLY: u8 = 0x6A;
+pub const VK_ADD: u8 = 0x6B;
+pub const VK_SUBTRACT: u8 = 0x6D;
+pub const VK_DECIMAL: u8 = 0x6E;
+pub const VK_DIVIDE: u8 = 0x6F;
 pub const VK_F1: u8 = 0x70;
+pub const VK_NUMLOCK: u8 = 0x90;
+pub const VK_SCROLL: u8 = 0x91;
+pub const VK_OEM_1: u8 = 0xBA;
+pub const VK_OEM_PLUS: u8 = 0xBB;
+pub const VK_OEM_COMMA: u8 = 0xBC;
+pub const VK_OEM_MINUS: u8 = 0xBD;
+pub const VK_OEM_PERIOD: u8 = 0xBE;
+pub const VK_OEM_2: u8 = 0xBF;
+pub const VK_OEM_3: u8 = 0xC0;
+pub const VK_OEM_4: u8 = 0xDB;
+pub const VK_OEM_5: u8 = 0xDC;
+pub const VK_OEM_6: u8 = 0xDD;
+pub const VK_OEM_7: u8 = 0xDE;
 
 // Clipboard
 pub const CF_UNICODETEXT: UINT = 13;
@@ -194,6 +293,12 @@ pub extern "user32" fn ScreenToClient(HWND, *POINT) callconv(.winapi) BOOL;
 pub extern "user32" fn SetWindowLongPtrW(HWND, i32, isize) callconv(.winapi) isize;
 pub extern "user32" fn GetWindowLongPtrW(HWND, i32) callconv(.winapi) isize;
 pub extern "user32" fn GetKeyState(i32) callconv(.winapi) i16;
+pub extern "user32" fn MapVirtualKeyW(UINT, UINT) callconv(.winapi) UINT;
+pub extern "user32" fn LoadCursorW(?HINSTANCE, ?[*:0]const u16) callconv(.winapi) ?HCURSOR;
+pub extern "user32" fn SetCursor(?HCURSOR) callconv(.winapi) ?HCURSOR;
+pub extern "user32" fn SetCapture(HWND) callconv(.winapi) ?HWND;
+pub extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
+pub extern "user32" fn SetWindowPos(HWND, ?HWND, i32, i32, i32, i32, UINT) callconv(.winapi) BOOL;
 pub extern "user32" fn ValidateRect(?HWND, ?*const RECT) callconv(.winapi) BOOL;
 pub extern "user32" fn OpenClipboard(?HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn CloseClipboard() callconv(.winapi) BOOL;

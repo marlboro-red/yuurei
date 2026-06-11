@@ -11,6 +11,7 @@ const Allocator = std.mem.Allocator;
 const apprt = @import("../../apprt.zig");
 const input = @import("../../input.zig");
 const internal_os = @import("../../os/main.zig");
+const terminal = @import("../../terminal/main.zig");
 const CoreSurface = @import("../../Surface.zig");
 const App = @import("App.zig");
 const winapi = @import("winapi.zig");
@@ -50,6 +51,11 @@ utf8_buf: [4]u8 = undefined,
 
 /// Pending high surrogate from WM_CHAR, awaiting its low half.
 high_surrogate: ?u16 = null,
+
+/// The cursor for the client area, set by the core's mouse_shape
+/// action and applied on WM_SETCURSOR. System cursors are shared
+/// objects and are never destroyed.
+cursor: ?winapi.HCURSOR = null,
 
 pub fn init(self: *Self, app: *App) !void {
     const hwnd = winapi.CreateWindowExW(
@@ -135,6 +141,21 @@ pub fn init(self: *Self, app: *App) !void {
         @bitCast(@intFromPtr(self)),
     );
     _ = winapi.ShowWindow(hwnd, winapi.SW_SHOWDEFAULT);
+
+    // Report the OS theme so `window-theme = auto` and conditional
+    // config (light/dark) work. Changes arrive via WM_SETTINGCHANGE.
+    self.notifyColorScheme();
+}
+
+/// Read the OS theme and forward it to the core surface.
+fn notifyColorScheme(self: *Self) void {
+    const scheme: apprt.ColorScheme = if (winapi.appsUseLightTheme())
+        .light
+    else
+        .dark;
+    self.core_surface.colorSchemeCallback(scheme) catch |err| {
+        log.err("error in color scheme callback err={}", .{err});
+    };
 }
 
 pub fn deinit(self: *Self) void {
@@ -328,6 +349,34 @@ pub fn defaultTermioEnv(self: *Self) !std.process.EnvMap {
     return try internal_os.getEnvMap(self.app.core_app.alloc);
 }
 
+/// Set the mouse cursor shape for the client area. Unmapped shapes
+/// keep the current cursor (the spec set is larger than the stock
+/// Windows cursor set).
+pub fn setMouseShape(self: *Self, shape: terminal.MouseShape) !void {
+    const id: u16 = switch (shape) {
+        .default => winapi.IDC_ARROW,
+        .text, .vertical_text => winapi.IDC_IBEAM,
+        .crosshair, .cell => winapi.IDC_CROSS,
+        .pointer => winapi.IDC_HAND,
+        .help => winapi.IDC_HELP,
+        .wait => winapi.IDC_WAIT,
+        .progress => winapi.IDC_APPSTARTING,
+        .ew_resize, .e_resize, .w_resize, .col_resize => winapi.IDC_SIZEWE,
+        .ns_resize, .n_resize, .s_resize, .row_resize => winapi.IDC_SIZENS,
+        .nwse_resize, .nw_resize, .se_resize => winapi.IDC_SIZENWSE,
+        .nesw_resize, .ne_resize, .sw_resize => winapi.IDC_SIZENESW,
+        .all_scroll, .move => winapi.IDC_SIZEALL,
+        .not_allowed, .no_drop => winapi.IDC_NO,
+        else => return,
+    };
+
+    const cursor = winapi.loadSystemCursor(id) orelse return;
+    self.cursor = cursor;
+    // Apply immediately; otherwise it only takes effect on the next
+    // WM_SETCURSOR (i.e. next mouse move).
+    _ = winapi.SetCursor(cursor);
+}
+
 // ---------------------------------------------------------------------
 // Window procedure
 
@@ -353,6 +402,17 @@ pub fn wndProc(
         },
 
         winapi.WM_ERASEBKGND => return 1,
+
+        winapi.WM_SETCURSOR => {
+            const hit: u16 = @truncate(@as(usize, @bitCast(lparam)));
+            if (hit == winapi.HTCLIENT) {
+                if (self.cursor) |cursor| {
+                    _ = winapi.SetCursor(cursor);
+                    return 1;
+                }
+            }
+            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
 
         winapi.WM_PAINT => {
             _ = winapi.ValidateRect(hwnd, null);
@@ -407,9 +467,89 @@ pub fn wndProc(
             return 0;
         },
 
-        // TODO: windows: mouse buttons/motion (selection), WM_DPICHANGED,
-        // WM_IME_* (imm32), drag and drop. Phase 3 with the REVIEW.md
-        // regression checklist.
+        winapi.WM_MOUSEMOVE => {
+            self.core_surface.cursorPosCallback(.{
+                .x = @floatFromInt(lparamX(lparam)),
+                .y = @floatFromInt(lparamY(lparam)),
+            }, currentMods()) catch |err| {
+                log.err("error in cursor pos callback err={}", .{err});
+            };
+            return 0;
+        },
+
+        winapi.WM_LBUTTONDOWN,
+        winapi.WM_LBUTTONUP,
+        winapi.WM_RBUTTONDOWN,
+        winapi.WM_RBUTTONUP,
+        winapi.WM_MBUTTONDOWN,
+        winapi.WM_MBUTTONUP,
+        => {
+            const button: input.MouseButton = switch (msg) {
+                winapi.WM_LBUTTONDOWN, winapi.WM_LBUTTONUP => .left,
+                winapi.WM_RBUTTONDOWN, winapi.WM_RBUTTONUP => .right,
+                else => .middle,
+            };
+            const state: input.MouseButtonState = switch (msg) {
+                winapi.WM_LBUTTONDOWN,
+                winapi.WM_RBUTTONDOWN,
+                winapi.WM_MBUTTONDOWN,
+                => .press,
+                else => .release,
+            };
+
+            // Capture the mouse while a button is held so drag-selection
+            // keeps receiving WM_MOUSEMOVE outside the client area.
+            switch (state) {
+                .press => _ = winapi.SetCapture(hwnd),
+                .release => _ = winapi.ReleaseCapture(),
+            }
+
+            _ = self.core_surface.mouseButtonCallback(
+                state,
+                button,
+                currentMods(),
+            ) catch |err| {
+                log.err("error in mouse button callback err={}", .{err});
+            };
+            return 0;
+        },
+
+        winapi.WM_DPICHANGED => {
+            // wParam carries the new DPI; lParam points at the suggested
+            // new window rect, which we must apply ourselves (PMv2).
+            const suggested: *const winapi.RECT = @ptrFromInt(
+                @as(usize, @bitCast(lparam)),
+            );
+            _ = winapi.SetWindowPos(
+                hwnd,
+                null,
+                suggested.left,
+                suggested.top,
+                suggested.right - suggested.left,
+                suggested.bottom - suggested.top,
+                winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
+            );
+
+            const dpi: f32 = @floatFromInt(wparam & 0xFFFF);
+            const scale = dpi / 96.0;
+            self.core_surface.contentScaleCallback(.{
+                .x = scale,
+                .y = scale,
+            }) catch |err| {
+                log.err("error in content scale callback err={}", .{err});
+            };
+            return 0;
+        },
+
+        winapi.WM_SETTINGCHANGE => {
+            // Fires for many settings; re-reading the theme is cheap
+            // and colorSchemeCallback de-dupes unchanged values.
+            self.notifyColorScheme();
+            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+
+        // TODO: windows: WM_IME_* (imm32), drag and drop. Phase 3 with
+        // the REVIEW.md regression checklist.
 
         else => {},
     }
@@ -442,22 +582,27 @@ fn keyEvent(
     // TODO: windows: AltGr discrimination (lParam bit 24 + scancode);
     // for now AltGr reports as ctrl+alt which over-triggers keybinds on
     // some European layouts. Honest known limitation for the skeleton.
-    const mods: input.Mods = .{
-        .shift = winapi.GetKeyState(winapi.VK_SHIFT) < 0,
-        .ctrl = winapi.GetKeyState(winapi.VK_CONTROL) < 0,
-        .alt = winapi.GetKeyState(winapi.VK_MENU) < 0,
-        .super = winapi.GetKeyState(winapi.VK_LWIN) < 0 or
-            winapi.GetKeyState(winapi.VK_RWIN) < 0,
+    const mods = currentMods();
+
+    // The unshifted codepoint of the key in the current layout. Keybind
+    // triggers match on this (e.g. ctrl+shift+c), so without it only
+    // physical-key triggers would ever fire. The high bit of the result
+    // flags a dead key; VK_TO_CHAR reports letters uppercase.
+    const unshifted: u21 = unshifted: {
+        const raw = winapi.MapVirtualKeyW(vk, winapi.MAPVK_VK_TO_CHAR);
+        if (raw == 0 or (raw & 0x80000000) != 0) break :unshifted 0;
+        const cp: u21 = @intCast(raw & 0x001FFFFF);
+        break :unshifted if (cp >= 'A' and cp <= 'Z') cp + ('a' - 'A') else cp;
     };
 
     const key_event: input.KeyEvent = .{
         .action = action,
-        .key = vkToKey(vk),
+        .key = vkToKey(vk, lparam),
         .mods = mods,
         .consumed_mods = .{},
         .composing = false,
         .utf8 = "",
-        .unshifted_codepoint = 0,
+        .unshifted_codepoint = unshifted,
     };
 
     const effect = self.core_surface.keyCallback(key_event) catch |err| {
@@ -506,7 +651,11 @@ fn charEvent(self: *Self, unit: u16) void {
         return;
     };
     key_event.utf8 = self.utf8_buf[0..len];
-    if (codepoint < 0x80 and !key_event.mods.shift) {
+    // The keydown already derived the unshifted codepoint from the
+    // layout; only fall back to the cooked char if it didn't.
+    if (key_event.unshifted_codepoint == 0 and
+        codepoint < 0x80 and !key_event.mods.shift)
+    {
         key_event.unshifted_codepoint = codepoint;
     }
 
@@ -515,10 +664,36 @@ fn charEvent(self: *Self, unit: u16) void {
     };
 }
 
-/// Crude US-centric VK→Key map for the skeleton: enough for keybinds on
-/// the keys that matter. Layout-aware matching happens via the UTF-8
-/// text, which comes from WM_CHAR and is always correct.
-fn vkToKey(vk: u8) input.Key {
+/// The currently held modifiers. GetKeyState reflects the state as of
+/// the message being processed, which is what core wants.
+fn currentMods() input.Mods {
+    return .{
+        .shift = winapi.GetKeyState(winapi.VK_SHIFT) < 0,
+        .ctrl = winapi.GetKeyState(winapi.VK_CONTROL) < 0,
+        .alt = winapi.GetKeyState(winapi.VK_MENU) < 0,
+        .super = winapi.GetKeyState(winapi.VK_LWIN) < 0 or
+            winapi.GetKeyState(winapi.VK_RWIN) < 0,
+    };
+}
+
+/// X/Y client coordinates from a mouse message lParam. These are signed:
+/// with mouse capture held they go negative outside the client area.
+fn lparamX(lparam: winapi.LPARAM) i16 {
+    return @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lparam)))));
+}
+
+fn lparamY(lparam: winapi.LPARAM) i16 {
+    return @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lparam)) >> 16)));
+}
+
+/// US-centric VK→Key map: enough for keybinds on physical keys.
+/// Layout-aware matching happens via the UTF-8 text, which comes from
+/// WM_CHAR and is always correct. Left/right modifier discrimination
+/// uses the extended-key bit (lParam bit 24) and the right-shift
+/// scancode, since WM_KEYDOWN only carries the generic VK.
+fn vkToKey(vk: u8, lparam: winapi.LPARAM) input.Key {
+    const extended = (lparam & (1 << 24)) != 0;
+    const scancode: u8 = @truncate(@as(usize, @bitCast(lparam)) >> 16);
     return switch (vk) {
         'A'...'Z' => |c| @enumFromInt(
             @intFromEnum(input.Key.key_a) + (c - 'A'),
@@ -532,7 +707,7 @@ fn vkToKey(vk: u8) input.Key {
         winapi.VK_NUMPAD0...winapi.VK_NUMPAD0 + 9 => |c| @enumFromInt(
             @intFromEnum(input.Key.numpad_0) + (c - winapi.VK_NUMPAD0),
         ),
-        winapi.VK_RETURN => .enter,
+        winapi.VK_RETURN => if (extended) .numpad_enter else .enter,
         winapi.VK_BACK => .backspace,
         winapi.VK_TAB => .tab,
         winapi.VK_ESCAPE => .escape,
@@ -547,11 +722,35 @@ fn vkToKey(vk: u8) input.Key {
         winapi.VK_DOWN => .arrow_down,
         winapi.VK_INSERT => .insert,
         winapi.VK_DELETE => .delete,
-        winapi.VK_SHIFT => .shift_left,
-        winapi.VK_CONTROL => .control_left,
-        winapi.VK_MENU => .alt_left,
+        // Right shift has scancode 0x36; the extended bit is not set
+        // for shift so the scancode is the only discriminator.
+        winapi.VK_SHIFT => if (scancode == 0x36) .shift_right else .shift_left,
+        winapi.VK_CONTROL => if (extended) .control_right else .control_left,
+        winapi.VK_MENU => if (extended) .alt_right else .alt_left,
         winapi.VK_LWIN => .meta_left,
         winapi.VK_RWIN => .meta_right,
+        winapi.VK_APPS => .context_menu,
+        winapi.VK_CAPITAL => .caps_lock,
+        winapi.VK_NUMLOCK => .num_lock,
+        winapi.VK_SCROLL => .scroll_lock,
+        winapi.VK_SNAPSHOT => .print_screen,
+        winapi.VK_PAUSE => .pause,
+        winapi.VK_MULTIPLY => .numpad_multiply,
+        winapi.VK_ADD => .numpad_add,
+        winapi.VK_SUBTRACT => .numpad_subtract,
+        winapi.VK_DECIMAL => .numpad_decimal,
+        winapi.VK_DIVIDE => .numpad_divide,
+        winapi.VK_OEM_1 => .semicolon,
+        winapi.VK_OEM_PLUS => .equal,
+        winapi.VK_OEM_COMMA => .comma,
+        winapi.VK_OEM_MINUS => .minus,
+        winapi.VK_OEM_PERIOD => .period,
+        winapi.VK_OEM_2 => .slash,
+        winapi.VK_OEM_3 => .backquote,
+        winapi.VK_OEM_4 => .bracket_left,
+        winapi.VK_OEM_5 => .backslash,
+        winapi.VK_OEM_6 => .bracket_right,
+        winapi.VK_OEM_7 => .quote,
         else => .unidentified,
     };
 }

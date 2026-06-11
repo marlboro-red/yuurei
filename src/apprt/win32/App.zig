@@ -176,6 +176,11 @@ pub fn performAction(
             .surface => |surface| try surface.rt_surface.setTitle(value.title),
         },
 
+        .mouse_shape => switch (target) {
+            .app => {},
+            .surface => |surface| try surface.rt_surface.setMouseShape(value),
+        },
+
         .reload_config => try self.reloadConfig(target, value),
 
         // Everything else is honestly unimplemented for the skeleton:
