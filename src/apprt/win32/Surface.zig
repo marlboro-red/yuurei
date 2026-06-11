@@ -85,10 +85,24 @@ high_surrogate: ?u16 = null,
 /// objects and are never destroyed.
 cursor: ?winapi.HCURSOR = null,
 
+/// Current hover state of the caption buttons.
+hover_button: ?CaptionButton = null,
+
 /// Timer id used to keep the core app ticking while the window is in
 /// a DefWindowProc modal loop (interactive move/resize), during which
 /// App.run's message loop never regains control.
 const modal_tick_timer_id: usize = 1;
+
+/// Custom frame: the standard title bar is removed (WM_NCCALCSIZE) and
+/// the top of the client area becomes our title strip with caption
+/// buttons. Logical (96-dpi) strip height; scaled by the window DPI.
+const titlebar_height_logical: i32 = 36;
+
+/// Caption button width, logical.
+const caption_button_width_logical: i32 = 46;
+
+/// Which caption button the mouse is over, for hover painting.
+const CaptionButton = enum { minimize, maximize, close };
 
 pub fn init(self: *Self, app: *App) !void {
     const hwnd = winapi.CreateWindowExW(
@@ -107,19 +121,21 @@ pub fn init(self: *Self, app: *App) !void {
     ) orelse return error.CreateWindowFailed;
     errdefer _ = winapi.DestroyWindow(hwnd);
 
-    // The GL host child fills the client area. Destroying the parent
-    // destroys it, so no errdefer of its own.
+    // The GL host child fills the client area below the title strip.
+    // Destroying the parent destroys it, so no errdefer of its own.
     var client: winapi.RECT = undefined;
     _ = winapi.GetClientRect(hwnd, &client);
+    const dpi: i32 = @intCast(winapi.GetDpiForWindow(hwnd));
+    const strip = @divTrunc(titlebar_height_logical * dpi, 96);
     const host = winapi.CreateWindowExW(
         0,
         host_class_name,
         std.unicode.utf8ToUtf16LeStringLiteral(""),
         winapi.WS_CHILD | winapi.WS_VISIBLE | winapi.WS_DISABLED,
         0,
-        0,
+        strip,
         client.right - client.left,
-        client.bottom - client.top,
+        @max(0, client.bottom - client.top - strip),
         hwnd,
         null,
         app.hinstance,
@@ -193,11 +209,220 @@ pub fn init(self: *Self, app: *App) !void {
         winapi.GWLP_USERDATA,
         @bitCast(@intFromPtr(self)),
     );
+
+    // The window's initial frame was computed before our window
+    // procedure was wired up, i.e. with the standard title bar. Force a
+    // frame recalculation so our WM_NCCALCSIZE removes it.
+    _ = winapi.SetWindowPos(
+        hwnd,
+        null,
+        0,
+        0,
+        0,
+        0,
+        winapi.SWP_NOMOVE | winapi.SWP_NOSIZE | winapi.SWP_NOZORDER |
+            winapi.SWP_NOACTIVATE | winapi.SWP_FRAMECHANGED,
+    );
+
     _ = winapi.ShowWindow(hwnd, winapi.SW_SHOWDEFAULT);
 
     // Report the OS theme so `window-theme = auto` and conditional
     // config (light/dark) work. Changes arrive via WM_SETTINGCHANGE.
     self.notifyColorScheme();
+}
+
+// ---------------------------------------------------------------------
+// Custom frame geometry & painting
+
+/// The title strip height in physical pixels for the current DPI.
+fn titlebarHeight(self: *const Self) i32 {
+    const dpi: i32 = @intCast(winapi.GetDpiForWindow(self.hwnd));
+    return @divTrunc(titlebar_height_logical * dpi, 96);
+}
+
+/// The rect of a caption button in parent client coordinates.
+fn captionButtonRect(self: *const Self, button: CaptionButton) winapi.RECT {
+    var client: winapi.RECT = undefined;
+    _ = winapi.GetClientRect(self.hwnd, &client);
+    const dpi: i32 = @intCast(winapi.GetDpiForWindow(self.hwnd));
+    const w = @divTrunc(caption_button_width_logical * dpi, 96);
+    const h = self.titlebarHeight();
+    const index: i32 = switch (button) {
+        .close => 1,
+        .maximize => 2,
+        .minimize => 3,
+    };
+    return .{
+        .left = client.right - index * w,
+        .top = 0,
+        .right = client.right - (index - 1) * w,
+        .bottom = h,
+    };
+}
+
+fn captionButtonAt(self: *const Self, x: i32, y: i32) ?CaptionButton {
+    inline for (.{ .minimize, .maximize, .close }) |button| {
+        const r = self.captionButtonRect(button);
+        if (x >= r.left and x < r.right and y >= r.top and y < r.bottom)
+            return button;
+    }
+    return null;
+}
+
+/// Paint the title strip: background, centered title, caption buttons
+/// using Segoe MDL2 Assets glyphs (the standard Windows caption icons).
+fn paintTitlebar(self: *Self, hdc: winapi.HDC) void {
+    var client: winapi.RECT = undefined;
+    _ = winapi.GetClientRect(self.hwnd, &client);
+    var strip: winapi.RECT = .{
+        .left = 0,
+        .top = 0,
+        .right = client.right,
+        .bottom = self.titlebarHeight(),
+    };
+
+    const light = winapi.appsUseLightTheme();
+    const bg: u32 = if (light) 0x00F3F3F3 else 0x00202020;
+    const fg: u32 = if (light) 0x00000000 else 0x00FFFFFF;
+
+    const bg_brush = winapi.CreateSolidBrush(bg) orelse return;
+    defer _ = winapi.DeleteObject(bg_brush);
+    _ = winapi.FillRect(hdc, &strip, bg_brush);
+
+    _ = winapi.SetBkMode(hdc, winapi.TRANSPARENT_BK);
+    _ = winapi.SetTextColor(hdc, fg);
+
+    const dpi: i32 = @intCast(winapi.GetDpiForWindow(self.hwnd));
+
+    // Title text, centered in the strip, away from the buttons.
+    if (self.title_text) |title| title: {
+        const font = winapi.CreateFontW(
+            @divTrunc(-12 * dpi, 96),
+            0,
+            0,
+            0,
+            400,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            5, // CLEARTYPE_QUALITY
+            0,
+            std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI"),
+        ) orelse break :title;
+        defer _ = winapi.DeleteObject(font);
+        const old_font = winapi.SelectObject(hdc, font);
+        defer if (old_font) |f| {
+            _ = winapi.SelectObject(hdc, f);
+        };
+
+        var buf: [512]u16 = undefined;
+        const len = std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], title) catch
+            break :title;
+        buf[len] = 0;
+
+        const btns = 3 * @divTrunc(caption_button_width_logical * dpi, 96);
+        var text_rect: winapi.RECT = .{
+            .left = btns,
+            .top = 0,
+            .right = client.right - btns,
+            .bottom = strip.bottom,
+        };
+        _ = winapi.DrawTextW(
+            hdc,
+            buf[0..len :0],
+            @intCast(len),
+            &text_rect,
+            winapi.DT_CENTER | winapi.DT_VCENTER |
+                winapi.DT_SINGLELINE | winapi.DT_END_ELLIPSIS,
+        );
+    }
+
+    // Caption buttons.
+    const glyph_font = winapi.CreateFontW(
+        @divTrunc(-10 * dpi, 96),
+        0,
+        0,
+        0,
+        400,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        0,
+        std.unicode.utf8ToUtf16LeStringLiteral("Segoe MDL2 Assets"),
+    );
+    defer if (glyph_font) |f| {
+        _ = winapi.DeleteObject(f);
+    };
+    if (glyph_font) |f| {
+        const old_font = winapi.SelectObject(hdc, f);
+        defer if (old_font) |of| {
+            _ = winapi.SelectObject(hdc, of);
+        };
+
+        inline for (.{ .minimize, .maximize, .close }) |button| {
+            var rect = self.captionButtonRect(button);
+
+            if (self.hover_button == @as(CaptionButton, button)) {
+                const hover_bg: u32 = if (button == .close)
+                    0x002311E8 // close hovers red (COLORREF is BGR)
+                else if (light)
+                    0x00DADADA
+                else
+                    0x002D2D2D;
+                const hover_brush = winapi.CreateSolidBrush(hover_bg);
+                if (hover_brush) |hb| {
+                    defer _ = winapi.DeleteObject(hb);
+                    _ = winapi.FillRect(hdc, &rect, hb);
+                }
+                _ = winapi.SetTextColor(
+                    hdc,
+                    if (button == .close) 0x00FFFFFF else fg,
+                );
+            } else {
+                _ = winapi.SetTextColor(hdc, fg);
+            }
+
+            // Segoe MDL2 Assets: ChromeMinimize/Maximize/Restore/Close.
+            const glyph: []const u16 = switch (@as(CaptionButton, button)) {
+                .minimize => &.{0xE921},
+                .maximize => if (winapi.IsZoomed(self.hwnd) != 0)
+                    &.{0xE923}
+                else
+                    &.{0xE922},
+                .close => &.{0xE8BB},
+            };
+            var glyph_buf: [2:0]u16 = .{ glyph[0], 0 };
+            _ = winapi.DrawTextW(
+                hdc,
+                &glyph_buf,
+                1,
+                &rect,
+                winapi.DT_CENTER | winapi.DT_VCENTER | winapi.DT_SINGLELINE,
+            );
+        }
+    }
+}
+
+/// Handle a click on a caption button.
+fn captionButtonClick(self: *Self, button: CaptionButton) void {
+    switch (button) {
+        .minimize => _ = winapi.ShowWindow(self.hwnd, winapi.SW_MINIMIZE),
+        .maximize => _ = winapi.ShowWindow(
+            self.hwnd,
+            if (winapi.IsZoomed(self.hwnd) != 0)
+                winapi.SW_RESTORE
+            else
+                winapi.SW_MAXIMIZE,
+        ),
+        .close => self.should_close = true,
+    }
 }
 
 /// Move the IME composition point to the terminal cursor cell so
@@ -206,12 +431,14 @@ fn imePositionWindow(self: *Self) void {
     const himc = winapi.ImmGetContext(self.hwnd) orelse return;
     defer _ = winapi.ImmReleaseContext(self.hwnd, himc);
 
+    // imePoint is relative to the terminal surface (the GL host); the
+    // composition window position is relative to the top-level window.
     const pos = self.core_surface.imePoint();
     _ = winapi.ImmSetCompositionWindow(himc, &.{
         .dwStyle = winapi.CFS_POINT,
         .ptCurrentPos = .{
             .x = @intFromFloat(@max(0, pos.x)),
-            .y = @intFromFloat(@max(0, pos.y)),
+            .y = @as(i32, @intFromFloat(@max(0, pos.y))) + self.titlebarHeight(),
         },
         .rcArea = std.mem.zeroes(winapi.RECT),
     });
@@ -302,6 +529,9 @@ fn notifyColorScheme(self: *Self) void {
     self.core_surface.colorSchemeCallback(scheme) catch |err| {
         log.err("error in color scheme callback err={}", .{err});
     };
+
+    // Repaint the strip in the new theme colors.
+    _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
 }
 
 pub fn deinit(self: *Self) void {
@@ -368,7 +598,10 @@ pub fn setTitle(self: *Self, slice: [:0]const u8) !void {
     var buf: [512]u16 = undefined;
     const len = std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], slice) catch return;
     buf[len] = 0;
+    // Keeps the taskbar/alt-tab title correct; the visible strip is
+    // painted by us.
     _ = winapi.SetWindowTextW(self.hwnd, buf[0..len :0]);
+    _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
 }
 
 pub fn getContentScale(self: *const Self) !apprt.ContentScale {
@@ -378,8 +611,10 @@ pub fn getContentScale(self: *const Self) !apprt.ContentScale {
 }
 
 pub fn getSize(self: *const Self) !apprt.SurfaceSize {
+    // The terminal's surface is the GL host child, not the full client
+    // area (the title strip is above it).
     var rect: winapi.RECT = undefined;
-    if (winapi.GetClientRect(self.hwnd, &rect) == 0) return error.GetClientRectFailed;
+    if (winapi.GetClientRect(self.host, &rect) == 0) return error.GetClientRectFailed;
     return .{
         .width = @intCast(rect.right - rect.left),
         .height = @intCast(rect.bottom - rect.top),
@@ -389,7 +624,7 @@ pub fn getSize(self: *const Self) !apprt.SurfaceSize {
 pub fn getCursorPos(self: *const Self) !apprt.CursorPos {
     var pt: winapi.POINT = undefined;
     if (winapi.GetCursorPos(&pt) == 0) return error.GetCursorPosFailed;
-    if (winapi.ScreenToClient(self.hwnd, &pt) == 0) return error.ScreenToClientFailed;
+    if (winapi.ScreenToClient(self.host, &pt) == 0) return error.ScreenToClientFailed;
     return .{
         .x = @floatFromInt(pt.x),
         .y = @floatFromInt(pt.y),
@@ -577,6 +812,67 @@ pub fn wndProc(
 
         winapi.WM_ERASEBKGND => return 1,
 
+        // Custom frame: remove the standard title bar but keep the
+        // left/right/bottom resize borders DefWindowProc computes.
+        winapi.WM_NCCALCSIZE => {
+            if (wparam == 0) return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+            const params: *winapi.NCCALCSIZE_PARAMS = @ptrFromInt(
+                @as(usize, @bitCast(lparam)),
+            );
+            const original_top = params.rgrc[0].top;
+            const result = winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+            if (result != 0) return result;
+            params.rgrc[0].top = original_top;
+
+            // When maximized the window extends past the monitor edge
+            // by the frame size; inset the top so the strip is visible.
+            if (winapi.IsZoomed(hwnd) != 0) {
+                const dpi = winapi.GetDpiForWindow(hwnd);
+                params.rgrc[0].top += winapi.GetSystemMetricsForDpi(
+                    winapi.SM_CYSIZEFRAME,
+                    dpi,
+                ) + winapi.GetSystemMetricsForDpi(
+                    winapi.SM_CXPADDEDBORDER,
+                    dpi,
+                );
+            }
+            return 0;
+        },
+
+        winapi.WM_NCHITTEST => {
+            // Coordinates are in screen space.
+            var pt: winapi.POINT = .{
+                .x = lparamX(lparam),
+                .y = lparamY(lparam),
+            };
+            _ = winapi.ScreenToClient(hwnd, &pt);
+
+            // Top resize border (the standard one was removed with the
+            // title bar).
+            if (winapi.IsZoomed(hwnd) == 0) {
+                const dpi = winapi.GetDpiForWindow(hwnd);
+                const frame_y = winapi.GetSystemMetricsForDpi(
+                    winapi.SM_CYSIZEFRAME,
+                    dpi,
+                ) + winapi.GetSystemMetricsForDpi(
+                    winapi.SM_CXPADDEDBORDER,
+                    dpi,
+                );
+                if (pt.y >= 0 and pt.y < frame_y)
+                    return winapi.HTTOP;
+            }
+
+            if (pt.y >= 0 and pt.y < self.titlebarHeight()) {
+                // Caption buttons are normal client clicks; the rest of
+                // the strip drags the window.
+                if (self.captionButtonAt(pt.x, pt.y) != null)
+                    return 1; // HTCLIENT
+                return winapi.HTCAPTION;
+            }
+
+            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+
         winapi.WM_SETCURSOR => {
             const hit: u16 = @truncate(@as(usize, @bitCast(lparam)));
             if (hit == winapi.HTCLIENT) {
@@ -589,7 +885,11 @@ pub fn wndProc(
         },
 
         winapi.WM_PAINT => {
-            _ = winapi.ValidateRect(hwnd, null);
+            var ps: winapi.PAINTSTRUCT = undefined;
+            if (winapi.BeginPaint(hwnd, &ps)) |hdc| {
+                self.paintTitlebar(hdc);
+                _ = winapi.EndPaint(hwnd, &ps);
+            }
             self.core_surface.refreshCallback() catch |err| {
                 log.err("error in refresh callback err={}", .{err});
             };
@@ -597,22 +897,25 @@ pub fn wndProc(
         },
 
         winapi.WM_SIZE => {
-            const size = self.getSize() catch |err| {
-                log.err("error querying window size err={}", .{err});
-                return 0;
-            };
-
-            // Keep the GL host child covering the client area.
+            // The GL host child fills the client area below the strip.
+            var client: winapi.RECT = undefined;
+            _ = winapi.GetClientRect(hwnd, &client);
+            const strip = self.titlebarHeight();
             _ = winapi.SetWindowPos(
                 self.host,
                 null,
                 0,
-                0,
-                @intCast(size.width),
-                @intCast(size.height),
+                strip,
+                client.right - client.left,
+                @max(0, client.bottom - client.top - strip),
                 winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
             );
+            _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
 
+            const size = self.getSize() catch |err| {
+                log.err("error querying window size err={}", .{err});
+                return 0;
+            };
             self.core_surface.sizeCallback(size) catch |err| {
                 log.err("error in size callback err={}", .{err});
             };
@@ -654,9 +957,20 @@ pub fn wndProc(
         },
 
         winapi.WM_MOUSEMOVE => {
+            const x = lparamX(lparam);
+            const y = lparamY(lparam);
+
+            // Hover tracking for the caption buttons.
+            const hover = self.captionButtonAt(x, y);
+            if (hover != self.hover_button) {
+                self.hover_button = hover;
+                _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+            }
+
+            // Terminal coordinates are relative to the GL host.
             self.core_surface.cursorPosCallback(.{
-                .x = @floatFromInt(lparamX(lparam)),
-                .y = @floatFromInt(lparamY(lparam)),
+                .x = @floatFromInt(x),
+                .y = @floatFromInt(y - self.titlebarHeight()),
             }, currentMods()) catch |err| {
                 log.err("error in cursor pos callback err={}", .{err});
             };
@@ -670,6 +984,18 @@ pub fn wndProc(
         winapi.WM_MBUTTONDOWN,
         winapi.WM_MBUTTONUP,
         => {
+            // Clicks in the title strip operate the caption buttons and
+            // never reach the terminal.
+            const cy = lparamY(lparam);
+            if (cy >= 0 and cy < self.titlebarHeight()) {
+                if (msg == winapi.WM_LBUTTONUP) {
+                    if (self.captionButtonAt(lparamX(lparam), cy)) |button| {
+                        self.captionButtonClick(button);
+                    }
+                }
+                return 0;
+            }
+
             const button: input.MouseButton = switch (msg) {
                 winapi.WM_LBUTTONDOWN, winapi.WM_LBUTTONUP => .left,
                 winapi.WM_RBUTTONDOWN, winapi.WM_RBUTTONUP => .right,

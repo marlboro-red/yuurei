@@ -118,6 +118,7 @@ pub const SWP_NOSIZE: UINT = 0x0001;
 pub const SWP_NOMOVE: UINT = 0x0002;
 pub const SWP_NOZORDER: UINT = 0x0004;
 pub const SWP_NOACTIVATE: UINT = 0x0010;
+pub const SWP_FRAMECHANGED: UINT = 0x0020;
 
 // MapVirtualKeyW translation types
 pub const MAPVK_VK_TO_CHAR: UINT = 2;
@@ -327,6 +328,71 @@ pub extern "kernel32" fn GlobalFree(HANDLE) callconv(.winapi) ?HANDLE;
 pub extern "gdi32" fn ChoosePixelFormat(HDC, *const PIXELFORMATDESCRIPTOR) callconv(.winapi) i32;
 pub extern "gdi32" fn SetPixelFormat(HDC, i32, *const PIXELFORMATDESCRIPTOR) callconv(.winapi) BOOL;
 pub extern "gdi32" fn SwapBuffers(HDC) callconv(.winapi) BOOL;
+
+// Custom frame
+pub const WM_NCCALCSIZE: UINT = 0x0083;
+pub const WM_NCHITTEST: UINT = 0x0084;
+
+// Hit test results
+pub const HTCAPTION: LRESULT = 2;
+pub const HTTOP: LRESULT = 12;
+
+pub const SM_CYSIZEFRAME: i32 = 33;
+pub const SM_CXPADDEDBORDER: i32 = 92;
+
+pub const SW_MINIMIZE: i32 = 6;
+pub const SW_MAXIMIZE: i32 = 3;
+pub const SW_RESTORE: i32 = 9;
+
+pub const NCCALCSIZE_PARAMS = extern struct {
+    rgrc: [3]RECT,
+    lppos: *anyopaque,
+};
+
+pub const PAINTSTRUCT = extern struct {
+    hdc: HDC,
+    fErase: BOOL,
+    rcPaint: RECT,
+    fRestore: BOOL,
+    fIncUpdate: BOOL,
+    rgbReserved: [32]u8,
+};
+
+pub extern "user32" fn BeginPaint(HWND, *PAINTSTRUCT) callconv(.winapi) ?HDC;
+pub extern "user32" fn EndPaint(HWND, *const PAINTSTRUCT) callconv(.winapi) BOOL;
+pub extern "user32" fn FillRect(HDC, *const RECT, HBRUSH) callconv(.winapi) i32;
+pub extern "user32" fn InvalidateRect(?HWND, ?*const RECT, BOOL) callconv(.winapi) BOOL;
+pub extern "user32" fn GetSystemMetricsForDpi(i32, UINT) callconv(.winapi) i32;
+pub extern "user32" fn IsZoomed(HWND) callconv(.winapi) BOOL;
+pub extern "gdi32" fn CreateSolidBrush(u32) callconv(.winapi) ?HBRUSH;
+pub extern "gdi32" fn DeleteObject(?*anyopaque) callconv(.winapi) BOOL;
+pub extern "gdi32" fn SetBkMode(HDC, i32) callconv(.winapi) i32;
+pub extern "gdi32" fn SetTextColor(HDC, u32) callconv(.winapi) u32;
+pub extern "gdi32" fn CreateFontW(
+    height: i32,
+    width: i32,
+    escapement: i32,
+    orientation: i32,
+    weight: i32,
+    italic: DWORD,
+    underline: DWORD,
+    strikeout: DWORD,
+    charset: DWORD,
+    out_precision: DWORD,
+    clip_precision: DWORD,
+    quality: DWORD,
+    pitch_and_family: DWORD,
+    face: ?[*:0]const u16,
+) callconv(.winapi) ?*anyopaque;
+pub extern "gdi32" fn SelectObject(HDC, *anyopaque) callconv(.winapi) ?*anyopaque;
+pub extern "user32" fn DrawTextW(HDC, [*:0]const u16, i32, *RECT, UINT) callconv(.winapi) i32;
+
+pub const TRANSPARENT_BK: i32 = 1;
+pub const DT_CENTER: UINT = 0x0001;
+pub const DT_VCENTER: UINT = 0x0004;
+pub const DT_SINGLELINE: UINT = 0x0020;
+pub const DT_LEFT: UINT = 0x0000;
+pub const DT_END_ELLIPSIS: UINT = 0x8000;
 
 // DWM
 pub const DWMWA_USE_IMMERSIVE_DARK_MODE: DWORD = 20;

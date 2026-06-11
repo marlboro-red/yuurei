@@ -371,9 +371,21 @@ runtime like `gtk.zig`.
     buttons) that the GL swap chain can't overdraw. Verified zero
     behavioral change: rendering, input passthrough (disabled child →
     parent), resize tracking.
-  - Remaining: `WM_NCCALCSIZE` top-frame removal, `WM_NCHITTEST` caption/
-    resize hit testing, GDI tab strip + caption buttons in the reclaimed
-    strip, Mica/backdrop. Tabs and chrome are one design unit.
+  - [x] Custom frame landed (2026-06-12): `WM_NCCALCSIZE` removes the
+    standard title bar (keeping DefWindowProc's left/right/bottom resize
+    borders + maximize inset); `WM_NCHITTEST` synthesizes the top resize
+    border, drags via HTCAPTION, and exempts the caption buttons; the
+    strip is GDI-painted (theme-aware background, centered title, Segoe
+    MDL2 caption glyphs with hover states including red close). All
+    verified live: drag, maximize/restore with correct inset, close via
+    button → clean exit. A frame recalc (`SWP_FRAMECHANGED`) is forced
+    after the wndproc is wired since the initial frame computes before
+    that. *(Test-harness note: PowerShell-driven clicks need
+    `SetThreadDpiAwarenessContext(-4)` + foregrounding — coordinates are
+    otherwise DPI-virtualized and clicks land on overlapping windows.)*
+  - Remaining: tab strip in the reclaimed area (the model: multiple core
+    surfaces per window), Mica/backdrop polish, snap-layouts hover on
+    the maximize button.
 - **Input gets disproportionate budget — it is where real terminals fail:**
   - The `TranslateMessage` ordering trap (handled `WM_KEYDOWN` must swallow its
     queued `WM_CHAR`).
