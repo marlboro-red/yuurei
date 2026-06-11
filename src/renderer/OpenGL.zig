@@ -174,6 +174,8 @@ pub fn surfaceInit(surface: *apprt.Surface) !void {
             // to compile for OpenGL targets but libghostty is strictly
             // broken for rendering on this platforms.
         },
+
+        apprt.win32 => @panic("TODO: windows: WGL context creation"),
     }
 
     // These are very noisy so this is commented, but easy to uncomment
@@ -213,6 +215,8 @@ pub fn threadEnter(self: *const OpenGL, surface: *apprt.Surface) !void {
             // to compile for OpenGL targets but libghostty is strictly
             // broken for rendering on this platforms.
         },
+
+        apprt.win32 => @panic("TODO: windows: wglMakeCurrent on renderer thread"),
     }
 }
 
@@ -231,6 +235,8 @@ pub fn threadExit(self: *const OpenGL) void {
         apprt.embedded => {
             // TODO: see threadEnter
         },
+
+        apprt.win32 => @panic("TODO: windows: release WGL context"),
     }
 }
 

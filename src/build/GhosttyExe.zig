@@ -49,7 +49,15 @@ pub fn init(b: *std.Build, cfg: *const Config, deps: *const SharedDeps) !Ghostty
     // OS-specific
     switch (cfg.target.result.os.tag) {
         .windows => {
-            exe.subsystem = .Windows;
+            // The win32 apprt skeleton uses the console subsystem: the
+            // MSVC CRT expects a WinMain entry under the Windows
+            // subsystem, and a visible console keeps logs in your face
+            // during bring-up. Flip to .Windows (plus the proper entry
+            // point) as part of Phase 3 polish (WINDOWS_PORT_PLAN.md).
+            exe.subsystem = switch (cfg.app_runtime) {
+                .win32 => .Console,
+                else => .Windows,
+            };
             exe.addWin32ResourceFile(.{
                 .file = b.path("dist/windows/ghostty.rc"),
             });

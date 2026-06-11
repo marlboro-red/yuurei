@@ -34,5 +34,11 @@ jobs:
       - name: Build core (apprt=none, native Windows)
         run: zig build -Dapp-runtime=none
 
+      - name: Build exe (apprt=win32 skeleton)
+        run: zig build -Dapp-runtime=win32
+
+      - name: Smoke test exe
+        run: zig-out\bin\ghostty.exe +version
+
       - name: Unit tests
         run: zig build -Dapp-runtime=none test

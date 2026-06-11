@@ -2013,6 +2013,16 @@ test "exec windows: conpty shell exit via xev stream write and process watcher" 
     try testing.expectEqual(@as(?usize, input.len), state.written);
     try testing.expectEqual(@as(?u32, 0), state.exit_code);
 
-    // The shell painted something (banner/prompt) through the pty.
+    // The shell painted something (banner/prompt) through the pty. ConPTY
+    // paints asynchronously: the job-object exit notification can arrive
+    // before conhost has flushed the first paint to our pipe, so give the
+    // drainer a bounded window to observe it rather than asserting
+    // immediately.
+    var drain_timer = try std.time.Timer.start();
+    while (drain_total.load(.monotonic) == 0 and
+        drain_timer.read() < 10 * std.time.ns_per_s)
+    {
+        std.Thread.sleep(5 * std.time.ns_per_ms);
+    }
     try testing.expect(drain_total.load(.monotonic) > 0);
 }

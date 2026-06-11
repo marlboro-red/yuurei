@@ -244,8 +244,17 @@ CI, so there is much less left to de-risk.
 Instead, proof of life is the **smallest possible `src/apprt/win32.zig`** —
 the start of Phase 3's runtime, built skeleton-first:
 
-- Register `.win32` in `src/apprt/runtime.zig` + build wiring; make it the
-  Windows default for the exe build (`-Dapp-runtime=win32`).
+- [x] Register `.win32` in `src/apprt/runtime.zig` + build wiring
+  (2026-06-11): `src/apprt/win32/{App,Surface}.zig` satisfy the comptime
+  apprt interface with honest `@panic("TODO: windows")` bodies;
+  `renderer/OpenGL.zig` got `.win32` arms (panics, pending WGL);
+  `zig build -Dapp-runtime=win32` produces a working `ghostty.exe` —
+  `+version` reports runtime `.win32`, font engine `.freetype_windows`,
+  renderer OpenGL, libxev iocp; a bare launch boots global init + config
+  and dies at the honest message-loop panic. Built as the **console**
+  subsystem for now (MSVC CRT wants WinMain under the Windows subsystem;
+  flip in Phase 3 polish). In fork CI on every push. Not yet the Windows
+  default — that flip happens at this phase's exit criterion.
 - One window class, `CreateWindowExW`, bare message loop, **standard system
   frame** (no DWM custom chrome yet).
 - WGL context creation hosting the existing OpenGL renderer.
@@ -366,7 +375,7 @@ to days; Phase 2's GLFW shortcut is gone but its replacement seeds Phase 3).
 
 | # | Milestone | Proof | Cumulative timeline |
 |---|---|---|---|
-| M0 | Fork Windows CI green on core (`apprt=none` build + tests) | CI badge | ~1 week |
+| M0 | Fork Windows CI green on core (`apprt=none` build + tests) | CI badge | **Done 2026-06-11** |
 | M1 | Shell round-trip headless via ConPTY | CI integration test | ~3–5 weeks |
 | M2 | **Proof of life:** Ghostty/win32-skeleton running pwsh on Windows | Screenshot + daily use | ~2–3 months |
 | M3 | Win32 apprt completed, default Windows build | Tabs, IME, paste, DPI all real | ~5–6 months |

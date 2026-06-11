@@ -11,6 +11,11 @@ pub const Runtime = enum {
     /// approach to building the application.
     gtk,
 
+    /// Native Windows (Win32). Skeleton under active development; see
+    /// WINDOWS_PORT_PLAN.md. Not yet the Windows default — opt in with
+    /// `-Dapp-runtime=win32`.
+    win32,
+
     pub fn default(target: std.Target) Runtime {
         return switch (target.os.tag) {
             // The Linux and FreeBSD default is GTK because it is a full

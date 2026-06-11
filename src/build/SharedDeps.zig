@@ -605,6 +605,9 @@ pub fn add(
         switch (self.config.app_runtime) {
             .none => {},
             .gtk => try self.addGtkNg(step),
+            // No extra build dependencies yet: the win32 apprt uses raw
+            // Win32 via Zig and the in-tree glad GL loader above.
+            .win32 => {},
         }
     }
 
