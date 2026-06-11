@@ -57,6 +57,11 @@ high_surrogate: ?u16 = null,
 /// objects and are never destroyed.
 cursor: ?winapi.HCURSOR = null,
 
+/// Timer id used to keep the core app ticking while the window is in
+/// a DefWindowProc modal loop (interactive move/resize), during which
+/// App.run's message loop never regains control.
+const modal_tick_timer_id: usize = 1;
+
 pub fn init(self: *Self, app: *App) !void {
     const hwnd = winapi.CreateWindowExW(
         0,
@@ -433,6 +438,34 @@ pub fn defaultTermioEnv(self: *Self) !std.process.EnvMap {
     return try internal_os.getEnvMap(self.app.core_app.alloc);
 }
 
+/// Set the initial window size from config (window-width/height). The
+/// values are a client-area size in grid-derived pixels; convert to a
+/// full window size including the frame for the current DPI.
+pub fn setInitialWindowSize(self: *const Self, width: u32, height: u32) !void {
+    var rect: winapi.RECT = .{
+        .left = 0,
+        .top = 0,
+        .right = @intCast(width),
+        .bottom = @intCast(height),
+    };
+    _ = winapi.AdjustWindowRectExForDpi(
+        &rect,
+        winapi.WS_OVERLAPPEDWINDOW,
+        winapi.FALSE,
+        0,
+        winapi.GetDpiForWindow(self.hwnd),
+    );
+    _ = winapi.SetWindowPos(
+        self.hwnd,
+        null,
+        0,
+        0,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+        winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE | winapi.SWP_NOMOVE,
+    );
+}
+
 /// Set the mouse cursor shape for the client area. Unmapped shapes
 /// keep the current cursor (the spec set is larger than the stock
 /// Windows cursor set).
@@ -623,6 +656,29 @@ pub fn wndProc(
                 log.err("error in content scale callback err={}", .{err});
             };
             return 0;
+        },
+
+        winapi.WM_ENTERSIZEMOVE => {
+            // Interactive move/resize runs a modal loop inside
+            // DefWindowProc; tick the core app from a timer so
+            // actions and IO keep flowing during the drag.
+            _ = winapi.SetTimer(hwnd, modal_tick_timer_id, 16, null);
+            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+
+        winapi.WM_EXITSIZEMOVE => {
+            _ = winapi.KillTimer(hwnd, modal_tick_timer_id);
+            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+
+        winapi.WM_TIMER => {
+            if (wparam == modal_tick_timer_id) {
+                self.app.core_app.tick(self.app) catch |err| {
+                    log.err("error ticking app from modal loop err={}", .{err});
+                };
+                return 0;
+            }
+            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
 
         winapi.WM_SETTINGCHANGE => {

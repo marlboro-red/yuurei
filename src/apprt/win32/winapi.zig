@@ -93,6 +93,7 @@ pub const PIXELFORMATDESCRIPTOR = extern struct {
 // Window styles
 pub const WS_OVERLAPPEDWINDOW: DWORD = 0x00CF0000;
 pub const CW_USEDEFAULT: i32 = @bitCast(@as(u32, 0x80000000));
+pub const FALSE = std.os.windows.FALSE;
 
 // Class styles
 pub const CS_HREDRAW: UINT = 0x0002;
@@ -109,6 +110,8 @@ pub const PM_REMOVE: UINT = 0x0001;
 pub const GWLP_USERDATA: i32 = -21;
 
 // SetWindowPos flags
+pub const SWP_NOSIZE: UINT = 0x0001;
+pub const SWP_NOMOVE: UINT = 0x0002;
 pub const SWP_NOZORDER: UINT = 0x0004;
 pub const SWP_NOACTIVATE: UINT = 0x0010;
 
@@ -131,7 +134,10 @@ pub const WM_CHAR: UINT = 0x0102;
 pub const WM_SYSKEYDOWN: UINT = 0x0104;
 pub const WM_SYSKEYUP: UINT = 0x0105;
 pub const WM_SYSCHAR: UINT = 0x0106;
+pub const WM_TIMER: UINT = 0x0113;
 pub const WM_MOUSEMOVE: UINT = 0x0200;
+pub const WM_ENTERSIZEMOVE: UINT = 0x0231;
+pub const WM_EXITSIZEMOVE: UINT = 0x0232;
 pub const WM_LBUTTONDOWN: UINT = 0x0201;
 pub const WM_LBUTTONUP: UINT = 0x0202;
 pub const WM_RBUTTONDOWN: UINT = 0x0204;
@@ -298,6 +304,9 @@ pub extern "user32" fn LoadCursorW(?HINSTANCE, ?[*:0]const u16) callconv(.winapi
 pub extern "user32" fn SetCursor(?HCURSOR) callconv(.winapi) ?HCURSOR;
 pub extern "user32" fn SetCapture(HWND) callconv(.winapi) ?HWND;
 pub extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
+pub extern "user32" fn SetTimer(?HWND, usize, UINT, ?*anyopaque) callconv(.winapi) usize;
+pub extern "user32" fn KillTimer(?HWND, usize) callconv(.winapi) BOOL;
+pub extern "user32" fn AdjustWindowRectExForDpi(*RECT, DWORD, BOOL, DWORD, UINT) callconv(.winapi) BOOL;
 pub extern "user32" fn SetWindowPos(HWND, ?HWND, i32, i32, i32, i32, UINT) callconv(.winapi) BOOL;
 pub extern "user32" fn ValidateRect(?HWND, ?*const RECT) callconv(.winapi) BOOL;
 pub extern "user32" fn OpenClipboard(?HWND) callconv(.winapi) BOOL;

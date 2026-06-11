@@ -181,6 +181,14 @@ pub fn performAction(
             .surface => |surface| try surface.rt_surface.setMouseShape(value),
         },
 
+        .initial_size => switch (target) {
+            .app => {},
+            .surface => |surface| try surface.rt_surface.setInitialWindowSize(
+                value.width,
+                value.height,
+            ),
+        },
+
         .reload_config => try self.reloadConfig(target, value),
 
         // Everything else is honestly unimplemented for the skeleton:
