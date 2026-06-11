@@ -255,22 +255,40 @@ the start of Phase 3's runtime, built skeleton-first:
   subsystem for now (MSVC CRT wants WinMain under the Windows subsystem;
   flip in Phase 3 polish). In fork CI on every push. Not yet the Windows
   default — that flip happens at this phase's exit criterion.
-- One window class, `CreateWindowExW`, bare message loop, **standard system
-  frame** (no DWM custom chrome yet).
-- WGL context creation hosting the existing OpenGL renderer.
-- Crude input only: `WM_CHAR` → core's existing `input/` encoding. No IME, no
-  AltGr correctness, no dead keys yet — gaps are `@panic("TODO: windows")`
-  per Rule 2, never silent wrong behavior.
-- Font discovery: minimal DirectWrite enumeration (or even a hardcoded font
-  path at first — honestly labeled) to feed the existing FreeType/HarfBuzz
-  stack.
-- Wired to the Phase 1 ConPTY backend.
-- **Deliverable: actual Ghostty** — real renderer, real shaping, real config —
-  running a real shell in an ugly window on Windows.
-- From this point every change regresses against a known-good baseline instead
-  of assembling a non-working system.
-- **Exit criterion:** daily-drivable (ugly) terminal; vttest reasonably clean
-  through ConPTY; screenshot in the README.
+- [x] One window class, `CreateWindowExW`, bare message loop, **standard
+  system frame**. Done 2026-06-11: `App.run` is a real
+  `GetMessageW`/`PeekMessageW` loop modeled on the deleted GLFW apprt's
+  contract (wait → dispatch → `core_app.tick` → deferred surface closes);
+  `wakeup` posts a `WM_NULL` thread message. Win32 calls go through
+  hand-written externs in `win32/winapi.zig` (plain functions only — the
+  plan's zigwin32 decision is about COM and still stands for when
+  DirectWrite/TSF arrive).
+- [x] WGL context creation hosting the existing OpenGL renderer. Done:
+  legacy `wglCreateContext` (explicit-attribs core context is a TODO),
+  context handed from main thread to renderer thread via
+  `surfaceInit`/`finalizeSurfaceInit`/`threadEnter` arms; viewport synced
+  from the client rect in `drawFrameStart`; `SwapBuffers` in
+  `drawFrameEnd`. Driver gave GL 4.6.
+- [x] Crude input: `WM_KEYDOWN` (VK→key map) submits without text; if
+  unconsumed, the queued `WM_CHAR` completes it with layout-cooked UTF-8
+  (surrogate pairs reassembled) — the GLFW pairing adapted to the
+  TranslateMessage trap. Known-crude, documented in-code: no IME, no AltGr
+  discrimination (reports ctrl+alt), no dead keys, partial VK map. Also:
+  focus, resize, mouse wheel, and CF_UNICODETEXT clipboard both ways.
+  Mouse buttons/motion (selection) not wired yet.
+- [x] Font discovery: nothing needed for proof of life — upstream's
+  `freetype_windows` discovery backend plus embedded JetBrains Mono just
+  worked.
+- [x] Wired to the Phase 1 ConPTY backend.
+- [x] **Deliverable: actual Ghostty** — real renderer, real shaping, real
+  config — running a real shell in an ugly window on Windows. **Achieved
+  2026-06-11**: cmd.exe banner + prompt render with JetBrains Mono;
+  typed commands round-trip live; the shell sets the window title via OSC.
+- From this point every change regresses against a known-good baseline
+  instead of assembling a non-working system.
+- **Exit criterion (still open):** daily-drivable (ugly) terminal — needs
+  mouse selection, more complete keys, stability soak; vttest reasonably
+  clean through ConPTY; screenshot in the README.
 
 ### Phase 3 — Native Win32 apprt, completed (2–3 months)
 
@@ -377,7 +395,7 @@ to days; Phase 2's GLFW shortcut is gone but its replacement seeds Phase 3).
 |---|---|---|---|
 | M0 | Fork Windows CI green on core (`apprt=none` build + tests) | CI badge | **Done 2026-06-11** |
 | M1 | Shell round-trip headless via ConPTY | CI integration test | ~3–5 weeks |
-| M2 | **Proof of life:** Ghostty/win32-skeleton running pwsh on Windows | Screenshot + daily use | ~2–3 months |
+| M2 | **Proof of life:** Ghostty/win32-skeleton running a live shell on Windows | Screenshot + daily use | **Render+input live 2026-06-11**; daily-drivability still open |
 | M3 | Win32 apprt completed, default Windows build | Tabs, IME, paste, DPI all real | ~5–6 months |
 | M4 | Signed v1 on winget | `winget install ghostty` | ~6–8 months |
 | M5+ | Splits, quick terminal, D3D11-if-needed, ARM64 | By user pain | post-v1 |

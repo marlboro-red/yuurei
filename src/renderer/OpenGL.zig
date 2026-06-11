@@ -160,8 +160,6 @@ fn prepareContext(getProcAddress: anytype) !void {
 
 /// This is called early right after surface creation.
 pub fn surfaceInit(surface: *apprt.Surface) !void {
-    _ = surface;
-
     switch (apprt.runtime) {
         else => @compileError("unsupported app runtime for OpenGL"),
 
@@ -175,7 +173,13 @@ pub fn surfaceInit(surface: *apprt.Surface) !void {
             // broken for rendering on this platforms.
         },
 
-        apprt.win32 => @panic("TODO: windows: WGL context creation"),
+        // The WGL context was created with the window; make it current
+        // on this (main) thread for any GL the core does during surface
+        // init. finalizeSurfaceInit releases it for the renderer thread.
+        apprt.win32 => {
+            try surface.glMakeCurrent();
+            try prepareContext(&apprt.win32.winapi.glGetProcAddress);
+        },
     }
 
     // These are very noisy so this is commented, but easy to uncomment
@@ -193,12 +197,17 @@ pub fn surfaceInit(surface: *apprt.Surface) !void {
 pub fn finalizeSurfaceInit(self: *const OpenGL, surface: *apprt.Surface) !void {
     _ = self;
     _ = surface;
+
+    // Release the WGL context from the main thread so the renderer
+    // thread can make it current in threadEnter.
+    if (comptime apprt.runtime == apprt.win32) {
+        apprt.win32.Surface.glReleaseCurrent();
+    }
 }
 
 /// Callback called by renderer.Thread when it begins.
 pub fn threadEnter(self: *const OpenGL, surface: *apprt.Surface) !void {
     _ = self;
-    _ = surface;
 
     switch (apprt.runtime) {
         else => @compileError("unsupported app runtime for OpenGL"),
@@ -216,7 +225,13 @@ pub fn threadEnter(self: *const OpenGL, surface: *apprt.Surface) !void {
             // broken for rendering on this platforms.
         },
 
-        apprt.win32 => @panic("TODO: windows: wglMakeCurrent on renderer thread"),
+        // Take the WGL context on the renderer thread; all drawing
+        // happens here (no must_draw_from_app_thread). The glad
+        // bindings are threadlocal so they must be reloaded.
+        apprt.win32 => {
+            try surface.glMakeCurrent();
+            try prepareContext(&apprt.win32.winapi.glGetProcAddress);
+        },
     }
 }
 
@@ -236,7 +251,7 @@ pub fn threadExit(self: *const OpenGL) void {
             // TODO: see threadEnter
         },
 
-        apprt.win32 => @panic("TODO: windows: release WGL context"),
+        apprt.win32 => apprt.win32.Surface.glReleaseCurrent(),
     }
 }
 
@@ -256,17 +271,43 @@ pub fn displayRealized(self: *const OpenGL) void {
 }
 
 /// Actions taken before doing anything in `drawFrame`.
-///
-/// Right now there's nothing we need to do for OpenGL.
 pub fn drawFrameStart(self: *OpenGL) void {
     _ = self;
+
+    // On win32 we own the GL surface, so we are responsible for keeping
+    // the viewport in sync with the window's client area (GTK's GLArea
+    // does this implicitly). surfaceSize() reads the viewport back, so
+    // this is also how drawFrame learns about resizes. The window is
+    // recovered from the current DC to avoid plumbing a surface pointer
+    // through the renderer.
+    if (comptime apprt.runtime == apprt.win32) {
+        const winapi = apprt.win32.winapi;
+        const hdc = winapi.wglGetCurrentDC() orelse return;
+        const hwnd = winapi.WindowFromDC(hdc) orelse return;
+        var rect: winapi.RECT = undefined;
+        if (winapi.GetClientRect(hwnd, &rect) == 0) return;
+        gl.glad.context.Viewport.?(
+            0,
+            0,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+        );
+    }
 }
 
 /// Actions taken after `drawFrame` is done.
-///
-/// Right now there's nothing we need to do for OpenGL.
 pub fn drawFrameEnd(self: *OpenGL) void {
     _ = self;
+
+    // We own the swap chain on win32: present the default framebuffer.
+    if (comptime apprt.runtime == apprt.win32) {
+        const winapi = apprt.win32.winapi;
+        if (winapi.wglGetCurrentDC()) |hdc| {
+            if (winapi.SwapBuffers(hdc) == 0) {
+                log.warn("SwapBuffers failed", .{});
+            }
+        }
+    }
 }
 
 pub fn initShaders(

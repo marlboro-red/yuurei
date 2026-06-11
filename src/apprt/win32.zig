@@ -7,6 +7,7 @@
 //! returns fake success.
 pub const App = @import("win32/App.zig");
 pub const Surface = @import("win32/Surface.zig");
+pub const winapi = @import("win32/winapi.zig");
 
 const internal_os = @import("../os/main.zig");
 pub const resourcesDir = internal_os.resourcesDir;
