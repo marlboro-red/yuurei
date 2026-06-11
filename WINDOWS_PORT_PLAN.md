@@ -344,6 +344,12 @@ the start of Phase 3's runtime, built skeleton-first:
   (2026-06-12) — the exe is the default Windows artifact.
 - [x] Dark title bar via DWMWA_USE_IMMERSIVE_DARK_MODE, following theme
   changes (2026-06-12).
+- [x] Multiple windows (2026-06-12): `new_window` keybind/action spawns
+  additional surfaces, each a top-level window with its own renderer
+  thread and WGL context — verified live (targeted F9 → second window).
+  `new_tab` opens a window as an interim (honest log) until the real
+  tab strip lands with the custom-frame work; `close_window` wired to
+  the deferred-close path.
 - **Exit criterion (still open):** full interactive vttest (needs WSL or
   a POSIX host); screenshot in the README. Everything else on the Phase
   2 list is done.

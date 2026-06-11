@@ -171,6 +171,22 @@ pub fn performAction(
             .surface => |v| v,
         }),
 
+        // Interim: a real tab strip needs the custom-frame work (see
+        // WINDOWS_PORT_PLAN.md Phase 3); until then a new tab opens a
+        // new window, like the historical GLFW apprt did off-macOS.
+        .new_tab => {
+            log.info("tabs not yet implemented; opening a window", .{});
+            _ = try self.newSurface(switch (target) {
+                .app => null,
+                .surface => |v| v,
+            });
+        },
+
+        .close_window => switch (target) {
+            .app => {},
+            .surface => |surface| surface.rt_surface.should_close = true,
+        },
+
         .set_title => switch (target) {
             .app => {},
             .surface => |surface| try surface.rt_surface.setTitle(value.title),
