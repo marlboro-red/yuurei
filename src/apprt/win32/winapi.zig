@@ -315,6 +315,39 @@ pub extern "gdi32" fn ChoosePixelFormat(HDC, *const PIXELFORMATDESCRIPTOR) callc
 pub extern "gdi32" fn SetPixelFormat(HDC, i32, *const PIXELFORMATDESCRIPTOR) callconv(.winapi) BOOL;
 pub extern "gdi32" fn SwapBuffers(HDC) callconv(.winapi) BOOL;
 
+// IME (imm32)
+pub const HIMC = *opaque {};
+
+pub const WM_IME_STARTCOMPOSITION: UINT = 0x010D;
+pub const WM_IME_ENDCOMPOSITION: UINT = 0x010E;
+pub const WM_IME_COMPOSITION: UINT = 0x010F;
+
+// WM_IME_COMPOSITION lParam flags
+pub const GCS_COMPSTR: DWORD = 0x0008;
+pub const GCS_RESULTSTR: DWORD = 0x0800;
+
+// COMPOSITIONFORM styles
+pub const CFS_POINT: DWORD = 0x0002;
+
+pub const COMPOSITIONFORM = extern struct {
+    dwStyle: DWORD,
+    ptCurrentPos: POINT,
+    rcArea: RECT,
+};
+
+pub extern "imm32" fn ImmGetContext(HWND) callconv(.winapi) ?HIMC;
+pub extern "imm32" fn ImmReleaseContext(HWND, HIMC) callconv(.winapi) BOOL;
+pub extern "imm32" fn ImmGetCompositionStringW(
+    himc: HIMC,
+    index: DWORD,
+    buf: ?*anyopaque,
+    buf_len: DWORD,
+) callconv(.winapi) i32;
+pub extern "imm32" fn ImmSetCompositionWindow(
+    himc: HIMC,
+    form: *const COMPOSITIONFORM,
+) callconv(.winapi) BOOL;
+
 pub const GlProc = *const fn () callconv(.c) void;
 pub extern "opengl32" fn wglCreateContext(HDC) callconv(.winapi) ?HGLRC;
 pub extern "opengl32" fn wglDeleteContext(HGLRC) callconv(.winapi) BOOL;

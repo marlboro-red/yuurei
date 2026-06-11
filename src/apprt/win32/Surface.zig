@@ -147,6 +147,90 @@ pub fn init(self: *Self, app: *App) !void {
     self.notifyColorScheme();
 }
 
+/// Move the IME composition point to the terminal cursor cell so
+/// candidate windows pop up next to where text is being typed.
+fn imePositionWindow(self: *Self) void {
+    const himc = winapi.ImmGetContext(self.hwnd) orelse return;
+    defer _ = winapi.ImmReleaseContext(self.hwnd, himc);
+
+    const pos = self.core_surface.imePoint();
+    _ = winapi.ImmSetCompositionWindow(himc, &.{
+        .dwStyle = winapi.CFS_POINT,
+        .ptCurrentPos = .{
+            .x = @intFromFloat(@max(0, pos.x)),
+            .y = @intFromFloat(@max(0, pos.y)),
+        },
+        .rcArea = std.mem.zeroes(winapi.RECT),
+    });
+}
+
+/// Handle WM_IME_COMPOSITION: result text commits to the terminal as a
+/// key event; composition text becomes inline preedit. Both can be
+/// present in one message (commit + start of the next composition).
+fn imeComposition(self: *Self, lparam: winapi.LPARAM) void {
+    const flags: winapi.DWORD = @truncate(@as(usize, @bitCast(lparam)));
+    const himc = winapi.ImmGetContext(self.hwnd) orelse return;
+    defer _ = winapi.ImmReleaseContext(self.hwnd, himc);
+
+    const alloc = self.core_surface.alloc;
+
+    if (flags & winapi.GCS_RESULTSTR != 0) result: {
+        const text = imeGetString(alloc, himc, winapi.GCS_RESULTSTR) orelse
+            break :result;
+        defer alloc.free(text);
+
+        // Clear the preedit before committing so the committed text
+        // doesn't render on top of a stale preedit.
+        self.core_surface.preeditCallback(null) catch {};
+
+        const key_event: input.KeyEvent = .{
+            .action = .press,
+            .key = .unidentified,
+            .utf8 = text,
+        };
+        _ = self.core_surface.keyCallback(key_event) catch |err| {
+            log.err("error in key callback err={}", .{err});
+        };
+    }
+
+    if (flags & winapi.GCS_COMPSTR != 0) comp: {
+        const text = imeGetString(alloc, himc, winapi.GCS_COMPSTR) orelse
+            break :comp;
+        defer alloc.free(text);
+
+        self.core_surface.preeditCallback(
+            if (text.len > 0) text else null,
+        ) catch |err| {
+            log.err("error in preedit callback err={}", .{err});
+        };
+    }
+
+    // Keep the composition UI tracking the cursor as text flows.
+    self.imePositionWindow();
+}
+
+/// Read an IME composition string as freshly-allocated UTF-8, or null
+/// if it is empty or unavailable.
+fn imeGetString(
+    alloc: Allocator,
+    himc: winapi.HIMC,
+    index: winapi.DWORD,
+) ?[]const u8 {
+    const bytes = winapi.ImmGetCompositionStringW(himc, index, null, 0);
+    if (bytes <= 0) return null;
+
+    const wide = alloc.alloc(u16, @intCast(@divExact(bytes, 2))) catch return null;
+    defer alloc.free(wide);
+    _ = winapi.ImmGetCompositionStringW(
+        himc,
+        index,
+        wide.ptr,
+        @intCast(bytes),
+    );
+
+    return std.unicode.utf16LeToUtf8Alloc(alloc, wide) catch null;
+}
+
 /// Read the OS theme and forward it to the core surface.
 fn notifyColorScheme(self: *Self) void {
     const scheme: apprt.ColorScheme = if (winapi.appsUseLightTheme())
@@ -548,8 +632,29 @@ pub fn wndProc(
             return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
 
-        // TODO: windows: WM_IME_* (imm32), drag and drop. Phase 3 with
-        // the REVIEW.md regression checklist.
+        winapi.WM_IME_STARTCOMPOSITION => {
+            // Position the (suppressed) composition/candidate UI at the
+            // terminal cursor cell. Returning without DefWindowProc
+            // keeps the IME's own composition window hidden; preedit
+            // renders inline via preeditCallback instead.
+            self.imePositionWindow();
+            return 0;
+        },
+
+        winapi.WM_IME_COMPOSITION => {
+            self.imeComposition(lparam);
+            return 0;
+        },
+
+        winapi.WM_IME_ENDCOMPOSITION => {
+            self.core_surface.preeditCallback(null) catch |err| {
+                log.err("error in preedit callback err={}", .{err});
+            };
+            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+
+        // TODO: windows: TSF escalation if imm32 has CJK edge cases,
+        // drag and drop. Phase 3 with the REVIEW.md regression checklist.
 
         else => {},
     }

@@ -303,6 +303,19 @@ the start of Phase 3's runtime, built skeleton-first:
   new scale to `contentScaleCallback`. (Single-monitor machine — code
   follows the documented contract but a real multi-DPI drag is untested.)
 - [x] SGR colors verified rendering in the live window (16-color fg/bg).
+- [x] IME via imm32 (2026-06-12): `WM_IME_COMPOSITION` routes
+  `GCS_RESULTSTR` commits through `keyCallback` and `GCS_COMPSTR` through
+  `preeditCallback` (inline preedit; the system composition window is
+  suppressed); composition UI positioned at the cursor cell via
+  `imePoint()` + `ImmSetCompositionWindow`. **Implemented to the imm32
+  contract but not yet exercised with a real CJK IME — needs manual
+  verification by a CJK user before it can be called done.** TSF remains
+  the documented escalation path.
+- [x] Default shell prefers PowerShell (2026-06-12): pwsh.exe →
+  powershell.exe → cmd.exe, resolved via the process search path.
+  Verified: live window spawns pwsh. (Shell-integration injection for
+  pwsh does not exist upstream for any platform — new work, tracked under
+  Phase 3's shell-integration item.)
 - **Exit criterion (still open):** daily-drivable (ugly) terminal — needs a
   multi-day stability soak and a proper vttest pass through ConPTY;
   screenshot in the README.

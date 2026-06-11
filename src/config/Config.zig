@@ -4601,7 +4601,18 @@ pub fn finalize(self: *Config) !void {
 
             switch (builtin.os.tag) {
                 .windows => {
-                    if (self.command == null) {
+                    if (self.command == null) shell: {
+                        // Prefer PowerShell over cmd when available,
+                        // matching the modern Windows default. pwsh is
+                        // PowerShell 7+; powershell is the in-box
+                        // Windows PowerShell 5.1.
+                        for ([_][]const u8{ "pwsh.exe", "powershell.exe" }) |sh| {
+                            if (!internal_os.windows.isOnPath(sh)) continue;
+                            log.info("default shell src=path value={s}", .{sh});
+                            self.command = .{ .shell = try alloc.dupeZ(u8, sh) };
+                            break :shell;
+                        }
+
                         log.warn("no default shell found, will default to using cmd", .{});
                         self.command = .{ .shell = "cmd.exe" };
                     }

@@ -43,6 +43,26 @@ pub fn attachParentConsole() void {
     _ = exp.kernel32.AttachConsole(exp.ATTACH_PARENT_PROCESS);
 }
 
+/// Whether an executable can be found via the standard process search
+/// path (the same order CreateProcessW uses).
+pub fn isOnPath(name: []const u8) bool {
+    var name_w: [windows.MAX_PATH:0]u16 = undefined;
+    const name_len = std.unicode.utf8ToUtf16Le(&name_w, name) catch return false;
+    if (name_len >= name_w.len) return false;
+    name_w[name_len] = 0;
+
+    var buf: [windows.MAX_PATH:0]u16 = undefined;
+    const len = exp.kernel32.SearchPathW(
+        null,
+        name_w[0..name_len :0],
+        null,
+        buf.len,
+        &buf,
+        null,
+    );
+    return len > 0 and len < buf.len;
+}
+
 pub const exp = struct {
     pub const HPCON = windows.LPVOID;
 
@@ -127,6 +147,14 @@ pub const exp = struct {
         pub extern "kernel32" fn AttachConsole(
             dwProcessId: windows.DWORD,
         ) callconv(.winapi) windows.BOOL;
+        pub extern "kernel32" fn SearchPathW(
+            lpPath: ?windows.LPCWSTR,
+            lpFileName: windows.LPCWSTR,
+            lpExtension: ?windows.LPCWSTR,
+            nBufferLength: windows.DWORD,
+            lpBuffer: windows.LPWSTR,
+            lpFilePart: ?*?windows.LPWSTR,
+        ) callconv(.winapi) windows.DWORD;
     };
 
     pub const PROC_THREAD_ATTRIBUTE_NUMBER = 0x0000FFFF;
