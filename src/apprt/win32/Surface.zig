@@ -66,6 +66,27 @@ title_text: ?[:0]const u8 = null,
 /// and are never destroyed.
 cursor: ?winapi.HCURSOR = null,
 
+/// Reference count, owned by the split trees that contain this
+/// surface (and transiently by tree operations). The surface
+/// deinitializes and frees itself when it reaches zero.
+refs: u32 = 1,
+
+/// Increase the reference count (SplitTree view contract).
+pub fn ref(self: *Self) *Self {
+    self.refs += 1;
+    return self;
+}
+
+/// Decrease the reference count, destroying the surface at zero
+/// (SplitTree view contract).
+pub fn unref(self: *Self, alloc: Allocator) void {
+    self.refs -= 1;
+    if (self.refs == 0) {
+        self.deinit();
+        alloc.destroy(self);
+    }
+}
+
 pub fn init(self: *Self, app: *App, window: *Window) !void {
     // The GL host child fills the client area below the title strip.
     // It is created hidden; activateTab shows the active one.
@@ -209,7 +230,7 @@ pub fn setTitle(self: *Self, slice: [:0]const u8) !void {
 
     // The strip repaints the tab label; the OS title follows the
     // active tab.
-    if (self.window.activeTab() == self) self.window.syncTitle();
+    if (self.window.activeSurface() == self) self.window.syncTitle();
     _ = winapi.InvalidateRect(self.window.hwnd, null, winapi.FALSE);
 }
 
@@ -430,5 +451,5 @@ pub fn setMouseShape(self: *Self, shape: terminal.MouseShape) !void {
     self.cursor = cursor;
     // Apply immediately when we're the active tab; otherwise it takes
     // effect on the next WM_SETCURSOR.
-    if (self.window.activeTab() == self) _ = winapi.SetCursor(cursor);
+    if (self.window.activeSurface() == self) _ = winapi.SetCursor(cursor);
 }

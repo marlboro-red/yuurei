@@ -302,15 +302,28 @@ pub fn run(self: *App) !void {
         while (wi < self.windows.items.len) {
             const window = self.windows.items[wi];
 
-            // A window-level close closes all its tabs.
+            // A window-level close closes every surface in it.
             if (window.should_close) {
-                for (window.tabs.items) |tab| tab.should_close = true;
+                for (window.tabs.items) |*tab| {
+                    var it = tab.tree.iterator();
+                    while (it.next()) |entry| entry.view.should_close = true;
+                }
             }
 
-            var ti: usize = 0;
-            while (ti < window.tabs.items.len) {
-                const tab = window.tabs.items[ti];
-                if (tab.should_close) window.removeTab(tab) else ti += 1;
+            // Remove flagged surfaces one at a time: each removal
+            // rebuilds its tab's tree (and may drop the tab), so we
+            // re-scan from the top after every removal.
+            sweep: while (true) {
+                const flagged: ?*Surface = flagged: {
+                    for (window.tabs.items) |*tab| {
+                        var it = tab.tree.iterator();
+                        while (it.next()) |entry| {
+                            if (entry.view.should_close) break :flagged entry.view;
+                        }
+                    }
+                    break :flagged null;
+                };
+                window.removeSurface(flagged orelse break :sweep);
             }
 
             if (window.tabs.items.len == 0) {
@@ -387,7 +400,41 @@ pub fn performAction(
 
         .close_tab => switch (target) {
             .app => {},
-            .surface => |surface| surface.rt_surface.should_close = true,
+            .surface => |surface| {
+                surface.rt_surface.window.closeTabContaining(surface.rt_surface);
+            },
+        },
+
+        .new_split => switch (target) {
+            .app => return false,
+            .surface => |parent| {
+                const surface = try parent.rt_surface.window.newSplit(value);
+                if (self.config.@"window-inherit-font-size") {
+                    surface.core_surface.setFontSize(parent.font_size) catch |err| {
+                        log.warn("error inheriting font size err={}", .{err});
+                    };
+                }
+            },
+        },
+
+        .goto_split => switch (target) {
+            .app => {},
+            .surface => |surface| surface.rt_surface.window.gotoSplit(value),
+        },
+
+        .resize_split => switch (target) {
+            .app => {},
+            .surface => |surface| surface.rt_surface.window.resizeSplit(value),
+        },
+
+        .equalize_splits => switch (target) {
+            .app => {},
+            .surface => |surface| surface.rt_surface.window.equalizeSplits(),
+        },
+
+        .toggle_split_zoom => switch (target) {
+            .app => {},
+            .surface => |surface| surface.rt_surface.window.toggleSplitZoom(),
         },
 
         .close_window => switch (target) {
@@ -520,7 +567,7 @@ fn newSurface(self: *App, parent_: ?*CoreSurface) !*Surface {
     errdefer window.destroy();
     try self.windows.append(self.core_app.alloc, window);
 
-    const surface = window.activeTab().?;
+    const surface = window.activeSurface().?;
 
     // If we have a parent, inherit some properties
     if (self.config.@"window-inherit-font-size") {

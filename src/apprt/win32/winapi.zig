@@ -95,6 +95,9 @@ pub const WS_OVERLAPPEDWINDOW: DWORD = 0x00CF0000;
 pub const WS_CHILD: DWORD = 0x40000000;
 pub const WS_VISIBLE: DWORD = 0x10000000;
 pub const WS_DISABLED: DWORD = 0x08000000;
+pub const WS_CLIPCHILDREN: DWORD = 0x02000000;
+
+pub extern "user32" fn GetWindowRect(HWND, *RECT) callconv(.winapi) BOOL;
 pub const CW_USEDEFAULT: i32 = @bitCast(@as(u32, 0x80000000));
 pub const FALSE = std.os.windows.FALSE;
 pub const TRUE = std.os.windows.TRUE;

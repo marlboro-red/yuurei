@@ -8,11 +8,21 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const apprt = @import("../../apprt.zig");
 const input = @import("../../input.zig");
+const datastruct = @import("../../datastruct/main.zig");
 const App = @import("App.zig");
 const Surface = @import("Surface.zig");
 const winapi = @import("winapi.zig");
 
 const log = std.log.scoped(.win32);
+
+/// The split tree type for one tab's surfaces.
+pub const Tree = datastruct.SplitTree(Surface);
+
+/// One tab: a split tree of surfaces and which of them has focus.
+pub const Tab = struct {
+    tree: Tree,
+    focused: *Surface,
+};
 
 /// The window class name, registered once by App.
 pub const class_name = std.unicode.utf8ToUtf16LeStringLiteral("ghostty");
@@ -25,7 +35,7 @@ hwnd: winapi.HWND,
 
 /// The tabs in visual order. Never empty after create() succeeds,
 /// except transiently during teardown.
-tabs: std.ArrayList(*Surface) = .empty,
+tabs: std.ArrayList(Tab) = .empty,
 
 /// Index of the active (visible) tab.
 active_tab: usize = 0,
@@ -87,7 +97,9 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
         if (opts.quick) winapi.WS_EX_TOOLWINDOW | winapi.WS_EX_TOPMOST else 0,
         class_name,
         std.unicode.utf8ToUtf16LeStringLiteral("Ghostty"),
-        winapi.WS_OVERLAPPEDWINDOW,
+        // CLIPCHILDREN so painting the split gaps can't stomp the GL
+        // host children.
+        winapi.WS_OVERLAPPEDWINDOW | winapi.WS_CLIPCHILDREN,
         if (opts.quick) 0 else winapi.CW_USEDEFAULT,
         if (opts.quick) 0 else winapi.CW_USEDEFAULT,
         if (opts.quick) quick_w else 800,
@@ -147,14 +159,16 @@ pub fn destroy(self: *Window) void {
 
 fn closeAllTabs(self: *Window) void {
     const alloc = self.app.core_app.alloc;
+    _ = alloc;
     while (self.tabs.pop()) |tab| {
-        tab.deinit();
-        alloc.destroy(tab);
+        var tree = tab.tree;
+        tree.deinit();
     }
 }
 
-/// Create and activate a new tab.
-pub fn newTab(self: *Window) !*Surface {
+/// Create a new surface (with its GL host) owned by a fresh
+/// single-leaf tree. The tree holds the only reference on return.
+fn newSurfaceTree(self: *Window) !Tree {
     const alloc = self.app.core_app.alloc;
     const surface = try alloc.create(Surface);
     errdefer alloc.destroy(surface);
@@ -162,28 +176,87 @@ pub fn newTab(self: *Window) !*Surface {
     try surface.init(self.app, self);
     errdefer surface.deinit();
 
-    try self.tabs.append(alloc, surface);
+    const tree = try Tree.init(alloc, surface);
+    // Tree.init took its own reference; release our creation one.
+    surface.refs -= 1;
+    return tree;
+}
+
+/// Create and activate a new tab.
+pub fn newTab(self: *Window) !*Surface {
+    const alloc = self.app.core_app.alloc;
+    var tree = try self.newSurfaceTree();
+    errdefer tree.deinit();
+
+    const surface = tree.nodes[0].leaf;
+    try self.tabs.append(alloc, .{ .tree = tree, .focused = surface });
     self.activateTab(self.tabs.items.len - 1);
     return surface;
 }
 
-/// Remove a tab (deinitializing it). When the last tab goes, the
-/// window flags itself for close; the App run loop destroys it.
-pub fn removeTab(self: *Window, surface: *Surface) void {
+/// Remove a surface from whichever tab contains it, collapsing its
+/// split; an empty tab is removed. When the last tab goes, the window
+/// flags itself for close; the App run loop destroys it.
+pub fn removeSurface(self: *Window, surface: *Surface) void {
     const alloc = self.app.core_app.alloc;
-    const idx = for (self.tabs.items, 0..) |tab, i| {
-        if (tab == surface) break i;
-    } else return;
+    const tab_idx = self.tabOf(surface) orelse return;
+    const tab = &self.tabs.items[tab_idx];
 
-    _ = self.tabs.orderedRemove(idx);
-    surface.deinit();
-    alloc.destroy(surface);
+    const handle = handleOf(&tab.tree, surface) orelse return;
+    var new_tree = tab.tree.remove(alloc, handle) catch |err| {
+        log.err("error removing split err={}", .{err});
+        return;
+    };
+    var old_tree = tab.tree;
+    tab.tree = new_tree;
+    old_tree.deinit();
 
-    if (self.tabs.items.len == 0) {
-        self.should_close = true;
+    if (tab.tree.isEmpty()) {
+        new_tree.deinit();
+        _ = self.tabs.orderedRemove(tab_idx);
+        if (self.tabs.items.len == 0) {
+            self.should_close = true;
+            return;
+        }
+        self.activateTab(@min(tab_idx, self.tabs.items.len - 1));
         return;
     }
-    self.activateTab(@min(idx, self.tabs.items.len - 1));
+
+    // Focus moves to the first remaining surface of the tab.
+    if (tab.focused == surface) {
+        tab.focused = tab.tree.nodes[tab.tree.deepest(.left, .root).idx()].leaf;
+        if (tab_idx == self.active_tab) {
+            tab.focused.core_surface.focusCallback(true) catch {};
+        }
+    }
+    self.layoutActiveTab();
+    self.syncTitle();
+}
+
+/// Flag every surface in the tab containing the given surface for
+/// close (the close_tab action).
+pub fn closeTabContaining(self: *Window, surface: *Surface) void {
+    const idx = self.tabOf(surface) orelse return;
+    var it = self.tabs.items[idx].tree.iterator();
+    while (it.next()) |entry| entry.view.should_close = true;
+    self.app.wakeup();
+}
+
+/// The tab index containing the given surface, if any.
+fn tabOf(self: *const Window, surface: *const Surface) ?usize {
+    for (self.tabs.items, 0..) |*tab, i| {
+        if (handleOf(&tab.tree, surface) != null) return i;
+    }
+    return null;
+}
+
+/// The tree handle of a surface's leaf within a tree.
+fn handleOf(tree: *const Tree, surface: *const Surface) ?Tree.Node.Handle {
+    for (tree.nodes, 0..) |node, i| switch (node) {
+        .leaf => |leaf| if (leaf == surface) return @enumFromInt(i),
+        .split => {},
+    };
+    return null;
 }
 
 /// Make the given tab visible and focused.
@@ -191,22 +264,243 @@ pub fn activateTab(self: *Window, idx: usize) void {
     if (self.tabs.items.len == 0) return;
     const new_idx = @min(idx, self.tabs.items.len - 1);
 
-    for (self.tabs.items, 0..) |tab, i| {
+    for (self.tabs.items, 0..) |*tab, i| {
         const active = i == new_idx;
-        tab.setVisible(active);
-        if (!active) tab.core_surface.focusCallback(false) catch {};
+        var it = tab.tree.iterator();
+        while (it.next()) |entry| {
+            entry.view.setVisible(active);
+        }
+        if (!active) tab.focused.core_surface.focusCallback(false) catch {};
     }
     self.active_tab = new_idx;
 
-    const tab = self.tabs.items[new_idx];
-    tab.core_surface.focusCallback(true) catch {};
+    const tab = &self.tabs.items[new_idx];
+    tab.focused.core_surface.focusCallback(true) catch {};
+    self.layoutActiveTab();
     self.syncTitle();
     _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
 }
 
-pub fn activeTab(self: *Window) ?*Surface {
+pub fn activeTab(self: *Window) ?*Tab {
     if (self.tabs.items.len == 0) return null;
-    return self.tabs.items[@min(self.active_tab, self.tabs.items.len - 1)];
+    return &self.tabs.items[@min(self.active_tab, self.tabs.items.len - 1)];
+}
+
+/// The focused surface of the active tab.
+pub fn activeSurface(self: *Window) ?*Surface {
+    const tab = self.activeTab() orelse return null;
+    return tab.focused;
+}
+
+/// Move focus within the active tab to the given surface.
+pub fn focusSurface(self: *Window, surface: *Surface) void {
+    const tab = self.activeTab() orelse return;
+    if (tab.focused == surface) return;
+    if (handleOf(&tab.tree, surface) == null) return;
+
+    tab.focused.core_surface.focusCallback(false) catch {};
+    tab.focused = surface;
+    surface.core_surface.focusCallback(true) catch {};
+    self.syncTitle();
+}
+
+/// Position every GL host of the active tab according to the split
+/// tree's spatial layout within the terminal area (below the strip).
+pub fn layoutActiveTab(self: *Window) void {
+    const tab = self.activeTab() orelse return;
+    const alloc = self.app.core_app.alloc;
+
+    var client: winapi.RECT = undefined;
+    _ = winapi.GetClientRect(self.hwnd, &client);
+    const strip = self.titlebarHeight();
+    const area_w: f32 = @floatFromInt(@max(0, client.right - client.left));
+    const area_h: f32 = @floatFromInt(@max(0, client.bottom - client.top - strip));
+
+    var sp = tab.tree.spatial(alloc) catch |err| {
+        log.err("error computing split layout err={}", .{err});
+        return;
+    };
+    defer sp.deinit(alloc);
+
+    // The spatial slots parallel the node list; only leaves matter.
+    // A 2px gap separates splits (painted by the parent background).
+    for (tab.tree.nodes, sp.slots) |node, slot| switch (node) {
+        .split => {},
+        .leaf => |surface| {
+            const x: i32 = @intFromFloat(@as(f32, @floatCast(slot.x)) * area_w);
+            const y: i32 = @intFromFloat(@as(f32, @floatCast(slot.y)) * area_h);
+            const w: i32 = @intFromFloat(@as(f32, @floatCast(slot.width)) * area_w);
+            const h: i32 = @intFromFloat(@as(f32, @floatCast(slot.height)) * area_h);
+            _ = winapi.SetWindowPos(
+                surface.host,
+                null,
+                x,
+                strip + y,
+                @max(0, w - 2),
+                @max(0, h - 2),
+                winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
+            );
+            const size = surface.getSize() catch continue;
+            surface.core_surface.sizeCallback(size) catch |err| {
+                log.err("error in size callback err={}", .{err});
+            };
+        },
+    };
+}
+
+/// The surface of the active tab whose GL host contains the given
+/// parent-client point, if any.
+fn surfaceAt(self: *Window, x: i32, y: i32) ?*Surface {
+    const tab = self.activeTab() orelse return null;
+    var it = tab.tree.iterator();
+    while (it.next()) |entry| {
+        const surface = entry.view;
+        var rect: winapi.RECT = undefined;
+        _ = winapi.GetWindowRect(surface.host, &rect);
+        var tl: winapi.POINT = .{ .x = rect.left, .y = rect.top };
+        var br: winapi.POINT = .{ .x = rect.right, .y = rect.bottom };
+        _ = winapi.ScreenToClient(self.hwnd, &tl);
+        _ = winapi.ScreenToClient(self.hwnd, &br);
+        if (x >= tl.x and x < br.x and y >= tl.y and y < br.y) return surface;
+    }
+    return null;
+}
+
+/// Translate a parent-client point into the given surface's host
+/// coordinates.
+fn pointToSurface(self: *Window, surface: *const Surface, x: i32, y: i32) winapi.POINT {
+    var rect: winapi.RECT = undefined;
+    _ = winapi.GetWindowRect(surface.host, &rect);
+    var tl: winapi.POINT = .{ .x = rect.left, .y = rect.top };
+    _ = winapi.ScreenToClient(self.hwnd, &tl);
+    return .{ .x = x - tl.x, .y = y - tl.y };
+}
+
+/// Split the focused surface of the active tab in the given direction.
+pub fn newSplit(self: *Window, direction: apprt.action.SplitDirection) !*Surface {
+    const alloc = self.app.core_app.alloc;
+    const tab = self.activeTab() orelse return error.NoActiveTab;
+    const handle = handleOf(&tab.tree, tab.focused) orelse return error.NoFocusedSurface;
+
+    var insert = try self.newSurfaceTree();
+    defer insert.deinit();
+    const surface = insert.nodes[0].leaf;
+
+    const tree_direction: Tree.Split.Direction = switch (direction) {
+        .right => .right,
+        .down => .down,
+        .left => .left,
+        .up => .up,
+    };
+
+    var new_tree = try tab.tree.split(alloc, handle, tree_direction, 0.5, &insert);
+    errdefer new_tree.deinit();
+    var old_tree = tab.tree;
+    tab.tree = new_tree;
+    old_tree.deinit();
+
+    surface.setVisible(true);
+    self.layoutActiveTab();
+    self.focusSurface(surface);
+    return surface;
+}
+
+/// Move split focus within the active tab.
+pub fn gotoSplit(self: *Window, target: apprt.action.GotoSplit) void {
+    const alloc = self.app.core_app.alloc;
+    const tab = self.activeTab() orelse return;
+    const from = handleOf(&tab.tree, tab.focused) orelse return;
+
+    const goto: Tree.Goto = switch (target) {
+        .previous => .previous_wrapped,
+        .next => .next_wrapped,
+        .up => .{ .spatial = .up },
+        .down => .{ .spatial = .down },
+        .left => .{ .spatial = .left },
+        .right => .{ .spatial = .right },
+    };
+
+    const to = tab.tree.goto(alloc, from, goto) catch |err| {
+        log.err("error in split goto err={}", .{err});
+        return;
+    } orelse return;
+    self.focusSurface(tab.tree.nodes[to.idx()].leaf);
+}
+
+/// Make all splits of the active tab equal size.
+pub fn equalizeSplits(self: *Window) void {
+    const alloc = self.app.core_app.alloc;
+    const tab = self.activeTab() orelse return;
+    var new_tree = tab.tree.equalize(alloc) catch |err| {
+        log.err("error equalizing splits err={}", .{err});
+        return;
+    };
+    var old_tree = tab.tree;
+    tab.tree = new_tree;
+    old_tree.deinit();
+    _ = &new_tree;
+    self.layoutActiveTab();
+}
+
+/// Toggle zoom of the focused split (zoomed = takes the whole tab).
+pub fn toggleSplitZoom(self: *Window) void {
+    const tab = self.activeTab() orelse return;
+    const handle = handleOf(&tab.tree, tab.focused) orelse return;
+    tab.tree.zoom(if (tab.tree.zoomed == null) handle else null);
+    // A zoomed surface covers the terminal area; others hide.
+    var it = tab.tree.iterator();
+    while (it.next()) |entry| {
+        entry.view.setVisible(tab.tree.zoomed == null or entry.view == tab.focused);
+    }
+    if (tab.tree.zoomed != null) zoomed: {
+        var client: winapi.RECT = undefined;
+        _ = winapi.GetClientRect(self.hwnd, &client);
+        const strip = self.titlebarHeight();
+        _ = winapi.SetWindowPos(
+            tab.focused.host,
+            null,
+            0,
+            strip,
+            client.right - client.left,
+            @max(0, client.bottom - client.top - strip),
+            winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
+        );
+        const size = tab.focused.getSize() catch break :zoomed;
+        tab.focused.core_surface.sizeCallback(size) catch {};
+    } else self.layoutActiveTab();
+}
+
+/// Resize the focused split by the given amount (in pixels).
+pub fn resizeSplit(self: *Window, value: apprt.action.ResizeSplit) void {
+    const alloc = self.app.core_app.alloc;
+    const tab = self.activeTab() orelse return;
+    const from = handleOf(&tab.tree, tab.focused) orelse return;
+
+    var client: winapi.RECT = undefined;
+    _ = winapi.GetClientRect(self.hwnd, &client);
+    const strip = self.titlebarHeight();
+
+    const layout: Tree.Split.Layout, const sign: f32 = switch (value.direction) {
+        .left => .{ .horizontal, -1 },
+        .right => .{ .horizontal, 1 },
+        .up => .{ .vertical, -1 },
+        .down => .{ .vertical, 1 },
+    };
+    const span: f32 = switch (layout) {
+        .horizontal => @floatFromInt(@max(1, client.right - client.left)),
+        .vertical => @floatFromInt(@max(1, client.bottom - client.top - strip)),
+    };
+    const ratio: f16 = @floatCast(sign * @as(f32, @floatFromInt(value.amount)) / span);
+
+    var new_tree = tab.tree.resize(alloc, from, layout, ratio) catch |err| {
+        log.err("error resizing split err={}", .{err});
+        return;
+    };
+    var old_tree = tab.tree;
+    tab.tree = new_tree;
+    old_tree.deinit();
+    _ = &new_tree;
+    self.layoutActiveTab();
 }
 
 pub fn gotoTab(self: *Window, target: apprt.action.GotoTab) void {
@@ -230,7 +524,7 @@ pub fn gotoTab(self: *Window, target: apprt.action.GotoTab) void {
 /// tab and repaint the strip.
 pub fn syncTitle(self: *Window) void {
     const tab = self.activeTab() orelse return;
-    const title = tab.title_text orelse "Ghostty";
+    const title = tab.focused.title_text orelse "Ghostty";
     var buf: [512]u16 = undefined;
     const len = std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], title) catch return;
     buf[len] = 0;
@@ -251,10 +545,13 @@ pub fn notifyColorScheme(self: *Window) void {
     );
 
     const scheme: apprt.ColorScheme = if (light) .light else .dark;
-    for (self.tabs.items) |tab| {
-        tab.core_surface.colorSchemeCallback(scheme) catch |err| {
-            log.err("error in color scheme callback err={}", .{err});
-        };
+    for (self.tabs.items) |*tab| {
+        var it = tab.tree.iterator();
+        while (it.next()) |entry| {
+            entry.view.core_surface.colorSchemeCallback(scheme) catch |err| {
+                log.err("error in color scheme callback err={}", .{err});
+            };
+        }
     }
 
     _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
@@ -423,7 +720,7 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
     };
 
     // Tabs
-    for (self.tabs.items, 0..) |tab, i| {
+    for (self.tabs.items, 0..) |*tab, i| {
         var rect = self.tabRect(i);
         const active = i == self.active_tab;
         const hovered = switch (self.hover) {
@@ -450,7 +747,7 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
             };
             _ = winapi.SetTextColor(hdc, if (active) fg else fg_dim);
 
-            const title = tab.title_text orelse "Ghostty";
+            const title = tab.focused.title_text orelse "Ghostty";
             var buf: [512]u16 = undefined;
             const len = std.unicode.utf8ToUtf16Le(
                 buf[0 .. buf.len - 1],
@@ -601,7 +898,7 @@ fn captionButtonClick(self: *Window, button: CaptionButton) void {
 // IME
 
 fn imePositionWindow(self: *Window) void {
-    const tab = self.activeTab() orelse return;
+    const tab = self.activeSurface() orelse return;
     const himc = winapi.ImmGetContext(self.hwnd) orelse return;
     defer _ = winapi.ImmReleaseContext(self.hwnd, himc);
 
@@ -619,7 +916,7 @@ fn imePositionWindow(self: *Window) void {
 }
 
 fn imeComposition(self: *Window, lparam: winapi.LPARAM) void {
-    const tab = self.activeTab() orelse return;
+    const tab = self.activeSurface() orelse return;
     const flags: winapi.DWORD = @truncate(@as(usize, @bitCast(lparam)));
     const himc = winapi.ImmGetContext(self.hwnd) orelse return;
     defer _ = winapi.ImmReleaseContext(self.hwnd, himc);
@@ -759,10 +1056,26 @@ pub fn wndProc(
             var ps: winapi.PAINTSTRUCT = undefined;
             if (winapi.BeginPaint(hwnd, &ps)) |hdc| {
                 self.paintTitlebar(hdc);
+
+                // Fill the terminal area background: visible only in
+                // the gaps between splits (children are clipped).
+                var client: winapi.RECT = undefined;
+                _ = winapi.GetClientRect(hwnd, &client);
+                var area: winapi.RECT = .{
+                    .left = 0,
+                    .top = self.titlebarHeight(),
+                    .right = client.right,
+                    .bottom = client.bottom,
+                };
+                if (winapi.CreateSolidBrush(0x00101010)) |brush| {
+                    defer _ = winapi.DeleteObject(brush);
+                    _ = winapi.FillRect(hdc, &area, brush);
+                }
+
                 _ = winapi.EndPaint(hwnd, &ps);
             }
-            if (self.activeTab()) |tab| {
-                tab.core_surface.refreshCallback() catch |err| {
+            if (self.activeSurface()) |surface| {
+                surface.core_surface.refreshCallback() catch |err| {
                     log.err("error in refresh callback err={}", .{err});
                 };
             }
@@ -770,27 +1083,7 @@ pub fn wndProc(
         },
 
         winapi.WM_SIZE => {
-            // All tab hosts share the terminal rect below the strip.
-            var client: winapi.RECT = undefined;
-            _ = winapi.GetClientRect(hwnd, &client);
-            const strip = self.titlebarHeight();
-            const w = client.right - client.left;
-            const h = @max(0, client.bottom - client.top - strip);
-            for (self.tabs.items) |tab| {
-                _ = winapi.SetWindowPos(
-                    tab.host,
-                    null,
-                    0,
-                    strip,
-                    w,
-                    h,
-                    winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
-                );
-                const size = tab.getSize() catch continue;
-                tab.core_surface.sizeCallback(size) catch |err| {
-                    log.err("error in size callback err={}", .{err});
-                };
-            }
+            self.layoutActiveTab();
             _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
             return 0;
         },
@@ -814,17 +1107,20 @@ pub fn wndProc(
                 .x = dpi / 96.0,
                 .y = dpi / 96.0,
             };
-            for (self.tabs.items) |tab| {
-                tab.core_surface.contentScaleCallback(content_scale) catch |err| {
-                    log.err("error in content scale callback err={}", .{err});
-                };
+            for (self.tabs.items) |*tab| {
+                var it = tab.tree.iterator();
+                while (it.next()) |entry| {
+                    entry.view.core_surface.contentScaleCallback(content_scale) catch |err| {
+                        log.err("error in content scale callback err={}", .{err});
+                    };
+                }
             }
             return 0;
         },
 
         winapi.WM_SETFOCUS, winapi.WM_KILLFOCUS => {
-            if (self.activeTab()) |tab| {
-                tab.core_surface.focusCallback(msg == winapi.WM_SETFOCUS) catch |err| {
+            if (self.activeSurface()) |surface| {
+                surface.core_surface.focusCallback(msg == winapi.WM_SETFOCUS) catch |err| {
                     log.err("error in focus callback err={}", .{err});
                 };
             }
@@ -845,8 +1141,9 @@ pub fn wndProc(
                 if (winapi.GetCursorPos(&pt) == 0) break :cursor;
                 _ = winapi.ScreenToClient(hwnd, &pt);
                 if (pt.y < self.titlebarHeight()) break :cursor;
-                const tab = self.activeTab() orelse break :cursor;
-                const cursor = tab.cursor orelse break :cursor;
+                const surface = self.surfaceAt(pt.x, pt.y) orelse
+                    self.activeSurface() orelse break :cursor;
+                const cursor = surface.cursor orelse break :cursor;
                 _ = winapi.SetCursor(cursor);
                 return 1;
             }
@@ -889,8 +1186,8 @@ pub fn wndProc(
         },
 
         winapi.WM_IME_ENDCOMPOSITION => {
-            if (self.activeTab()) |tab| {
-                tab.core_surface.preeditCallback(null) catch |err| {
+            if (self.activeSurface()) |surface| {
+                surface.core_surface.preeditCallback(null) catch |err| {
                     log.err("error in preedit callback err={}", .{err});
                 };
             }
@@ -914,10 +1211,18 @@ pub fn wndProc(
         },
 
         winapi.WM_MOUSEWHEEL => {
-            const tab = self.activeTab() orelse return 0;
+            // Wheel scrolls the surface under the cursor (lparam here
+            // is in screen coordinates).
+            var pt: winapi.POINT = .{
+                .x = lparamX(lparam),
+                .y = lparamY(lparam),
+            };
+            _ = winapi.ScreenToClient(hwnd, &pt);
+            const surface = self.surfaceAt(pt.x, pt.y) orelse
+                self.activeSurface() orelse return 0;
             const delta: i16 = @bitCast(@as(u16, @truncate(wparam >> 16)));
             const yoff: f64 = @as(f64, @floatFromInt(delta)) / 120.0;
-            tab.core_surface.scrollCallback(0, yoff * 3, .{}) catch |err| {
+            surface.core_surface.scrollCallback(0, yoff * 3, .{}) catch |err| {
                 log.err("error in scroll callback err={}", .{err});
             };
             return 0;
@@ -936,10 +1241,12 @@ pub fn wndProc(
                 _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
             }
 
-            const tab = self.activeTab() orelse return 0;
-            tab.core_surface.cursorPosCallback(.{
-                .x = @floatFromInt(x),
-                .y = @floatFromInt(y - self.titlebarHeight()),
+            const surface = self.surfaceAt(x, y) orelse
+                self.activeSurface() orelse return 0;
+            const pt = self.pointToSurface(surface, x, y);
+            surface.core_surface.cursorPosCallback(.{
+                .x = @floatFromInt(pt.x),
+                .y = @floatFromInt(pt.y),
             }, currentMods()) catch |err| {
                 log.err("error in cursor pos callback err={}", .{err});
             };
@@ -962,7 +1269,13 @@ pub fn wndProc(
                         .none => {},
                         .caption => |button| self.captionButtonClick(button),
                         .tab => |i| self.activateTab(i),
-                        .tab_close => |i| self.tabs.items[i].should_close = true,
+                        // Closing a tab closes every split in it.
+                        .tab_close => |i| {
+                            var it = self.tabs.items[i].tree.iterator();
+                            while (it.next()) |entry| {
+                                entry.view.should_close = true;
+                            }
+                        },
                         .new_tab => _ = self.newTab() catch |err| {
                             log.err("error creating tab err={}", .{err});
                         },
@@ -971,7 +1284,18 @@ pub fn wndProc(
                 return 0;
             }
 
-            const tab = self.activeTab() orelse return 0;
+            // Clicking a split focuses it before the press is
+            // delivered.
+            const x = lparamX(lparam);
+            const surface = self.surfaceAt(x, cy) orelse
+                self.activeSurface() orelse return 0;
+            if (msg == winapi.WM_LBUTTONDOWN or
+                msg == winapi.WM_RBUTTONDOWN or
+                msg == winapi.WM_MBUTTONDOWN)
+            {
+                self.focusSurface(surface);
+            }
+
             const button: input.MouseButton = switch (msg) {
                 winapi.WM_LBUTTONDOWN, winapi.WM_LBUTTONUP => .left,
                 winapi.WM_RBUTTONDOWN, winapi.WM_RBUTTONUP => .right,
@@ -990,7 +1314,7 @@ pub fn wndProc(
                 .release => _ = winapi.ReleaseCapture(),
             }
 
-            _ = tab.core_surface.mouseButtonCallback(
+            _ = surface.core_surface.mouseButtonCallback(
                 state,
                 button,
                 currentMods(),
@@ -1015,7 +1339,7 @@ fn keyEvent(
     wparam: winapi.WPARAM,
     lparam: winapi.LPARAM,
 ) void {
-    const tab = self.activeTab() orelse return;
+    const tab = self.activeSurface() orelse return;
     const vk: u8 = @truncate(wparam);
     const released = msg == winapi.WM_KEYUP or msg == winapi.WM_SYSKEYUP;
     const was_down = (lparam & (1 << 30)) != 0;
@@ -1065,7 +1389,7 @@ fn keyEvent(
 }
 
 fn charEvent(self: *Window, unit: u16) void {
-    const tab = self.activeTab() orelse return;
+    const tab = self.activeSurface() orelse return;
 
     // UTF-16 surrogate pair reassembly across two WM_CHAR messages.
     const codepoint: u21 = codepoint: {

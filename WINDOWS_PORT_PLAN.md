@@ -471,9 +471,24 @@ Working down the gap list from the macOS comparison audit:
   *(Also fixed by this work's testing: `LoadCursorW` MAKEINTRESOURCE
   ids tripped Debug alignment checks for odd ids like IDC_IBEAM —
   latent crash on any text-cursor mouse shape.)*
-- Remaining from the audit, in rough order: splits, command palette,
-  inspector wiring, background opacity/blur, settings GUI, auto-update,
-  WinRT toasts.
+- [x] **Splits (2026-06-12)** — built on upstream's shared
+  `datastruct/split_tree.zig` (`SplitTree(Surface)`; surfaces gained the
+  ref/unref view contract). Each tab is now a split tree of surfaces;
+  layout comes from the tree's `spatial()` slots mapped onto the
+  terminal area with a 2px gap (parent paints the gap background,
+  `WS_CLIPCHILDREN` protects the GL hosts). Input routes positionally:
+  clicks focus the split under the cursor, wheel scrolls the hovered
+  split, keyboard/IME follow split focus. Actions wired: `new_split`
+  (all four directions), `goto_split` (spatial + wrapped prev/next),
+  `resize_split`, `equalize_splits`, `toggle_split_zoom`; closing a
+  shell collapses its split, closing the last closes the tab. Verified
+  live: split right, marker typed into the focused new pane only,
+  `goto_split` moved focus (solid vs hollow cursors), `exit` collapsed
+  back to a full-width survivor with history intact. Split divider
+  drag-resize is still TODO (keybind resize works).
+- Remaining from the audit, in rough order: command palette, inspector
+  wiring, background opacity/blur, settings GUI, auto-update, WinRT
+  toasts, split divider drag.
 
 ### Phase 4 — Ship + polish strictly by user pain (ongoing)
 
@@ -488,26 +503,25 @@ Working down the gap list from the macOS comparison audit:
 
 ---
 
-## 5. Upstreaming Strategy
+## 5. Relationship to Upstream
 
-The fork is a staging area, not a destination. Every Phase 0 POSIX-ism fix and
-most of Phase 1 are upstreamable as small, low-risk PRs; the apprt itself can
-follow once it exists and upstream signals appetite (per Mitchell's framework
-in discussion #2563).
+**Decision (2026-06-12): yuurei is its own project, maintained permanently
+as a fork. There is no intention to merge the port into upstream Ghostty.**
+This supersedes the original "staging area, not a destination" framing.
 
-**Upstream's AI policy (`AI_POLICY.md`) is strict and must be honored:**
+What this changes:
 
-- All AI assistance must be **disclosed** (tool + extent) on every contribution.
-- The human contributor must **fully understand and be able to explain every
-  line** without AI aid. Practically: AI-drafted code in this fork is working
-  material; nothing goes into an upstream PR until the human author has
-  reviewed, edited, and internalized it to the point of independent ownership.
-- Poor AI-assisted contributions earn a public denouncement list. The bar for
-  upstream PRs is therefore *higher* than for fork-internal work: small,
-  single-purpose, personally understood, tested on real Windows hardware.
-
-PR cadence: prefer many small PRs (one POSIX-ism, one termio fix) over a
-mega-PR. Each carries Windows CI evidence.
+- The fork *is* the destination. Code quality standards are ours to set;
+  the practical bar stays "verified live + CI green on every commit."
+- Upstream tracking still matters — it's how the shared core keeps
+  improving underneath the port. `main` stays clean against upstream;
+  `windows-port` rebases regularly (Rule 5 stands: divergence is debt).
+  Keeping the win32 layer additive (new files; minimal shared-file
+  churn) keeps that rebase cheap.
+- Upstream's `AI_POLICY.md` contribution requirements don't bind this
+  fork's internal work; AI assistance remains disclosed in the README
+  for transparency. If anything were ever submitted upstream after all,
+  the full human-review-and-ownership bar would apply first.
 
 ---
 
