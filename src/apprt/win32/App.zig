@@ -50,6 +50,14 @@ hotkey_actions: std.ArrayList([]const input.Binding.Action) = .empty,
 /// lazily on the first notification.
 tray_hwnd: ?winapi.HWND = null,
 
+/// Whether flip-model presentation is available (the WGL DX-interop
+/// extension exists), probed once at startup with a throwaway
+/// context. GL host windows are created with
+/// WS_EX_NOREDIRECTIONBITMAP when true — the style is creation-only
+/// and would break the SwapBuffers fallback, so it must be decided
+/// before the renderer ever runs.
+flip_capable: bool = false,
+
 /// Flips to true to quit on the next event loop tick.
 quit: bool = false,
 
@@ -137,6 +145,11 @@ pub fn init(
     };
     if (winapi.RegisterClassExW(&search_class) == 0) return error.RegisterClassFailed;
 
+    // Probe flip-model capability now that the host class exists.
+    const flip_capable = !std.process.hasEnvVarConstant("GHOSTTY_NO_FLIP") and
+        probeFlipCapable(hinstance);
+    log.info("flip-model capable={}", .{flip_capable});
+
     // Load our configuration
     var config = try Config.load(core_app.alloc);
     errdefer config.deinit();
@@ -167,6 +180,7 @@ pub fn init(
         .config = config,
         .hinstance = hinstance,
         .thread_id = std.os.windows.kernel32.GetCurrentThreadId(),
+        .flip_capable = flip_capable,
     };
 
     // Make sure the loop processes the queued message immediately.
@@ -728,6 +742,51 @@ pub fn performAction(
     }
 
     return true;
+}
+
+/// Whether the WGL DX-interop extension is available, probed with a
+/// throwaway hidden window and GL context. Drivers expose the same
+/// extension set process-wide, so one probe decides for all surfaces.
+fn probeFlipCapable(hinstance: winapi.HINSTANCE) bool {
+    const hwnd = winapi.CreateWindowExW(
+        0,
+        Surface.host_class_name,
+        std.unicode.utf8ToUtf16LeStringLiteral(""),
+        0,
+        0,
+        0,
+        1,
+        1,
+        null,
+        null,
+        hinstance,
+        null,
+    ) orelse return false;
+    defer _ = winapi.DestroyWindow(hwnd);
+
+    const hdc = winapi.GetDC(hwnd) orelse return false;
+    defer _ = winapi.ReleaseDC(hwnd, hdc);
+
+    const pfd: winapi.PIXELFORMATDESCRIPTOR = .{
+        .dwFlags = winapi.PFD_DRAW_TO_WINDOW |
+            winapi.PFD_SUPPORT_OPENGL |
+            winapi.PFD_DOUBLEBUFFER,
+        .iPixelType = winapi.PFD_TYPE_RGBA,
+        .cColorBits = 32,
+        .cAlphaBits = 8,
+    };
+    const format = winapi.ChoosePixelFormat(hdc, &pfd);
+    if (format == 0) return false;
+    if (winapi.SetPixelFormat(hdc, format, &pfd) == 0) return false;
+
+    const ctx = winapi.wglCreateContext(hdc) orelse return false;
+    defer _ = winapi.wglDeleteContext(ctx);
+    if (winapi.wglMakeCurrent(hdc, ctx) == 0) return false;
+    defer _ = winapi.wglMakeCurrent(null, null);
+
+    const proc = winapi.wglGetProcAddress("wglDXOpenDeviceNV") orelse return false;
+    const v = @intFromPtr(proc);
+    return v > 3 and v != @as(usize, @bitCast(@as(isize, -1)));
 }
 
 /// Show a desktop notification as a tray balloon tip, which Windows

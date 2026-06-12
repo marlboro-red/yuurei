@@ -110,7 +110,12 @@ pub fn init(self: *Self, app: *App, window: *Window) !void {
     _ = winapi.GetClientRect(window.hwnd, &client);
     const strip = window.titlebarHeight();
     const host = winapi.CreateWindowExW(
-        0,
+        // Flip-capable hosts drop the GDI redirection surface: the
+        // window's pixels come solely from the DXGI swapchain, which
+        // is what lets DWM consider it for hardware-overlay
+        // (independent flip) promotion. Creation-only style, so the
+        // capability was probed at App startup.
+        if (app.flip_capable) winapi.WS_EX_NOREDIRECTIONBITMAP else 0,
         host_class_name,
         std.unicode.utf8ToUtf16LeStringLiteral(""),
         winapi.WS_CHILD | winapi.WS_DISABLED,

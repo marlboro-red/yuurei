@@ -37,6 +37,12 @@ const IID_IDXGIDevice: GUID = .{
     .c = 0x44e6,
     .d = .{ 0x8c, 0x32, 0x88, 0xfd, 0x5f, 0x44, 0xc8, 0x4c },
 };
+const IID_IDXGIDevice1: GUID = .{
+    .a = 0x77db970f,
+    .b = 0x6276,
+    .c = 0x48ba,
+    .d = .{ 0xba, 0x28, 0x07, 0x01, 0x43, 0xb4, 0x39, 0x2c },
+};
 const IID_IDXGISwapChain2: GUID = .{
     .a = 0xa8be2ac4,
     .b = 0x199f,
@@ -140,6 +146,22 @@ pub const IDXGIDevice = extern struct {
         object: DxgiObjectPad(IDXGIDevice),
         GetAdapter: *const fn (*IDXGIDevice, *?*IDXGIAdapter) callconv(.winapi) HRESULT,
         // CreateSurface, QueryResourceResidency, Set/GetGPUThreadPriority follow.
+    },
+};
+
+pub const IDXGIDevice1 = extern struct {
+    vtable: *const extern struct {
+        unknown: Unknown(IDXGIDevice1),
+        object: DxgiObjectPad(IDXGIDevice1),
+        // IDXGIDevice
+        GetAdapter: *const fn (*IDXGIDevice1) callconv(.winapi) HRESULT,
+        CreateSurface: *const fn (*IDXGIDevice1) callconv(.winapi) HRESULT,
+        QueryResourceResidency: *const fn (*IDXGIDevice1) callconv(.winapi) HRESULT,
+        SetGPUThreadPriority: *const fn (*IDXGIDevice1) callconv(.winapi) HRESULT,
+        GetGPUThreadPriority: *const fn (*IDXGIDevice1) callconv(.winapi) HRESULT,
+        // IDXGIDevice1
+        SetMaximumFrameLatency: *const fn (*IDXGIDevice1, u32) callconv(.winapi) HRESULT,
+        GetMaximumFrameLatency: *const fn (*IDXGIDevice1) callconv(.winapi) HRESULT,
     },
 };
 
@@ -255,6 +277,7 @@ pub const IDXGISwapChain2 = extern struct {
 const DXGI_FORMAT_B8G8R8A8_UNORM: u32 = 87;
 const DXGI_USAGE_RENDER_TARGET_OUTPUT: u32 = 0x20;
 const DXGI_SCALING_STRETCH: u32 = 0;
+const DXGI_SCALING_NONE: u32 = 1;
 const DXGI_SWAP_EFFECT_FLIP_DISCARD: u32 = 4;
 const DXGI_ALPHA_MODE_IGNORE: u32 = 3;
 const DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT: u32 = 0x40;
@@ -312,7 +335,6 @@ pub const Presenter = struct {
     device: *ID3D11Device,
     context: *ID3D11DeviceContext,
     swapchain: *IDXGISwapChain1,
-    waitable: ?windows.HANDLE,
 
     interop: Interop,
     interop_device: windows.HANDLE,
@@ -393,10 +415,12 @@ pub const Presenter = struct {
             .Format = DXGI_FORMAT_B8G8R8A8_UNORM,
             .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT,
             .BufferCount = 2,
-            .Scaling = DXGI_SCALING_STRETCH,
+            // Exact-size buffers; a promotion prerequisite for DWM's
+            // hardware overlay (independent flip) path.
+            .Scaling = DXGI_SCALING_NONE,
             .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
             .AlphaMode = DXGI_ALPHA_MODE_IGNORE,
-            .Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+            .Flags = 0,
         };
         var swapchain: ?*IDXGISwapChain1 = null;
         if (!ok(factory.vtable.CreateSwapChainForHwnd(
@@ -410,20 +434,25 @@ pub const Presenter = struct {
         ))) return error.SwapChainFailed;
         errdefer swapchain.?.release();
 
-        // Cap the present queue at one frame: the core of the latency
-        // win. Failure to get the waitable is non-fatal.
-        var waitable: ?windows.HANDLE = null;
+        // Cap the present queue at one frame. We deliberately do NOT
+        // use the frame-latency waitable object: that pattern is for
+        // continuous render loops that wait *before* sampling input.
+        // Our renderer is event-driven — a wait at frame start would
+        // delay a freshly damaged frame by up to a full compose cycle
+        // (felt as typing lag). With the device-level cap, Present
+        // blocks only when a previous present is still queued, which
+        // for sporadic frames is almost never and during bursts is
+        // exactly the throttle we want.
         {
-            var sc2_ptr: ?*anyopaque = null;
-            if (ok(swapchain.?.vtable.unknown.QueryInterface(
-                swapchain.?,
-                &IID_IDXGISwapChain2,
-                &sc2_ptr,
+            var dev1_ptr: ?*anyopaque = null;
+            if (ok(device.?.vtable.unknown.QueryInterface(
+                device.?,
+                &IID_IDXGIDevice1,
+                &dev1_ptr,
             ))) {
-                const sc2: *IDXGISwapChain2 = @ptrCast(@alignCast(sc2_ptr.?));
-                defer releaseAny(sc2);
-                _ = sc2.vtable.SetMaximumFrameLatency(sc2, 1);
-                waitable = sc2.vtable.GetFrameLatencyWaitableObject(sc2);
+                const dev1: *IDXGIDevice1 = @ptrCast(@alignCast(dev1_ptr.?));
+                defer releaseAny(dev1);
+                _ = dev1.vtable.SetMaximumFrameLatency(dev1, 1);
             }
         }
 
@@ -436,7 +465,6 @@ pub const Presenter = struct {
             .device = device.?,
             .context = context.?,
             .swapchain = swapchain.?,
-            .waitable = waitable,
             .interop = interop,
             .interop_device = interop_device,
             .width = @max(1, width),
@@ -448,7 +476,6 @@ pub const Presenter = struct {
         self.releaseBackbuffer();
         _ = self.interop.close(self.interop_device);
         self.swapchain.release();
-        if (self.waitable) |w| _ = winapi.CloseHandle(w);
         releaseAny(self.context);
         releaseAny(self.device);
     }
@@ -497,14 +524,6 @@ pub const Presenter = struct {
         }
     }
 
-    /// Block until the present queue has room (max latency 1). Called
-    /// at frame start; bounded so a hung compositor can't deadlock us.
-    pub fn waitFrame(self: *Presenter) void {
-        if (self.waitable) |w| {
-            _ = winapi.WaitForSingleObject(w, 100);
-        }
-    }
-
     pub fn lock(self: *Presenter) bool {
         const obj = self.interop_object orelse return false;
         return self.interop.lock(self.interop_device, 1, &[_]windows.HANDLE{obj}) != 0;
@@ -545,7 +564,7 @@ pub const Presenter = struct {
             @max(1, width),
             @max(1, height),
             DXGI_FORMAT_B8G8R8A8_UNORM,
-            DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+            0,
         ))) return error.ResizeFailed;
         self.width = @max(1, width);
         self.height = @max(1, height);

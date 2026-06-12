@@ -348,6 +348,7 @@ pub extern "user32" fn UnregisterHotKey(?HWND, i32) callconv(.winapi) BOOL;
 // Quick terminal window styling/placement
 pub const WS_EX_TOOLWINDOW: DWORD = 0x00000080;
 pub const WS_EX_TOPMOST: DWORD = 0x00000008;
+pub const WS_EX_NOREDIRECTIONBITMAP: DWORD = 0x00200000;
 
 // Custom scrollbar (Scrollbar.zig)
 pub extern "gdi32" fn RoundRect(HDC, i32, i32, i32, i32, i32, i32) callconv(.winapi) BOOL;

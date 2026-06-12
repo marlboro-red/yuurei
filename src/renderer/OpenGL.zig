@@ -302,6 +302,9 @@ fn initPresenter(surface: *apprt.Surface) bool {
     if (comptime apprt.runtime != apprt.win32) return false;
     const winapi = apprt.win32.winapi;
 
+    // Escape hatch for benchmarking and driver-issue workarounds.
+    if (std.process.hasEnvVarConstant("GHOSTTY_NO_FLIP")) return false;
+
     var client: winapi.RECT = undefined;
     if (winapi.GetClientRect(surface.host, &client) == 0) return false;
 
@@ -395,12 +398,9 @@ pub fn drawFrameStart(self: *OpenGL) void {
             rect.bottom - rect.top,
         );
 
-        // Flip-model: bound the present queue (the latency cap) and
-        // track window resizes with the swapchain.
+        // Flip-model: track window resizes with the swapchain.
         if (currentWin32Surface()) |surface| {
             if (surface.presenter) |*p| {
-                p.waitFrame();
-
                 const w: u32 = @intCast(@max(1, rect.right - rect.left));
                 const h: u32 = @intCast(@max(1, rect.bottom - rect.top));
                 if (w != p.width or h != p.height) resize: {
