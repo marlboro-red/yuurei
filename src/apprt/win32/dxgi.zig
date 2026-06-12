@@ -419,6 +419,10 @@ pub const Presenter = struct {
     dcomp_target: *IDCompositionTarget,
     dcomp_visual: *IDCompositionVisual,
 
+    /// The frame-latency waitable; the render thread waits on it
+    /// before sampling terminal state.
+    waitable: ?windows.HANDLE,
+
     interop: Interop,
     interop_device: windows.HANDLE,
 
@@ -493,7 +497,11 @@ pub const Presenter = struct {
         defer releaseAny(factory);
 
         // Composition swapchains require STRETCH scaling and a
-        // premultiplied or ignored alpha mode.
+        // premultiplied or ignored alpha mode. The frame-latency
+        // waitable caps the present queue at one frame; the renderer
+        // waits on it BEFORE sampling terminal state (the Windows
+        // Terminal pattern, see microsoft/terminal#6435) so each
+        // frame presents the freshest data without Present blocking.
         var desc: DXGI_SWAP_CHAIN_DESC1 = .{
             .Width = @max(1, width),
             .Height = @max(1, height),
@@ -503,7 +511,7 @@ pub const Presenter = struct {
             .Scaling = DXGI_SCALING_STRETCH,
             .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
             .AlphaMode = DXGI_ALPHA_MODE_IGNORE,
-            .Flags = 0,
+            .Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
         };
         var swapchain: ?*IDXGISwapChain1 = null;
         if (!ok(factory.vtable.CreateSwapChainForComposition(
@@ -523,6 +531,25 @@ pub const Presenter = struct {
             ))) return error.SwapChainFailed;
         }
         errdefer swapchain.?.release();
+
+        // The waitable object (per-swapchain max latency defaults to
+        // 1 with the flag; Windows Terminal likewise never calls
+        // SetMaximumFrameLatency). The first wait must not be skipped:
+        // the semaphore starts at the max latency and an unconsumed
+        // slot silently adds a permanent frame of latency.
+        var waitable: ?windows.HANDLE = null;
+        {
+            var sc2_ptr: ?*anyopaque = null;
+            if (ok(swapchain.?.vtable.unknown.QueryInterface(
+                swapchain.?,
+                &IID_IDXGISwapChain2,
+                &sc2_ptr,
+            ))) {
+                const sc2: *IDXGISwapChain2 = @ptrCast(@alignCast(sc2_ptr.?));
+                defer releaseAny(sc2);
+                waitable = sc2.vtable.GetFrameLatencyWaitableObject(sc2);
+            }
+        }
 
         // Bind the swapchain to the host window through a DComp
         // visual; this is the form DWM promotes to hardware overlays.
@@ -552,28 +579,6 @@ pub const Presenter = struct {
         if (!ok(dcomp.vtable.Commit(dcomp)))
             return error.DCompCommitFailed;
 
-        // Cap the present queue at one frame. We deliberately do NOT
-        // use the frame-latency waitable object: that pattern is for
-        // continuous render loops that wait *before* sampling input.
-        // Our renderer is event-driven — a wait at frame start would
-        // delay a freshly damaged frame by up to a full compose cycle
-        // (felt as typing lag). With the device-level cap, Present
-        // blocks only when a previous present is still queued, which
-        // for sporadic frames is almost never and during bursts is
-        // exactly the throttle we want.
-        {
-            var dev1_ptr: ?*anyopaque = null;
-            if (ok(device.?.vtable.unknown.QueryInterface(
-                device.?,
-                &IID_IDXGIDevice1,
-                &dev1_ptr,
-            ))) {
-                const dev1: *IDXGIDevice1 = @ptrCast(@alignCast(dev1_ptr.?));
-                defer releaseAny(dev1);
-                _ = dev1.vtable.SetMaximumFrameLatency(dev1, 1);
-            }
-        }
-
         const interop_device = interop.open(device.?) orelse {
             log.warn("wglDXOpenDeviceNV failed; using SwapBuffers", .{});
             return error.InteropOpenFailed;
@@ -586,6 +591,7 @@ pub const Presenter = struct {
             .dcomp_device = dcomp,
             .dcomp_target = target.?,
             .dcomp_visual = visual.?,
+            .waitable = waitable,
             .interop = interop,
             .interop_device = interop_device,
             .width = @max(1, width),
@@ -599,9 +605,21 @@ pub const Presenter = struct {
         releaseAny(self.dcomp_visual);
         releaseAny(self.dcomp_target);
         releaseAny(self.dcomp_device);
+        if (self.waitable) |w| _ = winapi.CloseHandle(w);
         self.swapchain.release();
         releaseAny(self.context);
         releaseAny(self.device);
+    }
+
+    /// Block until the present queue has room. Must be called BEFORE
+    /// sampling terminal state so the rendered frame carries the
+    /// freshest data — waiting after sampling (or letting Present
+    /// block) displays stale state (microsoft/terminal#6435). Bounded
+    /// so a hung compositor can't wedge the renderer thread.
+    pub fn waitFrame(self: *Presenter) void {
+        if (self.waitable) |w| {
+            _ = winapi.WaitForSingleObject(w, 100);
+        }
     }
 
     /// Create the intermediate texture and register it as the given
@@ -688,7 +706,7 @@ pub const Presenter = struct {
             @max(1, width),
             @max(1, height),
             DXGI_FORMAT_B8G8R8A8_UNORM,
-            0,
+            DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
         ))) return error.ResizeFailed;
         self.width = @max(1, width);
         self.height = @max(1, height);

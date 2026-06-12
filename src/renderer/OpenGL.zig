@@ -409,7 +409,17 @@ pub fn drawFrameStart(self: *OpenGL) void {
                         deinitPresenter(surface);
                         break :resize;
                     };
-                    if (!attachBackbuffer(p)) deinitPresenter(surface);
+                    if (!attachBackbuffer(p)) {
+                        deinitPresenter(surface);
+                        break :resize;
+                    }
+                    // The frame being drawn may have been sampled at
+                    // the old size (the resize message races this
+                    // callback) and the resized GL framebuffer's
+                    // content is undefined; queue a full follow-up
+                    // render so a stale/blank frame can't be the last
+                    // thing presented.
+                    surface.core_surface.refreshCallback() catch {};
                 }
             }
         }

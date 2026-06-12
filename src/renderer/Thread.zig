@@ -363,6 +363,7 @@ fn drainMailbox(self: *Thread) !void {
                 // If we became visible then we immediately rebuild cells
                 // (renderCallback skips updateFrame while invisible) and draw.
                 if (v) {
+                    self.waitUntilCanRender();
                     self.renderer.updateFrame(
                         self.state,
                         self.flags.cursor_blink_visible,
@@ -616,6 +617,12 @@ fn renderCallback(
     // we'll catch up when the .visible mailbox message flips us back on.
     if (!t.flags.visible) return .disarm;
 
+    // Gate on the present queue BEFORE sampling terminal state so the
+    // frame carries the freshest data (the Windows Terminal pattern;
+    // waiting after sampling or blocking in Present displays stale
+    // state). No-op off win32 or without flip-model presentation.
+    t.waitUntilCanRender();
+
     // Update our frame data
     t.renderer.updateFrame(
         t.state,
@@ -627,6 +634,14 @@ fn renderCallback(
     t.drawFrame(false);
 
     return .disarm;
+}
+
+/// win32 flip-model: wait on the swapchain's frame-latency waitable.
+/// See renderCallback and apprt/win32/dxgi.zig.
+fn waitUntilCanRender(self: *Thread) void {
+    if (comptime apprt.runtime == apprt.win32) {
+        if (self.surface.presenter) |*p| p.waitFrame();
+    }
 }
 
 fn cursorTimerCallback(
