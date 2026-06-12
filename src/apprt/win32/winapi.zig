@@ -403,6 +403,13 @@ pub extern "user32" fn SendMessageW(HWND, UINT, WPARAM, LPARAM) callconv(.winapi
 // the tooltips window class exists.
 pub extern "comctl32" fn InitCommonControls() callconv(.winapi) void;
 
+// File drag and drop
+pub const WM_DROPFILES: UINT = 0x0233;
+pub const HDROP = *opaque {};
+pub extern "shell32" fn DragAcceptFiles(HWND, BOOL) callconv(.winapi) void;
+pub extern "shell32" fn DragQueryFileW(HDROP, UINT, ?[*]u16, UINT) callconv(.winapi) UINT;
+pub extern "shell32" fn DragFinish(HDROP) callconv(.winapi) void;
+
 // Tray icon + balloon notifications (rendered as toasts on Win 10/11)
 pub const NOTIFYICONDATAW = extern struct {
     cbSize: DWORD = @sizeOf(NOTIFYICONDATAW),

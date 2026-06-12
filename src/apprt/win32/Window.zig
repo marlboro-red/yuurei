@@ -210,6 +210,9 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
     _ = try self.newTab();
     errdefer self.closeAllTabs();
 
+    // Files dropped on the window paste their (quoted) paths.
+    winapi.DragAcceptFiles(hwnd, winapi.TRUE);
+
     // Window-level alpha is the pragmatic background-opacity for a
     // GL-in-DWM window (per-pixel GL alpha needs DirectComposition).
     if (app.config.@"background-opacity" < 1.0) self.setOpacity(
@@ -1583,6 +1586,50 @@ pub fn wndProc(
 
             self.layoutActiveTab();
             _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+            return 0;
+        },
+
+        // Dropped files paste their paths into the focused surface,
+        // double-quoted when cmd/pwsh would split them.
+        winapi.WM_DROPFILES => {
+            const hdrop: winapi.HDROP = @ptrFromInt(wparam);
+            defer winapi.DragFinish(hdrop);
+            const surface = self.activeSurface() orelse return 0;
+            const alloc = self.app.core_app.alloc;
+
+            var text: std.ArrayList(u8) = .empty;
+            defer text.deinit(alloc);
+
+            const count = winapi.DragQueryFileW(hdrop, 0xFFFFFFFF, null, 0);
+            var i: u32 = 0;
+            while (i < count) : (i += 1) {
+                var path_w: [4096]u16 = undefined;
+                const wlen = winapi.DragQueryFileW(hdrop, i, &path_w, path_w.len);
+                if (wlen == 0 or wlen >= path_w.len) continue;
+
+                var path8: [path_w.len * 3]u8 = undefined;
+                const len = std.unicode.utf16LeToUtf8(
+                    &path8,
+                    path_w[0..wlen],
+                ) catch continue;
+                const path = path8[0..len];
+
+                drop: {
+                    if (text.items.len > 0) text.append(alloc, ' ') catch break :drop;
+                    // Paths can't contain double quotes on Windows, so
+                    // plain wrapping is a complete escape.
+                    const quote = std.mem.indexOfAny(u8, path, " \t&^=;,'`(){}[]!") != null;
+                    if (quote) text.append(alloc, '"') catch break :drop;
+                    text.appendSlice(alloc, path) catch break :drop;
+                    if (quote) text.append(alloc, '"') catch break :drop;
+                }
+            }
+
+            if (text.items.len > 0) {
+                const z = text.toOwnedSliceSentinel(alloc, 0) catch return 0;
+                defer alloc.free(z);
+                surface.pasteText(z);
+            }
             return 0;
         },
 

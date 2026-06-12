@@ -382,6 +382,25 @@ pub fn clipboardRequest(
     return true;
 }
 
+/// Paste arbitrary text into this surface through the regular paste
+/// path, including the unsafe-paste confirmation (file drops).
+pub fn pasteText(self: *Self, text: [:0]const u8) void {
+    if (text.len == 0) return;
+    self.core_surface.completeClipboardRequest(.paste, text, false) catch |err| switch (err) {
+        error.UnsafePaste, error.UnauthorizedPaste => {
+            if (!confirmDialog(
+                self.window.hwnd,
+                "The dropped text may be unsafe to paste (it includes " ++
+                    "control characters that could run commands). Paste anyway?",
+            )) return;
+            self.core_surface.completeClipboardRequest(.paste, text, true) catch |err2| {
+                log.warn("failed to paste dropped text err={}", .{err2});
+            };
+        },
+        else => log.warn("failed to paste dropped text err={}", .{err}),
+    };
+}
+
 /// A modal yes/no warning dialog. Returns true when the user accepts.
 fn confirmDialog(hwnd: winapi.HWND, comptime message: []const u8) bool {
     return winapi.MessageBoxW(

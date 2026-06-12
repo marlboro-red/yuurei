@@ -525,6 +525,45 @@ pub fn performAction(
             .surface => |surface| surface.rt_surface.updateScrollbar(value),
         },
 
+        // Open a clicked/OSC8 link in the default handler. Schemes are
+        // allowlisted: ShellExecuteW on an arbitrary string (a path,
+        // file://...exe) would execute it, and terminal output is
+        // untrusted.
+        .open_url => {
+            const url = value.url;
+            const allowed = std.ascii.startsWithIgnoreCase(url, "http://") or
+                std.ascii.startsWithIgnoreCase(url, "https://") or
+                std.ascii.startsWithIgnoreCase(url, "mailto:");
+            if (!allowed) {
+                log.warn("refusing to open url with unsupported scheme", .{});
+                return false;
+            }
+
+            var url_w: [2048:0]u16 = undefined;
+            // UTF-16 never needs more units than UTF-8 bytes, so a
+            // byte-length check guarantees the buffer fits.
+            if (url.len > url_w.len - 1) {
+                log.warn("url too long, not opening", .{});
+                return false;
+            }
+            const len = std.unicode.utf8ToUtf16Le(
+                url_w[0 .. url_w.len - 1],
+                url,
+            ) catch {
+                log.warn("invalid utf-8 in url, not opening", .{});
+                return false;
+            };
+            url_w[len] = 0;
+            _ = winapi.ShellExecuteW(
+                null,
+                std.unicode.utf8ToUtf16LeStringLiteral("open"),
+                url_w[0..len :0],
+                null,
+                null,
+                winapi.SW_SHOWDEFAULT,
+            );
+        },
+
         .inspector => switch (target) {
             .app => return false,
             .surface => |surface| {
