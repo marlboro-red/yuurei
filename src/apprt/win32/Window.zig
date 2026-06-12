@@ -11,6 +11,7 @@ const input = @import("../../input.zig");
 const datastruct = @import("../../datastruct/main.zig");
 const App = @import("App.zig");
 const Surface = @import("Surface.zig");
+const CommandPalette = @import("CommandPalette.zig");
 const winapi = @import("winapi.zig");
 
 const log = std.log.scoped(.win32);
@@ -54,6 +55,9 @@ hover: Hover = .none,
 
 /// Active split-divider drag, if any.
 divider_drag: ?DividerHit = null,
+
+/// The command palette popup while it is open.
+palette: ?*CommandPalette = null,
 
 /// The key event from the last WM_KEYDOWN that the core did not
 /// consume; WM_CHAR completes it with the layout-cooked text.
@@ -161,6 +165,7 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
 /// inside the window procedure.
 pub fn destroy(self: *Window) void {
     const alloc = self.app.core_app.alloc;
+    if (self.palette) |palette| palette.destroy();
     self.closeAllTabs();
     _ = winapi.SetWindowLongPtrW(self.hwnd, winapi.GWLP_USERDATA, 0);
     _ = winapi.DestroyWindow(self.hwnd);
@@ -203,6 +208,16 @@ pub fn newTab(self: *Window) !*Surface {
     try self.tabs.append(alloc, .{ .tree = tree, .focused = surface });
     self.activateTab(self.tabs.items.len - 1);
     return surface;
+}
+
+/// Toggle the command palette popup.
+pub fn togglePalette(self: *Window) !void {
+    if (self.palette) |palette| {
+        palette.destroy();
+        _ = winapi.SetFocus(self.hwnd);
+        return;
+    }
+    self.palette = try CommandPalette.create(self.app.core_app.alloc, self);
 }
 
 /// Remove a surface from whichever tab contains it, collapsing its
@@ -642,7 +657,7 @@ pub fn notifyColorScheme(self: *Window) void {
 // ---------------------------------------------------------------------
 // Geometry
 
-fn scale(self: *const Window, logical: i32) i32 {
+pub fn scale(self: *const Window, logical: i32) i32 {
     const dpi: i32 = @intCast(winapi.GetDpiForWindow(self.hwnd));
     return @divTrunc(logical * dpi, 96);
 }
@@ -1255,8 +1270,11 @@ pub fn wndProc(
                 };
             }
 
-            // Quick terminals hide when they lose focus.
-            if (self.quick and msg == winapi.WM_KILLFOCUS) {
+            // Quick terminals hide when they lose focus — except to
+            // their own command palette.
+            if (self.quick and msg == winapi.WM_KILLFOCUS and
+                self.palette == null)
+            {
                 _ = winapi.ShowWindow(hwnd, winapi.SW_HIDE);
             }
             return 0;

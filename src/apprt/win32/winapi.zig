@@ -92,6 +92,7 @@ pub const PIXELFORMATDESCRIPTOR = extern struct {
 
 // Window styles
 pub const WS_OVERLAPPEDWINDOW: DWORD = 0x00CF0000;
+pub const WS_POPUP: DWORD = 0x80000000;
 pub const WS_CHILD: DWORD = 0x40000000;
 pub const WS_VISIBLE: DWORD = 0x10000000;
 pub const WS_DISABLED: DWORD = 0x08000000;
@@ -106,6 +107,7 @@ pub const TRUE = std.os.windows.TRUE;
 pub const CS_HREDRAW: UINT = 0x0002;
 pub const CS_VREDRAW: UINT = 0x0001;
 pub const CS_OWNDC: UINT = 0x0020;
+pub const CS_DROPSHADOW: UINT = 0x00020000;
 
 // ShowWindow
 pub const SW_SHOWDEFAULT: i32 = 10;
@@ -301,6 +303,8 @@ pub extern "user32" fn GetDpiForWindow(HWND) callconv(.winapi) UINT;
 pub extern "user32" fn WindowFromDC(HDC) callconv(.winapi) ?HWND;
 pub extern "user32" fn GetCursorPos(*POINT) callconv(.winapi) BOOL;
 pub extern "user32" fn ScreenToClient(HWND, *POINT) callconv(.winapi) BOOL;
+pub extern "user32" fn ClientToScreen(HWND, *POINT) callconv(.winapi) BOOL;
+pub extern "user32" fn SetFocus(?HWND) callconv(.winapi) ?HWND;
 pub extern "user32" fn SetWindowLongPtrW(HWND, i32, isize) callconv(.winapi) isize;
 pub extern "user32" fn GetWindowLongPtrW(HWND, i32) callconv(.winapi) isize;
 pub extern "user32" fn GetKeyState(i32) callconv(.winapi) i16;
@@ -434,6 +438,13 @@ pub extern "gdi32" fn CreateFontW(
     face: ?[*:0]const u16,
 ) callconv(.winapi) ?*anyopaque;
 pub extern "gdi32" fn SelectObject(HDC, *anyopaque) callconv(.winapi) ?*anyopaque;
+pub extern "gdi32" fn GetTextExtentPoint32W(HDC, [*]const u16, i32, *SIZE) callconv(.winapi) BOOL;
+pub extern "user32" fn FrameRect(HDC, *const RECT, HBRUSH) callconv(.winapi) i32;
+
+pub const SIZE = extern struct {
+    cx: i32,
+    cy: i32,
+};
 pub extern "user32" fn DrawTextW(HDC, [*:0]const u16, i32, *RECT, UINT) callconv(.winapi) i32;
 
 pub const TRANSPARENT_BK: i32 = 1;

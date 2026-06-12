@@ -13,6 +13,7 @@ const CoreApp = @import("../../App.zig");
 const CoreSurface = @import("../../Surface.zig");
 const Surface = @import("Surface.zig");
 const Window = @import("Window.zig");
+const CommandPalette = @import("CommandPalette.zig");
 const winapi = @import("winapi.zig");
 
 const log = std.log.scoped(.win32);
@@ -78,6 +79,16 @@ pub fn init(
         .lpszClassName = Surface.host_class_name,
     };
     if (winapi.RegisterClassExW(&host_class) == 0) return error.RegisterClassFailed;
+
+    // The command palette popup class.
+    const palette_class: winapi.WNDCLASSEXW = .{
+        .style = winapi.CS_HREDRAW | winapi.CS_VREDRAW | winapi.CS_DROPSHADOW,
+        .lpfnWndProc = CommandPalette.wndProc,
+        .hInstance = hinstance,
+        .hbrBackground = null,
+        .lpszClassName = CommandPalette.class_name,
+    };
+    if (winapi.RegisterClassExW(&palette_class) == 0) return error.RegisterClassFailed;
 
     // Load our configuration
     var config = try Config.load(core_app.alloc);
@@ -465,6 +476,11 @@ pub fn performAction(
         .reload_config => try self.reloadConfig(target, value),
 
         .toggle_quick_terminal => try self.toggleQuickTerminal(),
+
+        .toggle_command_palette => switch (target) {
+            .app => return false,
+            .surface => |surface| try surface.rt_surface.window.togglePalette(),
+        },
 
         // Open the config file in the default text editor (notepad as
         // the universal fallback; .ghostty has no file association).
