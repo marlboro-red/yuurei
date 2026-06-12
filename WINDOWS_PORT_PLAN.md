@@ -426,8 +426,7 @@ runtime like `gtk.zig`.
     text landed only in the active tab, switching preserved both
     sessions' content, closing a tab re-laid-out the strip with the
     window surviving.
-  - Remaining polish: Mica/backdrop, snap-layouts hover on the maximize
-    button, tab drag-reorder, tab tooltips.
+  - Remaining polish: Mica/backdrop, tab drag-reorder, tab tooltips.
 - **Input gets disproportionate budget — it is where real terminals fail:**
   - The `TranslateMessage` ordering trap (handled `WM_KEYDOWN` must swallow its
     queued `WM_CHAR`).
@@ -489,11 +488,22 @@ Working down the gap list from the macOS comparison audit:
   shell collapses its split, closing the last closes the tab. Verified
   live: split right, marker typed into the focused new pane only,
   `goto_split` moved focus (solid vs hollow cursors), `exit` collapsed
-  back to a full-width survivor with history intact. Split divider
-  drag-resize is still TODO (keybind resize works).
+  back to a full-width survivor with history intact.
+- [x] **Split divider drag + snap layouts (2026-06-12)** — dividers are
+  draggable (captured drag updates the ratio in place, 5–95% clamp,
+  WE/NS resize cursors over the gap); re-laid-out surfaces get an
+  explicit `refreshCallback()` because an idle surface never presents
+  after a resize, which left stale pixels in newly exposed regions.
+  The maximize button reports `HTMAXBUTTON` from `WM_NCHITTEST` (snap
+  layouts flyout eligibility) with NC mouse handlers for hover paint
+  and click → maximize/restore. Verified live: drag re-rendered both
+  panes cleanly; maximize click zoomed and a second click restored the
+  exact prior rect. (The flyout itself didn't appear under synthetic
+  hover on the dev machine — but neither did Notepad's, so the hit-test
+  contract is as verified as the environment allows.)
 - Remaining from the audit, in rough order: command palette, inspector
   wiring, background opacity/blur, settings GUI, auto-update, WinRT
-  toasts, split divider drag.
+  toasts.
 
 ### Phase 4 — Ship + polish strictly by user pain (ongoing)
 

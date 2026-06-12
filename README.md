@@ -43,8 +43,9 @@ Working today, verified live on Windows 11:
   dialogs; **mouse** reporting, drag selection, wheel scrolling
 - **Per-Monitor v2 DPI awareness** with `WM_DPICHANGED` handling
 - **Dark/light theme** following the system, including the frame
-- **Splits** — directional create, spatial focus navigation, resize,
-  equalize, zoom, and collapse-on-exit, using upstream's shared split tree
+- **Splits** — directional create, spatial focus navigation, divider
+  drag-resize, equalize, zoom, and collapse-on-exit, using upstream's
+  shared split tree
 - **Quick terminal** with system-wide global hotkeys (`global:` keybinds via
   `RegisterHotKey`)
 - **PowerShell-first** default shell (pwsh → powershell → cmd) and **pwsh
@@ -55,8 +56,8 @@ Working today, verified live on Windows 11:
 
 Honest remaining work: packaging/code signing/winget, WinRT toast
 notifications (interim flash+beep today), command palette, inspector
-wiring, background opacity/blur, settings GUI, auto-update,
-Mica/snap-layouts polish, split divider drag, ARM64. See the Phase 3/4
+wiring, background opacity/blur, settings GUI, auto-update, Mica,
+ARM64. See the Phase 3/4
 checklists in [`WINDOWS_PORT_PLAN.md`](WINDOWS_PORT_PLAN.md) for the
 live list.
 
