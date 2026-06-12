@@ -1371,6 +1371,9 @@ pub const ReadThread = struct {
         };
         defer crash.sentry.thread_state = null;
 
+        // Note: a 64KB buffer was tried here and measured neutral on a
+        // 10MB burst (ConPTY emits small chunks; the wall time is
+        // dominated by conhost's own re-render inside the ConPTY).
         var buf: [1024]u8 = undefined;
         while (true) {
             while (true) {

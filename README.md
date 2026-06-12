@@ -76,8 +76,9 @@ Requirements: [Zig](https://ziglang.org/) — the version is pinned in
 needed; Zig's bundled toolchain links everything.
 
 ```powershell
-# Build the Windows app (win32 apprt is the default on Windows)
-zig build
+# Build the Windows app (win32 apprt is the default on Windows).
+# ReleaseFast matters: a Debug build is ~14x slower end to end.
+zig build -Doptimize=ReleaseFast
 
 # Run it
 zig-out\bin\ghostty.exe

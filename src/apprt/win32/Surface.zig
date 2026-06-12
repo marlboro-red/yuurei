@@ -237,6 +237,10 @@ pub fn close(self: *Self, process_active: bool) void {
 pub fn setVisible(self: *Self, visible: bool) void {
     _ = winapi.ShowWindow(self.host, if (visible) 5 else 0); // SW_SHOW/SW_HIDE
     if (self.scrollbar) |sb| _ = winapi.ShowWindow(sb, if (visible) 5 else 0);
+
+    // Tell the renderer thread: occluded surfaces stop rebuilding
+    // cells and drawing entirely (it catches up on re-show).
+    self.core_surface.occlusionCallback(visible) catch {};
 }
 
 /// Feed core scrollbar state (rows) into the native control.

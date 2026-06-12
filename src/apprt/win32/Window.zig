@@ -59,6 +59,23 @@ divider_drag: ?DividerHit = null,
 /// Index of the tab being drag-reordered, if any.
 tab_drag: ?usize = null,
 
+/// Last divider-drag relayout instant, for throttling: every layout
+/// runs the full resize pipeline (ConPTY resize + renderer resize per
+/// split), so high-rate mouse moves are coalesced to ~60Hz with a
+/// final exact layout on release.
+divider_layout_ms: i64 = 0,
+
+/// Whether the window is currently minimized (renderer occlusion).
+minimized: bool = false,
+
+/// Inside an interactive move/size modal loop (WM_ENTERSIZEMOVE).
+in_size_move: bool = false,
+
+/// Cached strip fonts, recreated when the DPI changes. The strip
+/// repaints on every hover change; re-creating fonts each paint was
+/// measurable GDI churn.
+fonts: ?StripFonts = null,
+
 /// Tooltip control showing full tab titles on hover, with one tool
 /// per tab slot (kept in sync by paintTitlebar).
 tooltip: ?winapi.HWND = null,
@@ -89,6 +106,12 @@ const Hover = union(enum) {
     tab: usize,
     tab_close: usize,
     new_tab,
+};
+
+const StripFonts = struct {
+    dpi: u32,
+    text: ?*anyopaque,
+    glyph: ?*anyopaque,
 };
 
 const CaptionButton = enum { minimize, maximize, close };
@@ -202,6 +225,10 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
 pub fn destroy(self: *Window) void {
     const alloc = self.app.core_app.alloc;
     if (self.palette) |palette| palette.destroy();
+    if (self.fonts) |f| {
+        if (f.text) |t| _ = winapi.DeleteObject(t);
+        if (f.glyph) |g| _ = winapi.DeleteObject(g);
+    }
     self.closeAllTabs();
     _ = winapi.SetWindowLongPtrW(self.hwnd, winapi.GWLP_USERDATA, 0);
     _ = winapi.DestroyWindow(self.hwnd);
@@ -244,6 +271,16 @@ pub fn newTab(self: *Window) !*Surface {
     try self.tabs.append(alloc, .{ .tree = tree, .focused = surface });
     self.activateTab(self.tabs.items.len - 1);
     return surface;
+}
+
+/// Inform the active tab's surfaces about full-window occlusion
+/// (minimize, quick-terminal hide) so renderers idle while hidden.
+pub fn setOccluded(self: *Window, occluded: bool) void {
+    const tab = self.activeTab() orelse return;
+    var it = tab.tree.iterator();
+    while (it.next()) |entry| {
+        entry.view.core_surface.occlusionCallback(!occluded) catch {};
+    }
 }
 
 /// Move the active tab by the given offset, wrapping cyclically.
@@ -947,6 +984,54 @@ fn relayToTooltip(
     );
 }
 
+/// The cached strip fonts for the current DPI, (re)creating on first
+/// use and DPI changes.
+fn stripFonts(self: *Window) StripFonts {
+    const dpi = winapi.GetDpiForWindow(self.hwnd);
+    if (self.fonts) |f| {
+        if (f.dpi == dpi) return f;
+        if (f.text) |t| _ = winapi.DeleteObject(t);
+        if (f.glyph) |g| _ = winapi.DeleteObject(g);
+    }
+    const f: StripFonts = .{
+        .dpi = dpi,
+        .text = winapi.CreateFontW(
+            -self.scale(12),
+            0,
+            0,
+            0,
+            400,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            5, // CLEARTYPE_QUALITY
+            0,
+            std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI"),
+        ),
+        .glyph = winapi.CreateFontW(
+            -self.scale(10),
+            0,
+            0,
+            0,
+            400,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            5,
+            0,
+            std.unicode.utf8ToUtf16LeStringLiteral("Segoe MDL2 Assets"),
+        ),
+    };
+    self.fonts = f;
+    return f;
+}
+
 fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
     const height = self.titlebarHeight();
     var strip: winapi.RECT = .{
@@ -969,44 +1054,9 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
 
     _ = winapi.SetBkMode(hdc, winapi.TRANSPARENT_BK);
 
-    const text_font = winapi.CreateFontW(
-        -self.scale(12),
-        0,
-        0,
-        0,
-        400,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        5, // CLEARTYPE_QUALITY
-        0,
-        std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI"),
-    );
-    const glyph_font = winapi.CreateFontW(
-        -self.scale(10),
-        0,
-        0,
-        0,
-        400,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        5,
-        0,
-        std.unicode.utf8ToUtf16LeStringLiteral("Segoe MDL2 Assets"),
-    );
-    defer if (text_font) |f| {
-        _ = winapi.DeleteObject(f);
-    };
-    defer if (glyph_font) |f| {
-        _ = winapi.DeleteObject(f);
-    };
+    const fonts = self.stripFonts();
+    const text_font = fonts.text;
+    const glyph_font = fonts.glyph;
 
     // Tabs
     for (self.tabs.items, 0..) |*tab, i| {
@@ -1467,6 +1517,25 @@ pub fn wndProc(
         },
 
         winapi.WM_SIZE => {
+            // Minimize fully occludes every surface: tell the
+            // renderers so they stop rebuilding cells and drawing
+            // until restore. (wparam: 1 = minimized.)
+            const minimized = wparam == 1;
+            if (minimized != self.minimized) {
+                self.minimized = minimized;
+                self.setOccluded(minimized);
+            }
+            if (minimized) return 0;
+
+            // Interactive border drags deliver WM_SIZE per mouse move;
+            // each layout runs a full per-split resize pipeline, so
+            // coalesce to ~60Hz (WM_EXITSIZEMOVE does a final layout).
+            if (self.in_size_move) {
+                const now = std.time.milliTimestamp();
+                if (now - self.divider_layout_ms < 16) return 0;
+                self.divider_layout_ms = now;
+            }
+
             self.layoutActiveTab();
             _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
             return 0;
@@ -1515,6 +1584,7 @@ pub fn wndProc(
                 self.palette == null)
             {
                 _ = winapi.ShowWindow(hwnd, winapi.SW_HIDE);
+                self.setOccluded(true);
             }
             return 0;
         },
@@ -1553,12 +1623,17 @@ pub fn wndProc(
         },
 
         winapi.WM_ENTERSIZEMOVE => {
+            self.in_size_move = true;
             _ = winapi.SetTimer(hwnd, modal_tick_timer_id, 16, null);
             return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
 
         winapi.WM_EXITSIZEMOVE => {
+            self.in_size_move = false;
             _ = winapi.KillTimer(hwnd, modal_tick_timer_id);
+            // Final exact layout for whatever the throttle skipped.
+            self.layoutActiveTab();
+            _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
             return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
 
@@ -1647,7 +1722,11 @@ pub fn wndProc(
                     drag.handle,
                     @floatCast(std.math.clamp(ratio, 0.05, 0.95)),
                 );
-                self.layoutActiveTab();
+                const now = std.time.milliTimestamp();
+                if (now - self.divider_layout_ms >= 16) {
+                    self.divider_layout_ms = now;
+                    self.layoutActiveTab();
+                }
                 return 0;
             }
 
@@ -1761,6 +1840,8 @@ pub fn wndProc(
             if (self.divider_drag != null and msg == winapi.WM_LBUTTONUP) {
                 self.divider_drag = null;
                 _ = winapi.ReleaseCapture();
+                // Final exact layout for whatever the throttle skipped.
+                self.layoutActiveTab();
                 return 0;
             }
 

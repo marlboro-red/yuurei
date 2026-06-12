@@ -278,9 +278,11 @@ fn toggleQuickTerminal(self: *App) !void {
             if (w == quick) {
                 if (winapi.IsWindowVisible(quick.hwnd) != 0) {
                     _ = winapi.ShowWindow(quick.hwnd, winapi.SW_HIDE);
+                    quick.setOccluded(true);
                 } else {
                     _ = winapi.ShowWindow(quick.hwnd, winapi.SW_SHOW);
                     _ = winapi.SetForegroundWindow(quick.hwnd);
+                    quick.setOccluded(false);
                 }
                 return;
             }

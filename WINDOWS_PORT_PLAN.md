@@ -560,6 +560,40 @@ Working down the gap list from the macOS comparison audit:
   payoff; the trigger is crash reports, not aesthetics); DWrite rasterization
   only on rendering complaints; ARM64 after x64 is stable.
 
+### Phase 5 — Performance and efficiency (2026-06-12, in progress)
+
+Measured on the 4K dev machine (ReleaseFast unless noted):
+
+| Metric | Result |
+| --- | --- |
+| Startup to visible window | ~200 ms (debug and release) |
+| Idle CPU | 0.2–0.3% of one core; ~42 MB working set |
+| 100k pwsh lines end-to-end | 5.1 s — parity with classic conhost (4.9 s) |
+| 10 MB single raw write | 1.25 s vs conhost 0.66 s — the gap is conhost's own re-render inside ConPTY, a tax every ConPTY-based terminal (incl. Windows Terminal) pays |
+| Busy hidden tab | 9.7% → 8.6% of a core after the occlusion fix (and GPU draws eliminated entirely) |
+| Debug vs ReleaseFast | 100k lines: 72 s vs 5.1 s (~14x) — README now steers builds to ReleaseFast |
+
+Landed fixes:
+
+- [x] **Renderer occlusion wiring**: `occlusionCallback` on tab
+  switches (`Surface.setVisible`), window minimize (`WM_SIZE`), and
+  quick-terminal hide/show. Occluded renderers skip cell rebuilds and
+  draws entirely (previously only SwapBuffers was skipped).
+- [x] **Strip GDI caching**: the two strip fonts are cached per DPI
+  instead of being created/destroyed on every WM_PAINT (the strip
+  repaints on every hover change).
+- [x] **Resize-storm coalescing**: divider drags and interactive
+  border resizes run the full per-split resize pipeline (ConPTY
+  resize + renderer resize); both are throttled to ~60 Hz with an
+  exact final layout on release/exit (WM_EXITSIZEMOVE).
+- Tried and rejected: 64 KB ConPTY read buffer (vs upstream's 1 KB) —
+  measured neutral on a 10 MB burst; ConPTY emits small chunks and the
+  wall clock is dominated by conhost's re-render. Noted in Exec.zig.
+
+Candidate future work: a raw-pipe profile of the io thread's parse
+path during bursts (mutex hold times per chunk), DWM/Mica interactions
+with present timing, and re-running the suite after upstream merges.
+
 ---
 
 ## 5. Relationship to Upstream
