@@ -429,7 +429,11 @@ runtime like `gtk.zig`.
   - Tab drag-reorder + `move_tab` landed 2026-06-12 (tabs activate on
     press; captured drag reorders across slots; move_tab wraps
     cyclically — all verified live via posted-message input).
-  - Remaining polish: Mica/backdrop, tab tooltips, scrollbars (the
+  - Tab tooltips landed 2026-06-12 (comctl32, one tool per slot,
+    explicit TTM_RELAYEVENT; verified to API contract, hover popup
+    visual check pending normal desktop use — dev machine state
+    suppresses popups).
+  - Remaining polish: Mica/backdrop, scrollbars (the
     core emits a `scrollbar` action with {total, offset, len} rows on
     every viewport change — a native SCROLLBAR control in a reserved
     column beside each GL host, WM_VSCROLL → `scroll_to_row`, is the
