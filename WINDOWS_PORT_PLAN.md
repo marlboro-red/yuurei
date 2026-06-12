@@ -674,9 +674,25 @@ KEYDOWN+CHAR+KEYUP 'a' presses at 150 ms spacing and taking the median
 of the renderer's trace lines; bursts via a 10 MB single
 [Console]::Write from pwsh.
 
-Candidate future work: DWM present timing/Mica interactions, and
-re-running this table after upstream merges (the suite lives in this
-section).
+User-reported "input lag while typing" (2026-06-12), investigated:
+app-side key→present is 1.0–1.8 ms median in all four
+pwsh/nu × opaque/95%-opacity combinations (nu is actually the fastest
+echo path), so the pipeline is exonerated. The remaining suspects are
+outside our metric's reach: (1) `background-opacity < 1` applies
+WS_EX_LAYERED, which forces DWM's legacy redirected-surface
+compositing — a known latency adder that occurs *after* present and
+is invisible to in-app timing; (2) a fullscreen game running
+concurrently (GPU/compositor contention). A/B feel test: comment out
+background-opacity. The structural fix for transparency without the
+layered-window penalty is a DirectComposition swap chain (also
+unlocks per-pixel alpha and blur) — the largest remaining perf work
+item.
+
+Candidate future work: DirectComposition presentation (kills the
+layered-window latency penalty, enables real per-pixel
+transparency/blur/Mica), DWM present timing instrumentation
+(PresentMon), and re-running this table after upstream merges (the
+suite lives in this section).
 
 ---
 
