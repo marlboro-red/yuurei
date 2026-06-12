@@ -248,6 +248,57 @@ pub fn performAction(
 
         .reload_config => try self.reloadConfig(target, value),
 
+        // Open the config file in the default text editor (notepad as
+        // the universal fallback; .ghostty has no file association).
+        .open_config => {
+            const path = try configpkg.edit.openPath(self.core_app.alloc);
+            defer self.core_app.alloc.free(path);
+
+            var path_w: [std.fs.max_path_bytes]u16 = undefined;
+            const len = std.unicode.utf8ToUtf16Le(path_w[0 .. path_w.len - 1], path) catch
+                return false;
+            path_w[len] = 0;
+            _ = winapi.ShellExecuteW(
+                null,
+                null,
+                std.unicode.utf8ToUtf16LeStringLiteral("notepad.exe"),
+                path_w[0..len :0],
+                null,
+                winapi.SW_SHOWDEFAULT,
+            );
+        },
+
+        .ring_bell => switch (target) {
+            .app => {},
+            .surface => |surface| {
+                const hwnd = surface.rt_surface.window.hwnd;
+                // Beep only when we're in the background; flash either
+                // way so the bell is visible on the taskbar.
+                if (winapi.GetForegroundWindow() != hwnd) {
+                    _ = winapi.MessageBeep(0);
+                }
+                winapi.flashWindow(hwnd);
+            },
+        },
+
+        // Interim notification: attention-flash the window and beep.
+        // TODO: windows: WinRT toast notifications.
+        .desktop_notification => {
+            log.info("notification title={s} body={s}", .{
+                value.title,
+                value.body,
+            });
+            const hwnd = switch (target) {
+                .app => if (self.windows.items.len > 0)
+                    self.windows.items[0].hwnd
+                else
+                    return false,
+                .surface => |surface| surface.rt_surface.window.hwnd,
+            };
+            _ = winapi.MessageBeep(0);
+            winapi.flashWindow(hwnd);
+        },
+
         // Everything else is honestly unimplemented for the skeleton:
         // report "not performed" so the core can fall back or ignore.
         else => {

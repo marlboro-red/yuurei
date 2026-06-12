@@ -443,6 +443,25 @@ runtime like `gtk.zig`.
   tabs, IME, paste, and DPI all real — nothing on the Phase 2 skeleton's
   `@panic("TODO")` list remains reachable in normal use.
 
+### Phase 3a — macOS feature-parity sweep (2026-06-12, in progress)
+
+Working down the gap list from the macOS comparison audit:
+
+- [x] `open_config`: opens the config file in notepad via ShellExecuteW
+  (no .ghostty file association exists). Verified live: F8 keybind →
+  notepad with the config path.
+- [x] `ring_bell`: taskbar/caption attention flash; beep only when the
+  window is in the background.
+- [x] `desktop_notification` (interim): attention flash + beep + logged
+  title/body. TODO: WinRT toast notifications (COM/AUMID work).
+- [x] Clipboard confirmation: unsafe pastes (core's UnsafePaste) and
+  OSC 52 reads/writes now prompt with a native yes/no warning dialog,
+  defaulting to No. Verified live: multi-line paste into cmd.exe raised
+  the dialog; No blocked the paste.
+- Remaining from the audit, in rough order: quick terminal (global
+  hotkey + dropdown), splits, command palette, inspector wiring,
+  background opacity/blur, settings GUI, auto-update.
+
 ### Phase 4 — Ship + polish strictly by user pain (ongoing)
 
 - Code signing, winget/Scoop manifests, crash reporting (Sentry supports

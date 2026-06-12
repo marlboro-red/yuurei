@@ -264,7 +264,7 @@ pub fn clipboardRequest(
     }
 
     // Read CF_UNICODETEXT and complete the request synchronously,
-    // like the GLFW apprt did. Always "unsafe" (no confirmation UI yet).
+    // like the GLFW apprt did.
     const alloc = self.core_surface.alloc;
     const text: [:0]const u8 = text: {
         if (winapi.OpenClipboard(self.window.hwnd) == 0) break :text "";
@@ -282,8 +282,41 @@ pub fn clipboardRequest(
     };
     defer if (text.len > 0) alloc.free(text);
 
-    try self.core_surface.completeClipboardRequest(state, text, true);
+    // First attempt unconfirmed: the core rejects content it considers
+    // unsafe (control characters in a paste, OSC 52 reads needing
+    // authorization) and we ask the user with a native dialog.
+    self.core_surface.completeClipboardRequest(state, text, false) catch |err| switch (err) {
+        error.UnsafePaste, error.UnauthorizedPaste => {
+            const allowed = switch (err) {
+                error.UnsafePaste => confirmDialog(
+                    self.window.hwnd,
+                    "The clipboard contains text that may be unsafe to " ++
+                        "paste (it includes control characters that could " ++
+                        "run commands). Paste anyway?",
+                ),
+                else => confirmDialog(
+                    self.window.hwnd,
+                    "The running program is requesting to read the " ++
+                        "clipboard. Allow it?",
+                ),
+            };
+            if (!allowed) return true;
+            try self.core_surface.completeClipboardRequest(state, text, true);
+        },
+
+        else => return err,
+    };
     return true;
+}
+
+/// A modal yes/no warning dialog. Returns true when the user accepts.
+fn confirmDialog(hwnd: winapi.HWND, comptime message: []const u8) bool {
+    return winapi.MessageBoxW(
+        hwnd,
+        std.unicode.utf8ToUtf16LeStringLiteral(message),
+        std.unicode.utf8ToUtf16LeStringLiteral("Ghostty"),
+        winapi.MB_YESNO | winapi.MB_ICONWARNING | winapi.MB_DEFBUTTON2,
+    ) == winapi.IDYES;
 }
 
 pub fn setClipboard(
@@ -292,11 +325,16 @@ pub fn setClipboard(
     contents: []const apprt.ClipboardContent,
     confirm: bool,
 ) !void {
-    _ = confirm;
     switch (clipboard_type) {
         .standard => {},
         .selection, .primary => return,
     }
+
+    // OSC 52 writes from the running program ask for confirmation.
+    if (confirm and !confirmDialog(
+        self.window.hwnd,
+        "The running program wants to write to the clipboard. Allow it?",
+    )) return;
 
     // We only support plain text on the clipboard.
     const text: [:0]const u8 = text: {

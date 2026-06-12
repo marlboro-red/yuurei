@@ -325,6 +325,26 @@ pub extern "kernel32" fn GlobalLock(HANDLE) callconv(.winapi) ?*anyopaque;
 pub extern "kernel32" fn GlobalUnlock(HANDLE) callconv(.winapi) BOOL;
 pub extern "kernel32" fn GlobalFree(HANDLE) callconv(.winapi) ?HANDLE;
 
+pub const MB_YESNO: UINT = 0x00000004;
+pub const MB_ICONWARNING: UINT = 0x00000030;
+pub const MB_DEFBUTTON2: UINT = 0x00000100;
+pub const IDYES: i32 = 6;
+pub extern "user32" fn MessageBoxW(
+    hwnd: ?HWND,
+    text: [*:0]const u16,
+    caption: [*:0]const u16,
+    flags: UINT,
+) callconv(.winapi) i32;
+
+pub extern "shell32" fn ShellExecuteW(
+    hwnd: ?HWND,
+    lpOperation: ?[*:0]const u16,
+    lpFile: [*:0]const u16,
+    lpParameters: ?[*:0]const u16,
+    lpDirectory: ?[*:0]const u16,
+    nShowCmd: i32,
+) callconv(.winapi) ?HINSTANCE;
+
 pub extern "gdi32" fn ChoosePixelFormat(HDC, *const PIXELFORMATDESCRIPTOR) callconv(.winapi) i32;
 pub extern "gdi32" fn SetPixelFormat(HDC, i32, *const PIXELFORMATDESCRIPTOR) callconv(.winapi) BOOL;
 pub extern "gdi32" fn SwapBuffers(HDC) callconv(.winapi) BOOL;
@@ -458,6 +478,31 @@ pub fn setSwapInterval(interval: i32) bool {
 }
 
 pub extern "user32" fn IsWindowVisible(HWND) callconv(.winapi) BOOL;
+pub extern "user32" fn MessageBeep(UINT) callconv(.winapi) BOOL;
+pub extern "user32" fn GetForegroundWindow() callconv(.winapi) ?HWND;
+
+pub const FLASHWINFO = extern struct {
+    cbSize: UINT = @sizeOf(FLASHWINFO),
+    hwnd: HWND,
+    dwFlags: DWORD,
+    uCount: UINT,
+    dwTimeout: DWORD,
+};
+pub const FLASHW_ALL: DWORD = 0x00000003;
+pub const FLASHW_TIMERNOFG: DWORD = 0x0000000C;
+pub extern "user32" fn FlashWindowEx(*const FLASHWINFO) callconv(.winapi) BOOL;
+
+/// Flash the window's taskbar button and caption until it gains focus,
+/// with an attention beep. The interim "notify the user" primitive
+/// until WinRT toast notifications are wired up.
+pub fn flashWindow(hwnd: HWND) void {
+    _ = FlashWindowEx(&.{
+        .hwnd = hwnd,
+        .dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG,
+        .uCount = 0,
+        .dwTimeout = 0,
+    });
+}
 
 /// GL loader suitable for glad: wglGetProcAddress only resolves extension
 /// and GL>1.1 functions; GL 1.0/1.1 entry points come from opengl32.dll
