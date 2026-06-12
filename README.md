@@ -50,9 +50,10 @@ Working today, verified live on Windows 11:
   every named binding action plus custom `command-palette-entry` commands
 - **Terminal inspector** — the upstream Dear ImGui inspector in its own
   native window (toggle via keybind `inspector:toggle`)
-- **Desktop notifications** as native toasts (tray balloon path; note
-  that the in-box ConPTY currently swallows OSC 9/777 before any
-  terminal can see them)
+- **Desktop notifications** as native toasts (tray balloon path),
+  triggered by OSC 9 / OSC 777 — verified end-to-end through ConPTY
+- **Scrollbars** — a native per-split scrollbar fed by the core's
+  scrollback state; clicking/dragging it scrolls the terminal
 - **Background opacity** via window-level alpha with the runtime toggle
 - **Quick terminal** with system-wide global hotkeys (`global:` keybinds via
   `RegisterHotKey`)

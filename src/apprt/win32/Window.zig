@@ -429,6 +429,12 @@ pub fn layoutActiveTab(self: *Window) void {
     };
     defer sp.deinit(alloc);
 
+    // Each leaf reserves a native scrollbar column on its right edge.
+    const sbw: i32 = winapi.GetSystemMetricsForDpi(
+        winapi.SM_CXVSCROLL,
+        winapi.GetDpiForWindow(self.hwnd),
+    );
+
     // The spatial slots parallel the node list; only leaves matter.
     // A 2px gap separates splits (painted by the parent background).
     for (tab.tree.nodes, sp.slots) |node, slot| switch (node) {
@@ -443,10 +449,21 @@ pub fn layoutActiveTab(self: *Window) void {
                 null,
                 x,
                 strip + y,
-                @max(0, w - 2),
+                @max(0, w - 2 - sbw),
                 @max(0, h - 2),
                 winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
             );
+            if (surface.scrollbar) |sb| {
+                _ = winapi.SetWindowPos(
+                    sb,
+                    null,
+                    x + @max(0, w - 2 - sbw),
+                    strip + y,
+                    sbw,
+                    @max(0, h - 2),
+                    winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
+                );
+            }
             const size = surface.getSize() catch continue;
             surface.core_surface.sizeCallback(size) catch |err| {
                 log.err("error in size callback err={}", .{err});
@@ -1372,6 +1389,51 @@ pub fn wndProc(
                 return 0;
             }
             return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+
+        // From a per-split scrollbar control (lparam = its handle).
+        winapi.WM_VSCROLL => {
+            if (lparam == 0) return 0;
+            const sb: winapi.HWND = @ptrFromInt(@as(usize, @bitCast(lparam)));
+            const tab = self.activeTab() orelse return 0;
+            var it = tab.tree.iterator();
+            const surface = while (it.next()) |entry| {
+                if (entry.view.scrollbar == sb) break entry.view;
+            } else return 0;
+
+            const code: u16 = @truncate(wparam);
+
+            // Clicking the scrollbar focuses it; hand focus back when
+            // the interaction ends so keys keep going to the terminal.
+            if (code == winapi.SB_ENDSCROLL) {
+                _ = winapi.SetFocus(hwnd);
+                return 0;
+            }
+
+            var si: winapi.SCROLLINFO = .{
+                .fMask = winapi.SIF_RANGE | winapi.SIF_PAGE |
+                    winapi.SIF_POS | winapi.SIF_TRACKPOS,
+            };
+            if (winapi.GetScrollInfo(sb, winapi.SB_CTL, &si) == 0) return 0;
+            const page: i32 = @intCast(@max(1, si.nPage));
+            const pos: i32 = switch (code) {
+                winapi.SB_LINEUP => si.nPos - 1,
+                winapi.SB_LINEDOWN => si.nPos + 1,
+                winapi.SB_PAGEUP => si.nPos - page,
+                winapi.SB_PAGEDOWN => si.nPos + page,
+                winapi.SB_THUMBPOSITION, winapi.SB_THUMBTRACK => si.nTrackPos,
+                winapi.SB_TOP => si.nMin,
+                winapi.SB_BOTTOM => si.nMax,
+                else => return 0,
+            };
+            const max_pos: i32 = @max(0, si.nMax - page + 1);
+            const row: usize = @intCast(std.math.clamp(pos, 0, max_pos));
+            _ = surface.core_surface.performBindingAction(
+                .{ .scroll_to_row = row },
+            ) catch |err| {
+                log.err("error in scroll_to_row err={}", .{err});
+            };
+            return 0;
         },
 
         winapi.WM_PAINT => {

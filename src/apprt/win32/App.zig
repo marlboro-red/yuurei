@@ -518,6 +518,11 @@ pub fn performAction(
             ),
         },
 
+        .scrollbar => switch (target) {
+            .app => return false,
+            .surface => |surface| surface.rt_surface.updateScrollbar(value),
+        },
+
         .inspector => switch (target) {
             .app => return false,
             .surface => |surface| {

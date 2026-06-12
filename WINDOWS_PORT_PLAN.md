@@ -433,12 +433,13 @@ runtime like `gtk.zig`.
     explicit TTM_RELAYEVENT; verified to API contract, hover popup
     visual check pending normal desktop use — dev machine state
     suppresses popups).
-  - Remaining polish: Mica/backdrop, scrollbars (the
-    core emits a `scrollbar` action with {total, offset, len} rows on
-    every viewport change — a native SCROLLBAR control in a reserved
-    column beside each GL host, WM_VSCROLL → `scroll_to_row`, is the
-    likely shape; Windows users expect one, Windows Terminal shows
-    one by default).
+  - Scrollbars landed 2026-06-12: a native SCROLLBAR control in a
+    reserved column beside each GL host, fed by the core `scrollbar`
+    action (SetScrollInfo range/page/pos), WM_VSCROLL →
+    `scroll_to_row` with 32-bit track positions, focus handed back to
+    the terminal on SB_ENDSCROLL. Verified live: thumb tracked 200
+    lines of scrollback and SB_PAGEUP moved the viewport.
+  - Remaining polish: Mica/backdrop.
 - **Input gets disproportionate budget — it is where real terminals fail:**
   - The `TranslateMessage` ordering trap (handled `WM_KEYDOWN` must swallow its
     queued `WM_CHAR`).
@@ -473,9 +474,13 @@ Working down the gap list from the macOS comparison audit:
   toast — no AUMID/package identity needed (WinRT toasts can replace
   this after packaging). Source window still flashes. Verified to the
   OS boundary (dev machine has ToastEnabled=0 so Windows declines to
-  render). **Found:** stock conhost/ConPTY consumes OSC 9 and OSC 777
-  entirely (passes 0/7/52/133), so terminal-emitted notifications
-  can't reach us until the Phase 4 OpenConsole binaries drop.
+  render). **Correction (same day):** the earlier finding that ConPTY
+  consumes OSC 9/777 was wrong — it was an artifact of a broken test
+  harness (bare posted WM_CHARs are dropped by charEvent's
+  TranslateMessage-trap design; typing needs KEYDOWN+CHAR pairs).
+  Retested properly: OSC 9 flows through ConPTY end-to-end into the
+  toast handler; OSC 777 likewise (the second emission only hit
+  core's 1/sec notification rate limiter).
 - [x] Clipboard confirmation: unsafe pastes (core's UnsafePaste) and
   OSC 52 reads/writes now prompt with a native yes/no warning dialog,
   defaulting to No. Verified live: multi-line paste into cmd.exe raised
