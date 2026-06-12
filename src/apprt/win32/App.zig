@@ -43,6 +43,11 @@ quick: ?*Window = null,
 /// freed at unregistration).
 hotkey_actions: std.ArrayList([]const input.Binding.Action) = .empty,
 
+/// Hidden window owning the tray notify icon used for desktop
+/// notifications (balloon tips render as toasts on Win 10/11). Created
+/// lazily on the first notification.
+tray_hwnd: ?winapi.HWND = null,
+
 /// Flips to true to quit on the next event loop tick.
 quit: bool = false,
 
@@ -141,6 +146,11 @@ pub fn init(
 }
 
 pub fn terminate(self: *App) void {
+    if (self.tray_hwnd) |hwnd| {
+        var nid: winapi.NOTIFYICONDATAW = .{ .hWnd = hwnd, .uID = 1 };
+        _ = winapi.Shell_NotifyIconW(winapi.NIM_DELETE, &nid);
+        _ = winapi.DestroyWindow(hwnd);
+    }
     self.unregisterGlobalHotkeys();
     self.hotkey_actions.deinit(self.core_app.alloc);
     while (self.windows.pop()) |window| window.destroy();
@@ -565,22 +575,20 @@ pub fn performAction(
             },
         },
 
-        // Interim notification: attention-flash the window and beep.
-        // TODO: windows: WinRT toast notifications.
+        // A tray balloon tip, which Windows 10/11 renders as a toast.
+        // (Full WinRT toasts need an AUMID-registered shortcut or
+        // package identity; the balloon path needs neither.)
         .desktop_notification => {
-            log.info("notification title={s} body={s}", .{
-                value.title,
-                value.body,
-            });
-            const hwnd = switch (target) {
-                .app => if (self.windows.items.len > 0)
-                    self.windows.items[0].hwnd
-                else
-                    return false,
-                .surface => |surface| surface.rt_surface.window.hwnd,
-            };
-            _ = winapi.MessageBeep(0);
-            winapi.flashWindow(hwnd);
+            self.notifyToast(value.title, value.body);
+
+            // Also flash the source window so the taskbar points at
+            // the right terminal.
+            switch (target) {
+                .app => {},
+                .surface => |surface| winapi.flashWindow(
+                    surface.rt_surface.window.hwnd,
+                ),
+            }
         },
 
         // Everything else is honestly unimplemented for the skeleton:
@@ -592,6 +600,80 @@ pub fn performAction(
     }
 
     return true;
+}
+
+/// Show a desktop notification as a tray balloon tip, which Windows
+/// 10/11 renders as a toast. The notify icon (and its hidden owner
+/// window) is created lazily and lives until terminate so repeated
+/// notifications reuse it.
+fn notifyToast(self: *App, title: []const u8, body: []const u8) void {
+    log.debug("toast notification title={s} body={s}", .{ title, body });
+    const hwnd = self.tray_hwnd orelse hwnd: {
+        // The icon needs an owning window for shell callbacks; a
+        // hidden top-level window of the standard class works (no
+        // GWLP_USERDATA, so its wndproc falls through to default).
+        const hwnd = winapi.CreateWindowExW(
+            0,
+            Window.class_name,
+            std.unicode.utf8ToUtf16LeStringLiteral("Ghostty Notifications"),
+            0,
+            0,
+            0,
+            0,
+            0,
+            null,
+            null,
+            self.hinstance,
+            null,
+        ) orelse return;
+
+        var nid: winapi.NOTIFYICONDATAW = .{
+            .hWnd = hwnd,
+            .uID = 1,
+            .uFlags = winapi.NIF_ICON | winapi.NIF_TIP,
+            .hIcon = winapi.LoadIconW(
+                null,
+                @ptrFromInt(@as(usize, winapi.IDI_APPLICATION)),
+            ),
+        };
+        const tip = std.unicode.utf8ToUtf16LeStringLiteral("Ghostty");
+        @memcpy(nid.szTip[0..tip.len], tip);
+        if (winapi.Shell_NotifyIconW(winapi.NIM_ADD, &nid) == 0) {
+            log.warn("tray icon add failed; notification dropped", .{});
+            _ = winapi.DestroyWindow(hwnd);
+            return;
+        }
+        self.tray_hwnd = hwnd;
+        break :hwnd hwnd;
+    };
+
+    var nid: winapi.NOTIFYICONDATAW = .{
+        .hWnd = hwnd,
+        .uID = 1,
+        .uFlags = winapi.NIF_INFO,
+        .dwInfoFlags = winapi.NIIF_INFO,
+    };
+    _ = std.unicode.utf8ToUtf16Le(
+        nid.szInfoTitle[0 .. nid.szInfoTitle.len - 1],
+        truncateUtf8(title, nid.szInfoTitle.len - 1),
+    ) catch 0;
+    _ = std.unicode.utf8ToUtf16Le(
+        nid.szInfo[0 .. nid.szInfo.len - 1],
+        truncateUtf8(body, nid.szInfo.len - 1),
+    ) catch 0;
+    if (winapi.Shell_NotifyIconW(winapi.NIM_MODIFY, &nid) == 0) {
+        log.warn("balloon notification failed", .{});
+    }
+}
+
+/// Truncate UTF-8 to at most max bytes at a codepoint boundary. UTF-16
+/// never needs more units than the UTF-8 byte count, so the result is
+/// guaranteed to fit a max-unit UTF-16 buffer.
+fn truncateUtf8(s: []const u8, max: usize) []const u8 {
+    if (s.len <= max) return s;
+    var end = max;
+    while (end > 0 and s[end] & 0xC0 == 0x80) end -= 1;
+    return s[0..end];
 }
 
 /// Reload the configuration; see the GLFW reference implementation.

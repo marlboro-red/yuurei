@@ -346,6 +346,43 @@ pub extern "user32" fn UnregisterHotKey(?HWND, i32) callconv(.winapi) BOOL;
 pub const WS_EX_TOOLWINDOW: DWORD = 0x00000080;
 pub const WS_EX_TOPMOST: DWORD = 0x00000008;
 
+// Tray icon + balloon notifications (rendered as toasts on Win 10/11)
+pub const NOTIFYICONDATAW = extern struct {
+    cbSize: DWORD = @sizeOf(NOTIFYICONDATAW),
+    hWnd: ?HWND = null,
+    uID: UINT = 0,
+    uFlags: UINT = 0,
+    uCallbackMessage: UINT = 0,
+    hIcon: ?HICON = null,
+    szTip: [128]u16 = @splat(0),
+    dwState: DWORD = 0,
+    dwStateMask: DWORD = 0,
+    szInfo: [256]u16 = @splat(0),
+    uTimeoutOrVersion: UINT = 0,
+    szInfoTitle: [64]u16 = @splat(0),
+    dwInfoFlags: DWORD = 0,
+    guidItem: GUID = std.mem.zeroes(GUID),
+    hBalloonIcon: ?HICON = null,
+};
+pub const GUID = extern struct {
+    Data1: u32,
+    Data2: u16,
+    Data3: u16,
+    Data4: [8]u8,
+};
+pub const NIM_ADD: DWORD = 0;
+pub const NIM_MODIFY: DWORD = 1;
+pub const NIM_DELETE: DWORD = 2;
+pub const NIF_MESSAGE: UINT = 0x01;
+pub const NIF_ICON: UINT = 0x02;
+pub const NIF_TIP: UINT = 0x04;
+pub const NIF_INFO: UINT = 0x10;
+pub const NIF_SHOWTIP: UINT = 0x80;
+pub const NIIF_INFO: DWORD = 0x01;
+pub extern "shell32" fn Shell_NotifyIconW(DWORD, *NOTIFYICONDATAW) callconv(.winapi) BOOL;
+pub const IDI_APPLICATION: u16 = 32512;
+pub extern "user32" fn LoadIconW(?HINSTANCE, ?*align(1) const anyopaque) callconv(.winapi) ?HICON;
+
 // Window-level transparency (background-opacity)
 pub const GWL_EXSTYLE: i32 = -20;
 pub const WS_EX_LAYERED: DWORD = 0x00080000;
