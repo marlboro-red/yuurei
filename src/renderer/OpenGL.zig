@@ -9,6 +9,7 @@ const shadertoy = @import("shadertoy.zig");
 const apprt = @import("../apprt.zig");
 const font = @import("../font/main.zig");
 const configpkg = @import("../config.zig");
+const perf = @import("../perf.zig");
 const rendererpkg = @import("../renderer.zig");
 const Renderer = rendererpkg.GenericRenderer(OpenGL);
 
@@ -324,6 +325,13 @@ pub fn drawFrameEnd(self: *OpenGL) void {
             if (hwnd != null and winapi.IsWindowVisible(hwnd.?) == 0) return;
             if (winapi.SwapBuffers(hdc) == 0) {
                 log.warn("SwapBuffers failed", .{});
+            }
+
+            // Key-to-present latency tracing (GHOSTTY_PERF_TRACE).
+            // This is the full echo path: key encode, pty write,
+            // shell echo, ConPTY, parse, damage, render, present.
+            if (perf.keyToPresent()) |ns| {
+                log.info("perf: key-to-present {d} us", .{ns / 1000});
             }
         }
     }

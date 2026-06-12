@@ -16,6 +16,7 @@ const configpkg = @import("../config.zig");
 const crash = @import("../crash/main.zig");
 const fastmem = @import("../fastmem.zig");
 const internal_os = @import("../os/main.zig");
+const perf = @import("../perf.zig");
 const renderer = @import("../renderer.zig");
 const shell_integration = @import("shell_integration.zig");
 const terminal = @import("../terminal/main.zig");
@@ -1375,6 +1376,17 @@ pub const ReadThread = struct {
         // 10MB burst (ConPTY emits small chunks; the wall time is
         // dominated by conhost's own re-render inside the ConPTY).
         var buf: [1024]u8 = undefined;
+
+        // Per-second read/parse statistics (GHOSTTY_PERF_TRACE):
+        // chunk count, byte volume, and time spent inside the parser —
+        // the discriminator between "conhost feeds us slowly" and
+        // "our parse is the bottleneck" during bursts.
+        const tracing = perf.isEnabled();
+        var stat_start: i128 = 0;
+        var stat_bytes: u64 = 0;
+        var stat_chunks: u64 = 0;
+        var stat_parse_ns: u64 = 0;
+
         while (true) {
             while (true) {
                 var n: windows.DWORD = 0;
@@ -1407,7 +1419,34 @@ pub const ReadThread = struct {
                     }
                 }
 
-                @call(.always_inline, termio.Termio.processOutput, .{ io, buf[0..n] });
+                if (tracing) {
+                    const t0 = std.time.nanoTimestamp();
+                    if (stat_start == 0) stat_start = t0;
+                    @call(.always_inline, termio.Termio.processOutput, .{ io, buf[0..n] });
+                    perf.ptyData();
+                    const t1 = std.time.nanoTimestamp();
+                    stat_parse_ns += @intCast(t1 - t0);
+                    stat_bytes += n;
+                    stat_chunks += 1;
+                    if (t1 - stat_start >= std.time.ns_per_s) {
+                        const wall_ns: u64 = @intCast(t1 - stat_start);
+                        log.info(
+                            "perf: io {d} KB/s in {d} chunks (avg {d} B), parse {d}% of wall",
+                            .{
+                                stat_bytes * std.time.ns_per_s / wall_ns / 1024,
+                                stat_chunks,
+                                stat_bytes / @max(1, stat_chunks),
+                                stat_parse_ns * 100 / wall_ns,
+                            },
+                        );
+                        stat_start = 0;
+                        stat_bytes = 0;
+                        stat_chunks = 0;
+                        stat_parse_ns = 0;
+                    }
+                } else {
+                    @call(.always_inline, termio.Termio.processOutput, .{ io, buf[0..n] });
+                }
             }
 
             var quit_bytes: windows.DWORD = 0;

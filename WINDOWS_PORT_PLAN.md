@@ -604,10 +604,34 @@ Landed fixes:
   our side of the pipe moves it. The real lever is the Phase 4
   OpenConsole binaries drop (a newer, faster conhost).
 
-Candidate future work: io-thread parse profiling during bursts (mutex
-hold times per chunk), input-latency instrumentation (key event →
-present), DWM present timing/Mica interactions, and re-running this
-table after upstream merges (the suite lives in this section).
+- [x] **Perf tracing instrumentation** (`GHOSTTY_PERF_TRACE=1`,
+  src/perf.zig): key→present latency (gated on the pty echo arriving,
+  so cursor-reset presents don't consume the sample) logged by the
+  renderer, and per-second io read/parse statistics (KB/s, chunk
+  count/size, parse share of wall) logged by the read thread. Costs
+  one relaxed atomic load per traced path when disabled.
+
+Instrumented results (ReleaseFast):
+
+| Metric | Result |
+| --- | --- |
+| Key→present (echo) median | 1.22 ms vsync on, 1.05 ms vsync off (p90 ≈ 2.1 ms both) — sporadic presents don't hit vsync backpressure; remaining photon latency is DWM's |
+| Burst io profile (10 MB) | ConPTY delivers ~3.3 MB/s in ~307-byte chunks (~11k chunks/s); our parse is **6% of wall** — the read thread waits on conhost 94% of the time |
+
+The burst numbers close the throughput question: nothing on our side
+of the pipe is the bottleneck (also why the 64 KB read buffer and
+128 KB pipe buffer experiments were neutral — conhost writes ~300 B at
+a time). The only real throughput lever is the Phase 4 OpenConsole
+binaries drop (newer conhost with faster ConPTY).
+
+Methodology note: latency was measured by posting
+KEYDOWN+CHAR+KEYUP 'a' presses at 150 ms spacing and taking the median
+of the renderer's trace lines; bursts via a 10 MB single
+[Console]::Write from pwsh.
+
+Candidate future work: DWM present timing/Mica interactions, and
+re-running this table after upstream merges (the suite lives in this
+section).
 
 ---
 

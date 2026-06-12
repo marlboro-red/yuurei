@@ -13,6 +13,7 @@ const App = @import("App.zig");
 const Surface = @import("Surface.zig");
 const CommandPalette = @import("CommandPalette.zig");
 const winapi = @import("winapi.zig");
+const perf = @import("../../perf.zig");
 
 const log = std.log.scoped(.win32);
 
@@ -1954,6 +1955,9 @@ fn keyEvent(
         .repeat
     else
         .press;
+
+    // Key-to-present latency tracing (GHOSTTY_PERF_TRACE).
+    if (action == .press) perf.keyPress();
 
     // TODO: windows: AltGr discrimination (lParam bit 24 + scancode).
     const mods = currentMods();
