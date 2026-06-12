@@ -717,17 +717,25 @@ item.
   legacy blt path's PresentMon numbers under-report (tracking ends at
   the copy). GHOSTTY_NO_FLIP escapes to the legacy path at runtime.
 
-**Next presentation arc — DirectComposition**: WT's swapchain is a
-composition swapchain (CreateSwapChainForComposition) on a DComp
-visual, which is what DWM promotes to hardware overlays. Moving our
-swapchain onto a DComp visual targeting the host window is the
-remaining step for WT-parity display latency, and brings per-pixel
-transparency/blur/Mica along. Vtable care needed: dcomp interfaces
-have overloaded methods whose vtable order must be taken from an
-authoritative binding (windows-rs), not guessed.
+- [x] **DirectComposition presentation (2026-06-13)** — the swapchain
+  is now a composition swapchain on a DComp visual bound to the host
+  window (vtable layouts from mingw-w64's dcomp.h; SetContent is
+  absolute slot 15, float overloads precede animation overloads).
+  Measured with a same-session Windows Terminal control, unoccluded
+  windows: yuurei 20.9 ms median display latency **vs WT 33.0 ms**,
+  and yuurei now records "Hardware Composed: Independent Flip"
+  frames. Key correction to the earlier comparison: WT's 16.6 ms
+  figure came from a session where MPO promotion was active —
+  promotion is environmental and varies per session; in matched
+  conditions yuurei is currently the faster of the two. Also: windows
+  overlapping the taskbar are occlusion-disqualified from promotion
+  (a test-methodology trap).
 
-Candidate future work: the DComp arc above, and re-running this
-table after upstream merges (the suite lives in this section).
+Candidate future work: per-pixel transparency on the DComp visual
+(premultiplied alpha — background-opacity without the layered-window
+path), applying the deep-research findings on input-to-present
+scheduling, and re-running this table after upstream merges (the
+suite lives in this section).
 
 ---
 
