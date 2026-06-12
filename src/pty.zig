@@ -414,6 +414,10 @@ const WindowsPty = struct {
         //     _ = windows.CloseHandle(pty.in_pipe);
         // }
 
+        // Note: a 128KB nSize was tried here (the default is 4KB) and
+        // measured neutral on a 10MB burst, same as enlarging the read
+        // buffer — burst wall time is dominated by conhost's re-render
+        // inside the ConPTY, not by anything on our side of the pipe.
         if (windows.exp.kernel32.CreatePipe(&pty.out_pipe, &pty.out_pipe_pty, null, 0) == 0) {
             return windows.unexpectedError(windows.kernel32.GetLastError());
         }

@@ -83,6 +83,10 @@ tooltip: ?winapi.HWND = null,
 /// How many tab tools are currently registered with the tooltip.
 tooltip_tools: usize = 0,
 
+/// Fingerprint of the last synced tooltip state (tab count, width,
+/// titles); strip paints skip the re-sync when nothing changed.
+tooltip_hash: u64 = 0,
+
 /// The command palette popup while it is open.
 palette: ?*CommandPalette = null,
 
@@ -295,7 +299,7 @@ pub fn moveTab(self: *Window, amount: isize) void {
     const tab = self.tabs.orderedRemove(self.active_tab);
     self.tabs.insertAssumeCapacity(target, tab);
     self.active_tab = target;
-    _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+    self.invalidateStrip();
 }
 
 /// Apply (or remove, at >= 1.0) window-level opacity.
@@ -761,7 +765,7 @@ pub fn syncTitle(self: *Window) void {
     const len = std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], title) catch return;
     buf[len] = 0;
     _ = winapi.SetWindowTextW(self.hwnd, buf[0..len :0]);
-    _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+    self.invalidateStrip();
 }
 
 /// Read the OS theme: forward to all tabs and set the DWM caption.
@@ -800,6 +804,19 @@ pub fn scale(self: *const Window, logical: i32) i32 {
 /// The title strip height in physical pixels.
 pub fn titlebarHeight(self: *const Window) i32 {
     return self.scale(titlebar_height_logical);
+}
+
+/// Invalidate only the strip. Hover changes repaint constantly while
+/// the mouse crosses the strip; invalidating the whole window made
+/// every one of those also refresh the terminal renderer.
+fn invalidateStrip(self: *const Window) void {
+    var rect: winapi.RECT = .{
+        .left = 0,
+        .top = 0,
+        .right = self.clientWidth(),
+        .bottom = self.titlebarHeight(),
+    };
+    _ = winapi.InvalidateRect(self.hwnd, &rect, winapi.FALSE);
 }
 
 fn clientWidth(self: *const Window) i32 {
@@ -896,6 +913,22 @@ fn hitTestStrip(self: *const Window, x: i32, y: i32) Hover {
 fn syncTabTooltips(self: *Window) void {
     const tooltip = self.tooltip orelse return;
     const n = self.tabs.items.len;
+
+    // Skip the SendMessage churn when nothing the tools depend on
+    // changed (the strip repaints on every hover change).
+    const hash = hash: {
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(std.mem.asBytes(&n));
+        const w = self.tabWidth();
+        hasher.update(std.mem.asBytes(&w));
+        for (self.tabs.items) |*tab| {
+            hasher.update(tab.focused.title_text orelse "Ghostty");
+            hasher.update(&.{0});
+        }
+        break :hash hasher.final();
+    };
+    if (hash == self.tooltip_hash) return;
+    self.tooltip_hash = hash;
 
     // Drop tools for slots that no longer exist.
     while (self.tooltip_tools > n) {
@@ -1413,7 +1446,7 @@ pub fn wndProc(
                 .none;
             if (!std.meta.eql(hover, self.hover)) {
                 self.hover = hover;
-                _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+                self.invalidateStrip();
             }
             return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
@@ -1421,7 +1454,7 @@ pub fn wndProc(
         winapi.WM_NCMOUSELEAVE => {
             if (!std.meta.eql(self.hover, Hover.none)) {
                 self.hover = .none;
-                _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+                self.invalidateStrip();
             }
             return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
@@ -1488,30 +1521,41 @@ pub fn wndProc(
 
         winapi.WM_PAINT => {
             var ps: winapi.PAINTSTRUCT = undefined;
+            var below_strip = false;
             if (winapi.BeginPaint(hwnd, &ps)) |hdc| {
-                self.paintTitlebar(hdc);
+                const strip_h = self.titlebarHeight();
+                below_strip = ps.rcPaint.bottom > strip_h;
+
+                if (ps.rcPaint.top < strip_h) self.paintTitlebar(hdc);
 
                 // Fill the terminal area background: visible only in
                 // the gaps between splits (children are clipped).
-                var client: winapi.RECT = undefined;
-                _ = winapi.GetClientRect(hwnd, &client);
-                var area: winapi.RECT = .{
-                    .left = 0,
-                    .top = self.titlebarHeight(),
-                    .right = client.right,
-                    .bottom = client.bottom,
-                };
-                if (winapi.CreateSolidBrush(0x00101010)) |brush| {
-                    defer _ = winapi.DeleteObject(brush);
-                    _ = winapi.FillRect(hdc, &area, brush);
+                if (below_strip) {
+                    var client: winapi.RECT = undefined;
+                    _ = winapi.GetClientRect(hwnd, &client);
+                    var area: winapi.RECT = .{
+                        .left = 0,
+                        .top = strip_h,
+                        .right = client.right,
+                        .bottom = client.bottom,
+                    };
+                    if (winapi.CreateSolidBrush(0x00101010)) |brush| {
+                        defer _ = winapi.DeleteObject(brush);
+                        _ = winapi.FillRect(hdc, &area, brush);
+                    }
                 }
 
                 _ = winapi.EndPaint(hwnd, &ps);
             }
-            if (self.activeSurface()) |surface| {
-                surface.core_surface.refreshCallback() catch |err| {
-                    log.err("error in refresh callback err={}", .{err});
-                };
+
+            // Strip-only paints (hover highlights) must not redraw the
+            // terminal; refresh only when the GL area was invalidated.
+            if (below_strip) {
+                if (self.activeSurface()) |surface| {
+                    surface.core_surface.refreshCallback() catch |err| {
+                        log.err("error in refresh callback err={}", .{err});
+                    };
+                }
             }
             return 0;
         },
@@ -1744,7 +1788,7 @@ pub fn wndProc(
                     self.tabs.insertAssumeCapacity(target, tab);
                     self.active_tab = target;
                     self.tab_drag = target;
-                    _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+                    self.invalidateStrip();
                 }
                 return 0;
             }
@@ -1757,7 +1801,7 @@ pub fn wndProc(
                 .none;
             if (!std.meta.eql(hover, self.hover)) {
                 self.hover = hover;
-                _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+                self.invalidateStrip();
             }
 
             const surface = self.surfaceAt(x, y) orelse
