@@ -274,14 +274,25 @@ pub fn init(b: *std.Build, appVersion: []const u8, libVersion: []const u8) !Conf
                     app_version.patch,
                 });
 
-                if (!std.mem.eql(u8, tag, expected)) {
-                    @panic("tagged releases must be in vX.Y.Z format matching build.zig");
+                if (std.mem.eql(u8, tag, expected)) {
+                    break :version .{
+                        .major = app_version.major,
+                        .minor = app_version.minor,
+                        .patch = app_version.patch,
+                    };
                 }
 
+                // yuurei: release tags carry the fork's own version,
+                // which is independent of the upstream core version in
+                // build.zig (upstream panicked on the mismatch). The
+                // core continues to report its upstream version with
+                // the fork tag as the pre-release identifier.
                 break :version .{
                     .major = app_version.major,
                     .minor = app_version.minor,
                     .patch = app_version.patch,
+                    .pre = b.fmt("yuurei.{s}", .{tag}),
+                    .build = vsn.short_hash,
                 };
             }
         }
