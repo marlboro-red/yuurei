@@ -56,6 +56,9 @@ hover: Hover = .none,
 /// Active split-divider drag, if any.
 divider_drag: ?DividerHit = null,
 
+/// Index of the tab being drag-reordered, if any.
+tab_drag: ?usize = null,
+
 /// The command palette popup while it is open.
 palette: ?*CommandPalette = null,
 
@@ -218,6 +221,21 @@ pub fn newTab(self: *Window) !*Surface {
     try self.tabs.append(alloc, .{ .tree = tree, .focused = surface });
     self.activateTab(self.tabs.items.len - 1);
     return surface;
+}
+
+/// Move the active tab by the given offset, wrapping cyclically.
+pub fn moveTab(self: *Window, amount: isize) void {
+    const n = self.tabs.items.len;
+    if (n <= 1) return;
+    const target: usize = @intCast(@mod(
+        @as(isize, @intCast(self.active_tab)) + amount,
+        @as(isize, @intCast(n)),
+    ));
+    if (target == self.active_tab) return;
+    const tab = self.tabs.orderedRemove(self.active_tab);
+    self.tabs.insertAssumeCapacity(target, tab);
+    self.active_tab = target;
+    _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
 }
 
 /// Apply (or remove, at >= 1.0) window-level opacity.
@@ -1452,6 +1470,25 @@ pub fn wndProc(
                 return 0;
             }
 
+            // Live tab drag: reorder when the cursor crosses into
+            // another tab's slot.
+            if (self.tab_drag) |from| {
+                const n = self.tabs.items.len;
+                const target: usize = @intCast(std.math.clamp(
+                    @divTrunc(@as(i32, x), @max(1, self.tabWidth())),
+                    0,
+                    @as(i32, @intCast(n - 1)),
+                ));
+                if (target != from) {
+                    const tab = self.tabs.orderedRemove(from);
+                    self.tabs.insertAssumeCapacity(target, tab);
+                    self.active_tab = target;
+                    self.tab_drag = target;
+                    _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+                }
+                return 0;
+            }
+
             const hover: Hover = if (y < self.titlebarHeight())
                 self.hitTestStrip(x, y)
             else
@@ -1480,15 +1517,36 @@ pub fn wndProc(
         winapi.WM_MBUTTONDOWN,
         winapi.WM_MBUTTONUP,
         => {
+            // A tab drag in progress ends on release wherever it is.
+            if (self.tab_drag != null and msg == winapi.WM_LBUTTONUP) {
+                self.tab_drag = null;
+                _ = winapi.ReleaseCapture();
+                return 0;
+            }
+
             // Clicks in the strip operate tabs/buttons, never the
             // terminal.
             const cy = lparamY(lparam);
             if (cy >= 0 and cy < self.titlebarHeight()) {
+                // Tabs activate on press, like native tab strips, and
+                // the press begins a possible drag-reorder.
+                if (msg == winapi.WM_LBUTTONDOWN) {
+                    switch (self.hitTestStrip(lparamX(lparam), cy)) {
+                        .tab => |i| {
+                            self.activateTab(i);
+                            self.tab_drag = i;
+                            _ = winapi.SetCapture(hwnd);
+                        },
+                        else => {},
+                    }
+                    return 0;
+                }
                 if (msg == winapi.WM_LBUTTONUP) {
                     switch (self.hitTestStrip(lparamX(lparam), cy)) {
                         .none => {},
                         .caption => |button| self.captionButtonClick(button),
-                        .tab => |i| self.activateTab(i),
+                        // Activation happened on the press.
+                        .tab => {},
                         // Closing a tab closes every split in it.
                         .tab_close => |i| {
                             var it = self.tabs.items[i].tree.iterator();

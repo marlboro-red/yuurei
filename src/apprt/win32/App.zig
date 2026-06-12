@@ -508,6 +508,13 @@ pub fn performAction(
             .surface => |surface| surface.rt_surface.window.toggleOpacity(),
         },
 
+        .move_tab => switch (target) {
+            .app => return false,
+            .surface => |surface| surface.rt_surface.window.moveTab(
+                value.amount,
+            ),
+        },
+
         .inspector => switch (target) {
             .app => return false,
             .surface => |surface| {
