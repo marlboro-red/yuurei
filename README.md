@@ -54,6 +54,12 @@ Working today, verified live on Windows 11:
   triggered by OSC 9 / OSC 777 — verified end-to-end through ConPTY
 - **Scrollbars** — a native per-split scrollbar fed by the core's
   scrollback state; clicking/dragging it scrolls the terminal
+- **Find in terminal** (Ctrl+Shift+F) — search bar with live match
+  counts and navigable highlighted results
+- **Links** — Ctrl+click opens detected/OSC 8 links (http/https/mailto
+  allowlist; terminal output is untrusted)
+- **File drag-and-drop** — dropped files paste their paths, quoted
+  when the shell would split them
 - **Background opacity** via window-level alpha with the runtime toggle
 - **Quick terminal** with system-wide global hotkeys (`global:` keybinds via
   `RegisterHotKey`)

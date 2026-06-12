@@ -549,6 +549,36 @@ Working down the gap list from the macOS comparison audit:
 - Remaining from the audit, in rough order: settings GUI, auto-update,
   WinRT toasts.
 
+### Phase 3b — survey-driven gaps (2026-06-12)
+
+Surveyed the other Windows ports (amanthanvi/winghostty,
+deblasis/wintty, InsipidPoint/ghostty-windows) and closed the cheap
+user-facing gaps they exposed:
+
+- [x] **open_url** — Ctrl+click on detected/OSC 8 links opens via
+  ShellExecuteW behind an http/https/mailto allowlist (a bare path or
+  file URL would execute; terminal output is untrusted). Verified
+  live: file URL refused with a log, https link opened the browser.
+- [x] **File drag-and-drop** — WM_DROPFILES pastes dropped paths
+  through the normal unsafe-paste-confirmed path, double-quoted when
+  cmd/pwsh would split them. Verified live via a fabricated HDROP.
+- [x] **Find-in-terminal** — search bar popup docked top-right; core
+  owns matching/lifecycle (search, navigate_search, end_search in;
+  start_search, search_total, search_selected out). Verified live
+  with highlighted matches, live counts, and selection navigation.
+- [ ] **win32-input-mode (mode 9001)** — conhost requests
+  full-fidelity key encoding (CSI Vk;Sc;Uc;Kd;Cs;Rc _) when a client
+  uses ReadConsoleInput. We currently log "unimplemented mode: 9001"
+  and conhost falls back to synthesizing input from plain VT, which
+  works for everything tested so far. Implementing means plumbing a
+  terminal mode + a Windows arm in the shared key encoder (VK +
+  scancode recovery from the key event) — a focused arc of its own.
+  InsipidPoint's port proves it's tractable.
+- Deliberately skipped from the survey: session restore (large,
+  winghostty has it), signed installers/winget/Scoop (distribution
+  stays GitHub-only by choice), WinUI/DX12 rearchitecture (wintty's
+  approach; our WGL renderer measures at conhost parity).
+
 ### Phase 4 — Ship + polish strictly by user pain (ongoing)
 
 - Code signing, winget/Scoop manifests, crash reporting (Sentry supports
