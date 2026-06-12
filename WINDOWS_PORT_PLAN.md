@@ -429,7 +429,12 @@ runtime like `gtk.zig`.
   - Tab drag-reorder + `move_tab` landed 2026-06-12 (tabs activate on
     press; captured drag reorders across slots; move_tab wraps
     cyclically — all verified live via posted-message input).
-  - Remaining polish: Mica/backdrop, tab tooltips.
+  - Remaining polish: Mica/backdrop, tab tooltips, scrollbars (the
+    core emits a `scrollbar` action with {total, offset, len} rows on
+    every viewport change — a native SCROLLBAR control in a reserved
+    column beside each GL host, WM_VSCROLL → `scroll_to_row`, is the
+    likely shape; Windows users expect one, Windows Terminal shows
+    one by default).
 - **Input gets disproportionate budget — it is where real terminals fail:**
   - The `TranslateMessage` ordering trap (handled `WM_KEYDOWN` must swallow its
     queued `WM_CHAR`).
