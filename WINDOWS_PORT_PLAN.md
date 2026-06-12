@@ -688,11 +688,24 @@ layered-window penalty is a DirectComposition swap chain (also
 unlocks per-pixel alpha and blur) — the largest remaining perf work
 item.
 
-Candidate future work: DirectComposition presentation (kills the
-layered-window latency penalty, enables real per-pixel
-transparency/blur/Mica), DWM present timing instrumentation
-(PresentMon), and re-running this table after upstream merges (the
-suite lives in this section).
+- [x] **DXGI flip-model presentation (2026-06-12)** — the big one.
+  SwapBuffers presented through DWM's redirected surface (blt model),
+  costing 1–2 frames of compositor latency vs Windows Terminal's flip
+  model; this was the user-felt typing lag. Now: hand-written minimal
+  D3D11/DXGI COM bindings (dxgi.zig), a FLIP_DISCARD swapchain per
+  surface with the frame-latency waitable capped at 1, GL sharing via
+  WGL_NV_DX_interop2 into a stable intermediate texture (flip
+  backbuffers rotate, so present() CopyResources into the current
+  buffer — the standard interop pattern; registering the backbuffer
+  directly renders black), Y-flipping blit from the GL default
+  framebuffer, full fallback to SwapBuffers on any failure. Verified:
+  splits, resizes, both panes presenting flip-model, app-side latency
+  unchanged.
+
+Candidate future work: DirectComposition surface (per-pixel
+transparency/blur/Mica on top of the new swapchain), PresentMon
+verification of the compositor-side win, and re-running this table
+after upstream merges (the suite lives in this section).
 
 ---
 
