@@ -501,9 +501,23 @@ Working down the gap list from the macOS comparison audit:
   exact prior rect. (The flyout itself didn't appear under synthetic
   hover on the dev machine — but neither did Notepad's, so the hit-test
   contract is as verified as the environment allows.)
-- Remaining from the audit, in rough order: command palette, inspector
-  wiring, background opacity/blur, settings GUI, auto-update, WinRT
-  toasts.
+- [x] **Command palette (2026-06-12)** — a native borderless popup
+  (own window class, CS_DROPSHADOW, GDI-painted like the strip) over
+  the active window: typed case-insensitive filter over the
+  `command-palette-entry` commands (titles + descriptions), keyboard
+  navigation, mouse hover/click/wheel, Escape/focus-loss dismissal;
+  Enter executes via the focused surface's `performBindingAction`.
+  Default binding Ctrl+Shift+P works out of the box. Verified live:
+  filter "split right" narrowed to one command and Enter created the
+  split.
+- [x] **Background opacity (2026-06-12)** — `background-opacity < 1`
+  maps to window-level alpha (WS_EX_LAYERED +
+  SetLayeredWindowAttributes); `toggle_background_opacity` flips
+  between configured and opaque. Per-pixel GL alpha (true blur/Mica
+  behind text) needs a DirectComposition swap chain — future work.
+  Verified live at 0.85 with the toggle.
+- Remaining from the audit, in rough order: inspector wiring, settings
+  GUI, auto-update, WinRT toasts.
 
 ### Phase 4 — Ship + polish strictly by user pain (ongoing)
 

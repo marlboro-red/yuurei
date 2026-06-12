@@ -46,6 +46,9 @@ Working today, verified live on Windows 11:
 - **Splits** — directional create, spatial focus navigation, divider
   drag-resize, equalize, zoom, and collapse-on-exit, using upstream's
   shared split tree
+- **Command palette** (Ctrl+Shift+P) — a native filterable popup over
+  every named binding action plus custom `command-palette-entry` commands
+- **Background opacity** via window-level alpha with the runtime toggle
 - **Quick terminal** with system-wide global hotkeys (`global:` keybinds via
   `RegisterHotKey`)
 - **PowerShell-first** default shell (pwsh → powershell → cmd) and **pwsh
@@ -55,9 +58,9 @@ Working today, verified live on Windows 11:
   hidden-window present fixes after a real GPU-driver incident
 
 Honest remaining work: packaging/code signing/winget, WinRT toast
-notifications (interim flash+beep today), command palette, inspector
-wiring, background opacity/blur, settings GUI, auto-update, Mica,
-ARM64. See the Phase 3/4
+notifications (interim flash+beep today), inspector wiring,
+per-pixel transparency/blur (opacity is whole-window today), settings
+GUI, auto-update, Mica, ARM64. See the Phase 3/4
 checklists in [`WINDOWS_PORT_PLAN.md`](WINDOWS_PORT_PLAN.md) for the
 live list.
 
