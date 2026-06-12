@@ -157,9 +157,6 @@ pub const WM_DPICHANGED: UINT = 0x02E0;
 pub const WM_SETCURSOR: UINT = 0x0020;
 pub const WM_SETTINGCHANGE: UINT = 0x001A;
 
-// WM_SETCURSOR hit-test results (low word of lParam)
-pub const HTCLIENT: u16 = 1;
-
 // System cursor ids for LoadCursorW(null, id)
 pub const IDC_ARROW: u16 = 32512;
 pub const IDC_IBEAM: u16 = 32513;
@@ -379,8 +376,15 @@ pub const WM_NCCALCSIZE: UINT = 0x0083;
 pub const WM_NCHITTEST: UINT = 0x0084;
 
 // Hit test results
+pub const HTCLIENT: LRESULT = 1;
 pub const HTCAPTION: LRESULT = 2;
+pub const HTMAXBUTTON: LRESULT = 9;
 pub const HTTOP: LRESULT = 12;
+
+pub const WM_NCMOUSEMOVE: UINT = 0x00A0;
+pub const WM_NCLBUTTONDOWN: UINT = 0x00A1;
+pub const WM_NCLBUTTONUP: UINT = 0x00A2;
+pub const WM_NCMOUSELEAVE: UINT = 0x02A2;
 
 pub const SM_CYSIZEFRAME: i32 = 33;
 pub const SM_CXPADDEDBORDER: i32 = 92;

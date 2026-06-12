@@ -52,6 +52,9 @@ quick: bool = false,
 /// What the mouse hovers in the title strip, for hover painting.
 hover: Hover = .none,
 
+/// Active split-divider drag, if any.
+divider_drag: ?DividerHit = null,
+
 /// The key event from the last WM_KEYDOWN that the core did not
 /// consume; WM_CHAR completes it with the layout-cooked text.
 pending_key_event: ?input.KeyEvent = null,
@@ -71,6 +74,14 @@ const Hover = union(enum) {
 };
 
 const CaptionButton = enum { minimize, maximize, close };
+
+/// A split divider under the mouse: which split node, its layout, and
+/// the split's extent in parent client pixels (for ratio math).
+const DividerHit = struct {
+    handle: Tree.Node.Handle,
+    layout: Tree.Split.Layout,
+    rect: winapi.RECT,
+};
 
 /// Logical (96-dpi) metrics, scaled by the window DPI at use.
 const titlebar_height_logical: i32 = 36;
@@ -344,8 +355,79 @@ pub fn layoutActiveTab(self: *Window) void {
             surface.core_surface.sizeCallback(size) catch |err| {
                 log.err("error in size callback err={}", .{err});
             };
+            // An idle (unfocused, output-less) surface won't present a
+            // frame on its own after a resize, leaving stale pixels in
+            // any newly exposed region; queue a render explicitly.
+            surface.core_surface.refreshCallback() catch {};
         },
     };
+
+    // Repaint the parent so regions the hosts vacated (divider drags,
+    // collapses) get the background fill instead of stale frames.
+    _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+}
+
+/// The split divider at the given parent-client point, if any. The
+/// divider zone is the gap between a split's children, widened to a
+/// comfortable grab target.
+fn dividerAt(self: *Window, x: i32, y: i32) ?DividerHit {
+    const tab = self.activeTab() orelse return null;
+    if (!tab.tree.isSplit()) return null;
+    if (tab.tree.zoomed != null) return null;
+    const alloc = self.app.core_app.alloc;
+
+    var client: winapi.RECT = undefined;
+    _ = winapi.GetClientRect(self.hwnd, &client);
+    const strip = self.titlebarHeight();
+    const area_w: f32 = @floatFromInt(@max(1, client.right - client.left));
+    const area_h: f32 = @floatFromInt(@max(1, client.bottom - client.top - strip));
+    const grab = self.scale(4);
+
+    var sp = tab.tree.spatial(alloc) catch return null;
+    defer sp.deinit(alloc);
+
+    for (tab.tree.nodes, sp.slots, 0..) |node, slot, i| switch (node) {
+        .leaf => {},
+        .split => |s| {
+            const px: winapi.RECT = .{
+                .left = @intFromFloat(@as(f32, @floatCast(slot.x)) * area_w),
+                .top = strip + @as(i32, @intFromFloat(@as(f32, @floatCast(slot.y)) * area_h)),
+                .right = @intFromFloat(@as(f32, @floatCast(slot.x + slot.width)) * area_w),
+                .bottom = strip + @as(i32, @intFromFloat(@as(f32, @floatCast(slot.y + slot.height)) * area_h)),
+            };
+            switch (s.layout) {
+                .horizontal => {
+                    const div_x = px.left + @as(i32, @intFromFloat(
+                        @as(f32, @floatCast(s.ratio)) * @as(f32, @floatFromInt(px.right - px.left)),
+                    ));
+                    if (x >= div_x - grab and x <= div_x + grab and
+                        y >= px.top and y < px.bottom)
+                    {
+                        return .{
+                            .handle = @enumFromInt(i),
+                            .layout = s.layout,
+                            .rect = px,
+                        };
+                    }
+                },
+                .vertical => {
+                    const div_y = px.top + @as(i32, @intFromFloat(
+                        @as(f32, @floatCast(s.ratio)) * @as(f32, @floatFromInt(px.bottom - px.top)),
+                    ));
+                    if (y >= div_y - grab and y <= div_y + grab and
+                        x >= px.left and x < px.right)
+                    {
+                        return .{
+                            .handle = @enumFromInt(i),
+                            .layout = s.layout,
+                            .rect = px,
+                        };
+                    }
+                },
+            }
+        },
+    };
+    return null;
 }
 
 /// The surface of the active tab whose GL host contains the given
@@ -1042,13 +1124,61 @@ pub fn wndProc(
             }
 
             if (pt.y >= 0 and pt.y < self.titlebarHeight()) {
-                // Interactive strip elements get client clicks; the
-                // rest of the strip drags the window.
-                if (self.hitTestStrip(pt.x, pt.y) != .none)
-                    return 1; // HTCLIENT
-                return winapi.HTCAPTION;
+                // The maximize button reports HTMAXBUTTON so Windows 11
+                // shows the snap-layouts flyout on hover; its input
+                // arrives as NC messages handled below. Other strip
+                // elements get normal client clicks; the rest of the
+                // strip drags the window.
+                switch (self.hitTestStrip(pt.x, pt.y)) {
+                    .none => return winapi.HTCAPTION,
+                    .caption => |button| if (button == .maximize)
+                        return winapi.HTMAXBUTTON,
+                    else => {},
+                }
+                return winapi.HTCLIENT;
             }
 
+            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+
+        // NC mouse handling for the HTMAXBUTTON region (snap layouts).
+        winapi.WM_NCMOUSEMOVE => {
+            var pt: winapi.POINT = .{
+                .x = lparamX(lparam),
+                .y = lparamY(lparam),
+            };
+            _ = winapi.ScreenToClient(hwnd, &pt);
+            const hover: Hover = if (pt.y >= 0 and pt.y < self.titlebarHeight())
+                self.hitTestStrip(pt.x, pt.y)
+            else
+                .none;
+            if (!std.meta.eql(hover, self.hover)) {
+                self.hover = hover;
+                _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+            }
+            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+
+        winapi.WM_NCMOUSELEAVE => {
+            if (!std.meta.eql(self.hover, Hover.none)) {
+                self.hover = .none;
+                _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+            }
+            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+
+        winapi.WM_NCLBUTTONDOWN => {
+            // Swallow presses on the maximize button so DefWindowProc
+            // doesn't start a move/size loop; the action happens on up.
+            if (wparam == @as(usize, @intCast(winapi.HTMAXBUTTON))) return 0;
+            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+
+        winapi.WM_NCLBUTTONUP => {
+            if (wparam == @as(usize, @intCast(winapi.HTMAXBUTTON))) {
+                self.captionButtonClick(.maximize);
+                return 0;
+            }
             return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
 
@@ -1141,6 +1271,21 @@ pub fn wndProc(
                 if (winapi.GetCursorPos(&pt) == 0) break :cursor;
                 _ = winapi.ScreenToClient(hwnd, &pt);
                 if (pt.y < self.titlebarHeight()) break :cursor;
+
+                // Resize cursor over (or while dragging) a divider.
+                const divider: ?DividerHit = self.divider_drag orelse
+                    self.dividerAt(pt.x, pt.y);
+                if (divider) |div| {
+                    const id: u16 = switch (div.layout) {
+                        .horizontal => winapi.IDC_SIZEWE,
+                        .vertical => winapi.IDC_SIZENS,
+                    };
+                    if (winapi.loadSystemCursor(id)) |c| {
+                        _ = winapi.SetCursor(c);
+                        return 1;
+                    }
+                }
+
                 const surface = self.surfaceAt(pt.x, pt.y) orelse
                     self.activeSurface() orelse break :cursor;
                 const cursor = surface.cursor orelse break :cursor;
@@ -1232,6 +1377,23 @@ pub fn wndProc(
             const x = lparamX(lparam);
             const y = lparamY(lparam);
 
+            // Live divider drag: update the split ratio in place.
+            if (self.divider_drag) |drag| {
+                const tab = self.activeTab() orelse return 0;
+                const ratio: f32 = switch (drag.layout) {
+                    .horizontal => @as(f32, @floatFromInt(x - drag.rect.left)) /
+                        @as(f32, @floatFromInt(@max(1, drag.rect.right - drag.rect.left))),
+                    .vertical => @as(f32, @floatFromInt(y - drag.rect.top)) /
+                        @as(f32, @floatFromInt(@max(1, drag.rect.bottom - drag.rect.top))),
+                };
+                tab.tree.resizeInPlace(
+                    drag.handle,
+                    @floatCast(std.math.clamp(ratio, 0.05, 0.95)),
+                );
+                self.layoutActiveTab();
+                return 0;
+            }
+
             const hover: Hover = if (y < self.titlebarHeight())
                 self.hitTestStrip(x, y)
             else
@@ -1284,9 +1446,24 @@ pub fn wndProc(
                 return 0;
             }
 
+            const x = lparamX(lparam);
+
+            // Divider drags begin on press in a gap and end on release.
+            if (msg == winapi.WM_LBUTTONDOWN) {
+                if (self.dividerAt(x, cy)) |hit| {
+                    self.divider_drag = hit;
+                    _ = winapi.SetCapture(hwnd);
+                    return 0;
+                }
+            }
+            if (self.divider_drag != null and msg == winapi.WM_LBUTTONUP) {
+                self.divider_drag = null;
+                _ = winapi.ReleaseCapture();
+                return 0;
+            }
+
             // Clicking a split focuses it before the press is
             // delivered.
-            const x = lparamX(lparam);
             const surface = self.surfaceAt(x, cy) orelse
                 self.activeSurface() orelse return 0;
             if (msg == winapi.WM_LBUTTONDOWN or
