@@ -1,0 +1,69 @@
+# GitHub-only release pipeline (yuurei distributes exclusively through
+# GitHub Releases — no winget/Scoop/installers by choice).
+#
+# Push a tag like v0.1.0 to build a ReleaseFast portable zip:
+#   bin/ghostty.exe (+ vendored conpty.dll/OpenConsole.exe)
+#   share/...        (shell integration, terminfo, themes)
+#   LICENSE, README.md, THIRD_PARTY_NOTICES.md
+#
+# Binaries are unsigned; SmartScreen will warn on first run. SHA256
+# checksums are published next to the zip.
+
+on:
+  push:
+    tags: ["v*"]
+
+name: Release
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+
+      - name: Build (ReleaseFast)
+        run: zig build -Doptimize=ReleaseFast
+
+      - name: Smoke test
+        run: zig-out\bin\ghostty.exe +version
+
+      - name: Unit tests
+        run: zig build -Dapp-runtime=none test
+
+      - name: Assemble package
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $pkg = "yuurei-$tag-windows-x64"
+          New-Item -ItemType Directory "$pkg\bin" | Out-Null
+          Copy-Item zig-out\bin\ghostty.exe "$pkg\bin\"
+          Copy-Item vendor\conpty\conpty.dll, vendor\conpty\OpenConsole.exe "$pkg\bin\"
+          Copy-Item -Recurse zig-out\share "$pkg\share"
+          Copy-Item LICENSE "$pkg\"
+          Copy-Item README.md "$pkg\"
+          Copy-Item vendor\conpty\NOTICE.md "$pkg\THIRD_PARTY_NOTICES.md"
+          Compress-Archive -Path $pkg -DestinationPath "$pkg.zip"
+          $hash = (Get-FileHash "$pkg.zip" -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path "$pkg.zip.sha256" -Value "$hash  $pkg.zip"
+          Get-Content "$pkg.zip.sha256"
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          gh release create $tag `
+            "yuurei-$tag-windows-x64.zip" `
+            "yuurei-$tag-windows-x64.zip.sha256" `
+            --title "yuurei $tag" `
+            --generate-notes `
+            --verify-tag

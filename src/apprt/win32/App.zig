@@ -68,6 +68,10 @@ pub fn init(
     // Registers the common-control classes (tooltips for the strip).
     winapi.InitCommonControls();
 
+    // The icon embedded by dist/windows/ghostty.rc (alt-tab, taskbar,
+    // and the tray notify icon).
+    const app_icon = winapi.LoadIconW(hinstance, @ptrFromInt(1));
+
     // One window class for all top-level windows.
     const class: winapi.WNDCLASSEXW = .{
         .style = winapi.CS_HREDRAW | winapi.CS_VREDRAW,
@@ -77,6 +81,8 @@ pub fn init(
         // the GL hosts cover the rest (WM_ERASEBKGND returns 1).
         .hbrBackground = null,
         .lpszClassName = Window.class_name,
+        .hIcon = app_icon,
+        .hIconSm = app_icon,
     };
     if (winapi.RegisterClassExW(&class) == 0) return error.RegisterClassFailed;
 
@@ -742,10 +748,12 @@ fn notifyToast(self: *App, title: []const u8, body: []const u8) void {
             .hWnd = hwnd,
             .uID = 1,
             .uFlags = winapi.NIF_ICON | winapi.NIF_TIP,
-            .hIcon = winapi.LoadIconW(
-                null,
-                @ptrFromInt(@as(usize, winapi.IDI_APPLICATION)),
-            ),
+            // Our embedded icon, falling back to the stock app icon.
+            .hIcon = winapi.LoadIconW(self.hinstance, @ptrFromInt(1)) orelse
+                winapi.LoadIconW(
+                    null,
+                    @ptrFromInt(@as(usize, winapi.IDI_APPLICATION)),
+                ),
         };
         const tip = std.unicode.utf8ToUtf16LeStringLiteral("Ghostty");
         @memcpy(nid.szTip[0..tip.len], tip);

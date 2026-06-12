@@ -75,6 +75,22 @@ auto-update, Mica, ARM64. See the Phase 3/4
 checklists in [`WINDOWS_PORT_PLAN.md`](WINDOWS_PORT_PLAN.md) for the
 live list.
 
+## Installing
+
+Grab the latest zip from
+[Releases](https://github.com/marlboro-red/yuurei/releases), extract it
+anywhere, and run `bin\ghostty.exe`. The zip is portable — no installer,
+no registry writes. SHA256 checksums are published alongside each zip.
+
+The binaries are unsigned (distribution is GitHub-only by design), so
+SmartScreen will warn on first run: choose "More info" → "Run anyway".
+
+The zip bundles `conpty.dll` and `OpenConsole.exe` from the
+[microsoft/terminal](https://github.com/microsoft/terminal) project
+(MIT, see `THIRD_PARTY_NOTICES.md`) — a much newer pseudoconsole than
+the one shipped in Windows, measurably faster on output bursts. Delete
+them and yuurei falls back to the in-box ConPTY.
+
 ## Building
 
 Requirements: [Zig](https://ziglang.org/) — the version is pinned in
@@ -126,6 +142,11 @@ yuurei is a fork of [Ghostty](https://github.com/ghostty-org/ghostty),
 created by Mitchell Hashimoto and the Ghostty contributors. All credit for
 the terminal core, renderer, font stack, and overall architecture belongs to
 the upstream project.
+
+The yuurei icon is a color-inverted derivative of upstream Ghostty's
+MIT-licensed icon artwork (a fitting treatment for a yūrei). If the
+upstream project ever publishes trademark or brand guidelines that
+conflict with this use, the icon will be replaced.
 
 Like upstream, this repository is licensed under the MIT license — see
 [`LICENSE`](LICENSE) (Copyright (c) 2024 Mitchell Hashimoto, Ghostty
