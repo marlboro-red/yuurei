@@ -12,6 +12,7 @@ const terminal = @import("../../terminal/main.zig");
 const CoreSurface = @import("../../Surface.zig");
 const App = @import("App.zig");
 const Window = @import("Window.zig");
+const InspectorWindow = @import("InspectorWindow.zig");
 const winapi = @import("winapi.zig");
 
 const log = std.log.scoped(.win32);
@@ -65,6 +66,10 @@ title_text: ?[:0]const u8 = null,
 /// by the Window on WM_SETCURSOR. System cursors are shared objects
 /// and are never destroyed.
 cursor: ?winapi.HCURSOR = null,
+
+/// The inspector window for this surface while one is open. It is
+/// owned by us: closed (and the core inspector deactivated) on deinit.
+inspector: ?*InspectorWindow = null,
 
 /// Reference count, owned by the split trees that contain this
 /// surface (and transiently by tree operations). The surface
@@ -169,6 +174,10 @@ pub fn init(self: *Self, app: *App, window: *Window) !void {
 }
 
 pub fn deinit(self: *Self) void {
+    // The inspector window deactivates the core inspector, so it must
+    // go before the core surface does.
+    if (self.inspector) |inspector| inspector.destroy();
+
     if (self.title_text) |t| self.core_surface.alloc.free(t);
 
     // Remove ourselves from the list of known surfaces in the app.

@@ -14,6 +14,7 @@ const CoreSurface = @import("../../Surface.zig");
 const Surface = @import("Surface.zig");
 const Window = @import("Window.zig");
 const CommandPalette = @import("CommandPalette.zig");
+const InspectorWindow = @import("InspectorWindow.zig");
 const winapi = @import("winapi.zig");
 
 const log = std.log.scoped(.win32);
@@ -89,6 +90,16 @@ pub fn init(
         .lpszClassName = CommandPalette.class_name,
     };
     if (winapi.RegisterClassExW(&palette_class) == 0) return error.RegisterClassFailed;
+
+    // The inspector window class (CS_OWNDC for its WGL context).
+    const inspector_class: winapi.WNDCLASSEXW = .{
+        .style = winapi.CS_OWNDC,
+        .lpfnWndProc = InspectorWindow.wndProc,
+        .hInstance = hinstance,
+        .hbrBackground = null,
+        .lpszClassName = InspectorWindow.class_name,
+    };
+    if (winapi.RegisterClassExW(&inspector_class) == 0) return error.RegisterClassFailed;
 
     // Load our configuration
     var config = try Config.load(core_app.alloc);
@@ -485,6 +496,40 @@ pub fn performAction(
         .toggle_background_opacity => switch (target) {
             .app => return false,
             .surface => |surface| surface.rt_surface.window.toggleOpacity(),
+        },
+
+        .inspector => switch (target) {
+            .app => return false,
+            .surface => |surface| {
+                const rt_surface = surface.rt_surface;
+                switch (value) {
+                    .toggle => if (rt_surface.inspector) |inspector| {
+                        inspector.destroy();
+                    } else {
+                        rt_surface.inspector = try InspectorWindow.create(
+                            self.core_app.alloc,
+                            rt_surface,
+                        );
+                    },
+                    .show => if (rt_surface.inspector == null) {
+                        rt_surface.inspector = try InspectorWindow.create(
+                            self.core_app.alloc,
+                            rt_surface,
+                        );
+                    },
+                    .hide => if (rt_surface.inspector) |inspector| {
+                        inspector.destroy();
+                    },
+                }
+            },
+        },
+
+        // The inspector has new data; repaint it on the next tick.
+        .render_inspector => switch (target) {
+            .app => return false,
+            .surface => |surface| if (surface.rt_surface.inspector) |inspector| {
+                _ = winapi.InvalidateRect(inspector.hwnd, null, winapi.FALSE);
+            },
         },
 
         // Open the config file in the default text editor (notepad as
