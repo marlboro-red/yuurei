@@ -731,11 +731,36 @@ item.
   overlapping the taskbar are occlusion-disqualified from promotion
   (a test-methodology trap).
 
+- [x] **Wait-before-sample present pacing (2026-06-13)** — from a
+  deep-research pass (106 agents, 22 verified findings; primary
+  sources: Microsoft flip-model/latency docs, microsoft/terminal
+  PR #6435, NVIDIA KB a_id/5157, PresentMon README). The verified
+  Windows Terminal pattern: frame-latency waitable flag on the
+  swapchain, default per-swapchain latency 1, wait on the waitable
+  immediately BEFORE sampling terminal state on every damage event,
+  Present(1,0) without blocking. Both of our previous designs were
+  wrong in opposite directions (wait after sampling; then Present as
+  the throttle) — each displays stale state. The first-ever wait must
+  not be skipped (the semaphore starts full). Research also verified:
+  composed-flip costs ~one vblank vs promoted MPO frames; DComp
+  Commit is not on the per-present path (ours is already
+  commit-free); the NVIDIA MPO registry kill switch is
+  HKLM\SOFTWARE\Microsoft\Windows\Dwm OverlayTestMode=5 (checked:
+  NOT set on the dev machine, so session variance here is plane
+  contention); DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING + interval 0 can
+  undercut even the waitable on MPO systems (candidate for a
+  min-latency mode behind window-vsync=false).
+
+**Known issue (pre-existing, not flip-related):** the shell prompt is
+not repainted after window resizes — reproduced identically on the
+legacy SwapBuffers path. Likely ConPTY-reflow interaction with our
+resize pipeline; needs its own investigation.
+
 Candidate future work: per-pixel transparency on the DComp visual
 (premultiplied alpha — background-opacity without the layered-window
-path), applying the deep-research findings on input-to-present
-scheduling, and re-running this table after upstream merges (the
-suite lives in this section).
+path), ALLOW_TEARING min-latency mode, the post-resize prompt repaint
+issue, and re-running this table after upstream merges (the suite
+lives in this section).
 
 ---
 
