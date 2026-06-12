@@ -34,6 +34,11 @@ active_tab: usize = 0,
 /// the actual teardown outside the window procedure.
 should_close: bool = false,
 
+/// Quick-terminal mode: a topmost tool window docked to the top of the
+/// primary monitor that hides on focus loss instead of stacking like a
+/// normal window.
+quick: bool = false,
+
 /// What the mouse hovers in the title strip, for hover painting.
 hover: Hover = .none,
 
@@ -64,20 +69,29 @@ const tab_width_logical: i32 = 190;
 const new_tab_width_logical: i32 = 36;
 const modal_tick_timer_id: usize = 1;
 
+pub const CreateOptions = struct {
+    quick: bool = false,
+};
+
 /// Create a window with one tab, show it, and return it.
-pub fn create(alloc: Allocator, app: *App) !*Window {
+pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
     const self = try alloc.create(Window);
     errdefer alloc.destroy(self);
 
+    // Quick terminals dock to the top of the primary monitor: topmost,
+    // no taskbar button, full width, ~40% height.
+    const quick_w = winapi.GetSystemMetrics(winapi.SM_CXSCREEN);
+    const quick_h = @divTrunc(winapi.GetSystemMetrics(winapi.SM_CYSCREEN) * 2, 5);
+
     const hwnd = winapi.CreateWindowExW(
-        0,
+        if (opts.quick) winapi.WS_EX_TOOLWINDOW | winapi.WS_EX_TOPMOST else 0,
         class_name,
         std.unicode.utf8ToUtf16LeStringLiteral("Ghostty"),
         winapi.WS_OVERLAPPEDWINDOW,
-        winapi.CW_USEDEFAULT,
-        winapi.CW_USEDEFAULT,
-        800,
-        600,
+        if (opts.quick) 0 else winapi.CW_USEDEFAULT,
+        if (opts.quick) 0 else winapi.CW_USEDEFAULT,
+        if (opts.quick) quick_w else 800,
+        if (opts.quick) quick_h else 600,
         null,
         null,
         app.hinstance,
@@ -85,7 +99,7 @@ pub fn create(alloc: Allocator, app: *App) !*Window {
     ) orelse return error.CreateWindowFailed;
     errdefer _ = winapi.DestroyWindow(hwnd);
 
-    self.* = .{ .app = app, .hwnd = hwnd };
+    self.* = .{ .app = app, .hwnd = hwnd, .quick = opts.quick };
 
     // Wire the window procedure. Handlers tolerate an empty tab list,
     // so this is safe before the first tab exists.
@@ -813,6 +827,11 @@ pub fn wndProc(
                 tab.core_surface.focusCallback(msg == winapi.WM_SETFOCUS) catch |err| {
                     log.err("error in focus callback err={}", .{err});
                 };
+            }
+
+            // Quick terminals hide when they lose focus.
+            if (self.quick and msg == winapi.WM_KILLFOCUS) {
+                _ = winapi.ShowWindow(hwnd, winapi.SW_HIDE);
             }
             return 0;
         },

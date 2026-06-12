@@ -458,9 +458,22 @@ Working down the gap list from the macOS comparison audit:
   OSC 52 reads/writes now prompt with a native yes/no warning dialog,
   defaulting to No. Verified live: multi-line paste into cmd.exe raised
   the dialog; No blocked the paste.
-- Remaining from the audit, in rough order: quick terminal (global
-  hotkey + dropdown), splits, command palette, inspector wiring,
-  background opacity/blur, settings GUI, auto-update.
+- [x] Quick terminal + global keybinds (2026-06-12): `global:`-flagged
+  keybinds register as Win32 system hotkeys (`RegisterHotKey`, null-hwnd
+  thread messages handled in the run loop; trigger→VK mapping for
+  letters/digits/F-keys/backquote/space); app-scoped hotkey actions
+  dispatch through `core_app.performAction`. The quick terminal is a
+  topmost tool window docked to the top of the primary monitor (full
+  width, 40% height) that hides on focus loss, toggled by
+  `toggle_quick_terminal`; a hidden quick terminal never keeps the app
+  alive as the last window. Verified live: a real system-wide
+  Ctrl+Alt+G summoned it (0,0 full-width) and a second fire hid it.
+  *(Also fixed by this work's testing: `LoadCursorW` MAKEINTRESOURCE
+  ids tripped Debug alignment checks for odd ids like IDC_IBEAM —
+  latent crash on any text-cursor mouse shape.)*
+- Remaining from the audit, in rough order: splits, command palette,
+  inspector wiring, background opacity/blur, settings GUI, auto-update,
+  WinRT toasts.
 
 ### Phase 4 — Ship + polish strictly by user pain (ongoing)
 

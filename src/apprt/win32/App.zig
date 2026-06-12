@@ -6,6 +6,7 @@ const App = @This();
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const apprt = @import("../../apprt.zig");
+const input = @import("../../input.zig");
 const configpkg = @import("../../config.zig");
 const Config = configpkg.Config;
 const CoreApp = @import("../../App.zig");
@@ -30,6 +31,15 @@ thread_id: winapi.DWORD,
 
 /// All open windows (tab containers).
 windows: std.ArrayList(*Window) = .empty,
+
+/// The quick terminal window, if it has been summoned. It may be
+/// hidden; toggling shows/hides it.
+quick: ?*Window = null,
+
+/// Actions for registered global hotkeys, indexed by hotkey id - 1.
+/// The inner slices are owned (duped from the config at registration,
+/// freed at unregistration).
+hotkey_actions: std.ArrayList([]const input.Binding.Action) = .empty,
 
 /// Flips to true to quit on the next event loop tick.
 quit: bool = false,
@@ -103,12 +113,151 @@ pub fn init(
 
     // Make sure the loop processes the queued message immediately.
     self.wakeup();
+
+    // Register `global:` keybinds as system-wide hotkeys.
+    self.registerGlobalHotkeys();
 }
 
 pub fn terminate(self: *App) void {
+    self.unregisterGlobalHotkeys();
+    self.hotkey_actions.deinit(self.core_app.alloc);
     while (self.windows.pop()) |window| window.destroy();
     self.windows.deinit(self.core_app.alloc);
     self.config.deinit();
+}
+
+/// Register every `global:`-flagged keybind as a Win32 system hotkey.
+/// Called at startup and again after config reloads.
+fn registerGlobalHotkeys(self: *App) void {
+    self.unregisterGlobalHotkeys();
+
+    var it = self.config.keybind.set.bindings.iterator();
+    while (it.next()) |entry| {
+        const leaf = switch (entry.value_ptr.*) {
+            .leader => continue,
+            inline .leaf, .leaf_chained => |leaf| leaf.generic(),
+        };
+        if (!leaf.flags.global) continue;
+
+        const vk = triggerToVk(entry.key_ptr.*) orelse {
+            log.warn(
+                "global keybind cannot map to a Win32 hotkey, ignoring trigger={any}",
+                .{entry.key_ptr.*},
+            );
+            continue;
+        };
+
+        const mods = entry.key_ptr.mods;
+        var win_mods: winapi.UINT = winapi.MOD_NOREPEAT;
+        if (mods.ctrl) win_mods |= winapi.MOD_CONTROL;
+        if (mods.alt) win_mods |= winapi.MOD_ALT;
+        if (mods.shift) win_mods |= winapi.MOD_SHIFT;
+        if (mods.super) win_mods |= winapi.MOD_WIN;
+
+        const actions = self.core_app.alloc.dupe(
+            input.Binding.Action,
+            leaf.actionsSlice(),
+        ) catch continue;
+        self.hotkey_actions.append(self.core_app.alloc, actions) catch {
+            self.core_app.alloc.free(actions);
+            continue;
+        };
+        const id: i32 = @intCast(self.hotkey_actions.items.len);
+        if (winapi.RegisterHotKey(null, id, win_mods, vk) == 0) {
+            log.warn("RegisterHotKey failed (in use by another app?) trigger={any}", .{
+                entry.key_ptr.*,
+            });
+            if (self.hotkey_actions.pop()) |slice| self.core_app.alloc.free(slice);
+        } else {
+            log.info("registered global hotkey id={} trigger={any}", .{
+                id,
+                entry.key_ptr.*,
+            });
+        }
+    }
+}
+
+fn unregisterGlobalHotkeys(self: *App) void {
+    var id: i32 = @intCast(self.hotkey_actions.items.len);
+    while (id > 0) : (id -= 1) _ = winapi.UnregisterHotKey(null, id);
+    while (self.hotkey_actions.pop()) |slice| self.core_app.alloc.free(slice);
+}
+
+/// Map a keybind trigger to a Win32 virtual key for RegisterHotKey.
+fn triggerToVk(trigger: input.Binding.Trigger) ?winapi.UINT {
+    return switch (trigger.key) {
+        .catch_all => null,
+        .unicode => |cp| switch (cp) {
+            'a'...'z' => @as(winapi.UINT, cp - 'a' + 'A'),
+            '0'...'9' => @as(winapi.UINT, cp),
+            '`' => 0xC0, // VK_OEM_3
+            ' ' => 0x20,
+            else => null,
+        },
+        .physical => |k| switch (k) {
+            .backquote => 0xC0,
+            .space => 0x20,
+            .escape => 0x1B,
+            inline else => |key_tag| vk: {
+                const name = @tagName(key_tag);
+                if (name.len == 5 and std.mem.startsWith(u8, name, "key_"))
+                    break :vk @as(winapi.UINT, std.ascii.toUpper(name[4]));
+                if (name.len == 7 and std.mem.startsWith(u8, name, "digit_"))
+                    break :vk @as(winapi.UINT, name[6]);
+                if (name.len >= 2 and name[0] == 'f' and std.ascii.isDigit(name[1])) {
+                    const n = std.fmt.parseInt(u8, name[1..], 10) catch break :vk null;
+                    if (n >= 1 and n <= 24) break :vk winapi.VK_F1 + n - 1;
+                }
+                break :vk null;
+            },
+        },
+    };
+}
+
+/// Dispatch a WM_HOTKEY by id: app-scoped actions go through the core;
+/// anything else is ignored with a log (most surface-scoped actions
+/// make no sense without focus).
+fn handleHotkey(self: *App, id: usize) void {
+    if (id == 0 or id > self.hotkey_actions.items.len) return;
+    for (self.hotkey_actions.items[id - 1]) |action| {
+        const scoped = action.scoped(.app) orelse {
+            log.info(
+                "global hotkey action is not app-scoped, ignoring action={any}",
+                .{action},
+            );
+            continue;
+        };
+        self.core_app.performAction(self, scoped) catch |err| {
+            log.err("error performing global hotkey action err={}", .{err});
+        };
+    }
+}
+
+/// Show, focus, or hide the quick terminal.
+fn toggleQuickTerminal(self: *App) !void {
+    if (self.quick) |quick| {
+        // Window may have been closed via its tab/close button and
+        // destroyed by the run loop sweep; treat a stale pointer as
+        // gone by checking our list.
+        for (self.windows.items) |w| {
+            if (w == quick) {
+                if (winapi.IsWindowVisible(quick.hwnd) != 0) {
+                    _ = winapi.ShowWindow(quick.hwnd, winapi.SW_HIDE);
+                } else {
+                    _ = winapi.ShowWindow(quick.hwnd, winapi.SW_SHOW);
+                    _ = winapi.SetForegroundWindow(quick.hwnd);
+                }
+                return;
+            }
+        }
+        self.quick = null;
+    }
+
+    const window = try Window.create(self.core_app.alloc, self, .{ .quick = true });
+    errdefer window.destroy();
+    try self.windows.append(self.core_app.alloc, window);
+    self.quick = window;
+    _ = winapi.SetForegroundWindow(window.hwnd);
 }
 
 /// Run the event loop. This doesn't return until the app exits.
@@ -119,7 +268,11 @@ pub fn run(self: *App) !void {
         var msg: winapi.MSG = undefined;
         const result = winapi.GetMessageW(&msg, null, 0, 0);
         if (result == -1) return error.GetMessageFailed;
-        if (result == 0) self.quit = true else {
+        if (result == 0) self.quit = true else if (msg.message == winapi.WM_HOTKEY) {
+            // Hotkeys registered with a null hwnd arrive as thread
+            // messages; DispatchMessage would drop them.
+            self.handleHotkey(msg.wParam);
+        } else {
             _ = winapi.TranslateMessage(&msg);
             _ = winapi.DispatchMessageW(&msg);
         }
@@ -129,6 +282,10 @@ pub fn run(self: *App) !void {
         while (winapi.PeekMessageW(&msg, null, 0, 0, winapi.PM_REMOVE) != 0) {
             if (msg.message == winapi.WM_QUIT) {
                 self.quit = true;
+                continue;
+            }
+            if (msg.message == winapi.WM_HOTKEY) {
+                self.handleHotkey(msg.wParam);
                 continue;
             }
             _ = winapi.TranslateMessage(&msg);
@@ -157,9 +314,21 @@ pub fn run(self: *App) !void {
             }
 
             if (window.tabs.items.len == 0) {
+                if (self.quick == window) self.quick = null;
                 window.destroy();
                 _ = self.windows.orderedRemove(wi);
             } else wi += 1;
+        }
+
+        // A hidden quick terminal must not keep the app alive as an
+        // invisible zombie: when it's all that remains, close it too.
+        if (self.windows.items.len > 0) only_quick: {
+            for (self.windows.items) |window| {
+                if (!window.quick) break :only_quick;
+                if (winapi.IsWindowVisible(window.hwnd) != 0) break :only_quick;
+            }
+            for (self.windows.items) |window| window.should_close = true;
+            continue;
         }
 
         // If the tick caused us to quit, then we're done.
@@ -247,6 +416,8 @@ pub fn performAction(
         },
 
         .reload_config => try self.reloadConfig(target, value),
+
+        .toggle_quick_terminal => try self.toggleQuickTerminal(),
 
         // Open the config file in the default text editor (notepad as
         // the universal fallback; .ghostty has no file association).
@@ -339,10 +510,13 @@ fn reloadConfig(
     // Update the existing config, be sure to clean up the old one.
     self.config.deinit();
     self.config = config;
+
+    // Global hotkeys may have changed.
+    self.registerGlobalHotkeys();
 }
 
 fn newSurface(self: *App, parent_: ?*CoreSurface) !*Surface {
-    const window = try Window.create(self.core_app.alloc, self);
+    const window = try Window.create(self.core_app.alloc, self, .{});
     errdefer window.destroy();
     try self.windows.append(self.core_app.alloc, window);
 

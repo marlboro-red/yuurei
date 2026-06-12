@@ -305,7 +305,10 @@ pub extern "user32" fn SetWindowLongPtrW(HWND, i32, isize) callconv(.winapi) isi
 pub extern "user32" fn GetWindowLongPtrW(HWND, i32) callconv(.winapi) isize;
 pub extern "user32" fn GetKeyState(i32) callconv(.winapi) i16;
 pub extern "user32" fn MapVirtualKeyW(UINT, UINT) callconv(.winapi) UINT;
-pub extern "user32" fn LoadCursorW(?HINSTANCE, ?[*:0]const u16) callconv(.winapi) ?HCURSOR;
+// The name parameter is untyped because MAKEINTRESOURCE ids are
+// deliberately invalid (often odd-valued) pointers; a u16 pointer type
+// would trip alignment checks.
+pub extern "user32" fn LoadCursorW(?HINSTANCE, ?*align(1) const anyopaque) callconv(.winapi) ?HCURSOR;
 pub extern "user32" fn SetCursor(?HCURSOR) callconv(.winapi) ?HCURSOR;
 pub extern "user32" fn SetCapture(HWND) callconv(.winapi) ?HWND;
 pub extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
@@ -324,6 +327,25 @@ pub extern "kernel32" fn GlobalAlloc(UINT, usize) callconv(.winapi) ?HANDLE;
 pub extern "kernel32" fn GlobalLock(HANDLE) callconv(.winapi) ?*anyopaque;
 pub extern "kernel32" fn GlobalUnlock(HANDLE) callconv(.winapi) BOOL;
 pub extern "kernel32" fn GlobalFree(HANDLE) callconv(.winapi) ?HANDLE;
+
+// Global hotkeys
+pub const WM_HOTKEY: UINT = 0x0312;
+pub const MOD_ALT: UINT = 0x0001;
+pub const MOD_CONTROL: UINT = 0x0002;
+pub const MOD_SHIFT: UINT = 0x0004;
+pub const MOD_WIN: UINT = 0x0008;
+pub const MOD_NOREPEAT: UINT = 0x4000;
+pub extern "user32" fn RegisterHotKey(?HWND, i32, UINT, UINT) callconv(.winapi) BOOL;
+pub extern "user32" fn UnregisterHotKey(?HWND, i32) callconv(.winapi) BOOL;
+
+// Quick terminal window styling/placement
+pub const WS_EX_TOOLWINDOW: DWORD = 0x00000080;
+pub const WS_EX_TOPMOST: DWORD = 0x00000008;
+pub const SW_HIDE: i32 = 0;
+pub const SW_SHOW: i32 = 5;
+pub const SM_CXSCREEN: i32 = 0;
+pub const SM_CYSCREEN: i32 = 1;
+pub extern "user32" fn GetSystemMetrics(i32) callconv(.winapi) i32;
 
 pub const MB_YESNO: UINT = 0x00000004;
 pub const MB_ICONWARNING: UINT = 0x00000030;
@@ -480,6 +502,7 @@ pub fn setSwapInterval(interval: i32) bool {
 pub extern "user32" fn IsWindowVisible(HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn MessageBeep(UINT) callconv(.winapi) BOOL;
 pub extern "user32" fn GetForegroundWindow() callconv(.winapi) ?HWND;
+pub extern "user32" fn SetForegroundWindow(HWND) callconv(.winapi) BOOL;
 
 pub const FLASHWINFO = extern struct {
     cbSize: UINT = @sizeOf(FLASHWINFO),
