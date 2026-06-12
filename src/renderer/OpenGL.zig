@@ -231,6 +231,13 @@ pub fn threadEnter(self: *const OpenGL, surface: *apprt.Surface) !void {
         apprt.win32 => {
             try surface.glMakeCurrent();
             try prepareContext(&apprt.win32.winapi.glGetProcAddress);
+
+            // Throttle presentation to the refresh rate. Without this
+            // SwapBuffers spins unthrottled, which can run the GPU hot
+            // enough to trigger driver timeouts (LiveKernelEvent 141).
+            if (!apprt.win32.winapi.setSwapInterval(1)) {
+                log.warn("wglSwapIntervalEXT unavailable; presentation unthrottled", .{});
+            }
         },
     }
 }
@@ -300,9 +307,14 @@ pub fn drawFrameEnd(self: *OpenGL) void {
     _ = self;
 
     // We own the swap chain on win32: present the default framebuffer.
+    // Hidden windows (background tabs) skip presentation entirely; with
+    // vsync on, presenting an invisible window would also block this
+    // renderer thread on the compositor for no benefit.
     if (comptime apprt.runtime == apprt.win32) {
         const winapi = apprt.win32.winapi;
         if (winapi.wglGetCurrentDC()) |hdc| {
+            const hwnd = winapi.WindowFromDC(hdc);
+            if (hwnd != null and winapi.IsWindowVisible(hwnd.?) == 0) return;
             if (winapi.SwapBuffers(hdc) == 0) {
                 log.warn("SwapBuffers failed", .{});
             }

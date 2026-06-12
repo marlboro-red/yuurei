@@ -443,6 +443,22 @@ pub extern "opengl32" fn wglMakeCurrent(?HDC, ?HGLRC) callconv(.winapi) BOOL;
 pub extern "opengl32" fn wglGetProcAddress([*:0]const u8) callconv(.winapi) ?GlProc;
 pub extern "opengl32" fn wglGetCurrentDC() callconv(.winapi) ?HDC;
 
+/// Set the WGL swap interval (vsync) for the current context. Requires
+/// a context to be current on this thread. Returns false if the
+/// extension is unavailable. Without this, SwapBuffers runs unthrottled
+/// and a busy renderer can spin the GPU hard enough to trip driver
+/// timeouts (observed as LiveKernelEvent 141 bursts).
+pub fn setSwapInterval(interval: i32) bool {
+    const SwapIntervalFn = *const fn (i32) callconv(.winapi) BOOL;
+    const proc = wglGetProcAddress("wglSwapIntervalEXT") orelse return false;
+    const v = @intFromPtr(proc);
+    if (v <= 3 or v == @as(usize, @bitCast(@as(isize, -1)))) return false;
+    const swap_interval: SwapIntervalFn = @ptrCast(proc);
+    return swap_interval(interval) != 0;
+}
+
+pub extern "user32" fn IsWindowVisible(HWND) callconv(.winapi) BOOL;
+
 /// GL loader suitable for glad: wglGetProcAddress only resolves extension
 /// and GL>1.1 functions; GL 1.0/1.1 entry points come from opengl32.dll
 /// itself. wglGetProcAddress is also documented to return the sentinel

@@ -355,9 +355,31 @@ the start of Phase 3's runtime, built skeleton-first:
   `new_tab` opens a window as an interim (honest log) until the real
   tab strip lands with the custom-frame work; `close_window` wired to
   the deferred-close path.
-- **Exit criterion (still open):** full interactive vttest (needs WSL or
-  a POSIX host); screenshot in the README. Everything else on the Phase
-  2 list is done.
+- [x] **vttest through WSL inside the live window (2026-06-12)**: WSL1 +
+  Ubuntu installed (firmware virtualization disabled on the dev machine,
+  so WSL2 unavailable); vttest 2.7 driven interactively inside Ghostty.
+  Results: test 1 cursor movements — E-frame screen pixel-perfect,
+  autowrap screen complete I–Z/i–z margins in order; menu 11.6 ISO-6429
+  colors — full 64-combination fg/bg matrix correct in both bright
+  variants; menu 11.8 xterm set-window-title — OSC title flowed
+  WSL→ConPTY→core→strip and the OS window title matched exactly.
+  (Methodology note: screenshot captures can catch screens mid-redraw;
+  judge only settled screens.)
+- **Exit criterion (still open):** screenshot in the README. Everything
+  else on the Phase 2 list is done.
+
+**Incident (2026-06-12): GPU driver timeouts (LiveKernelEvent 141).**
+Hours of accumulated test instances triggered bursts of video-engine
+timeout kernel events (WER `Kernel_141` reports), destabilizing the
+whole desktop (GPU device-loss kills unrelated apps). Two win32 apprt
+defects were the likely trigger, both fixed:
+1. The swap interval was never set — config `vsync = true` was ignored
+   and SwapBuffers ran unthrottled. Now `wglSwapIntervalEXT(1)` on
+   renderer-thread enter (warns if unavailable).
+2. Hidden tab hosts kept presenting; drawFrameEnd now skips SwapBuffers
+   for invisible windows.
+Post-fix: ~2% of one core at idle, no driver events. This validates the
+plan's "GL driver quality" risk-register entry — on NVIDIA, not Intel.
 
 ### Phase 3 — Native Win32 apprt, completed (2–3 months)
 
