@@ -702,10 +702,32 @@ item.
   splits, resizes, both panes presenting flip-model, app-side latency
   unchanged.
 
-Candidate future work: DirectComposition surface (per-pixel
-transparency/blur/Mica on top of the new swapchain), PresentMon
-verification of the compositor-side win, and re-running this table
-after upstream merges (the suite lives in this section).
+- [x] **PresentMon benchmarking + event-driven present fix
+  (2026-06-13)**: instrumented three-way comparison (yuurei flip vs
+  legacy vs Windows Terminal). Findings: (1) the first flip build
+  felt *slower* because the frame-latency waitable was waited at
+  frame start (game-loop pattern) — replaced with
+  IDXGIDevice1::SetMaximumFrameLatency(1) and no wait, so Present
+  alone throttles; (2) our swapchain presents as "Composed: Flip" but
+  never promotes to the MPO hardware-overlay path ("Hardware
+  Composed: Independent Flip") where WT spends 60% of frames and gets
+  its 16.6 ms median — neither DXGI_SCALING_NONE nor
+  WS_EX_NOREDIRECTIONBITMAP hosts (both kept; both are correct
+  hygiene) unblocks an hwnd-bound child-window swapchain; (3) the
+  legacy blt path's PresentMon numbers under-report (tracking ends at
+  the copy). GHOSTTY_NO_FLIP escapes to the legacy path at runtime.
+
+**Next presentation arc — DirectComposition**: WT's swapchain is a
+composition swapchain (CreateSwapChainForComposition) on a DComp
+visual, which is what DWM promotes to hardware overlays. Moving our
+swapchain onto a DComp visual targeting the host window is the
+remaining step for WT-parity display latency, and brings per-pixel
+transparency/blur/Mica along. Vtable care needed: dcomp interfaces
+have overloaded methods whose vtable order must be taken from an
+authoritative binding (windows-rs), not guessed.
+
+Candidate future work: the DComp arc above, and re-running this
+table after upstream merges (the suite lives in this section).
 
 ---
 
