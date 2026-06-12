@@ -816,6 +816,13 @@ fn setupPwsh(
         "{s}/shell-integration/pwsh/ghostty.ps1",
         .{resource_dir},
     );
+
+    // Release zips extracted by Explorer carry the Mark-of-the-Web on
+    // every file, and PowerShell's default RemoteSigned policy then
+    // refuses our unsigned script. Unblock it before dot-sourcing.
+    if (comptime builtin.target.os.tag == .windows) {
+        internal_os.windows.unblockFile(script);
+    }
     const quoted = try std.mem.replaceOwned(u8, alloc, script, "'", "''");
 
     try args.append(alloc, "-NoExit");

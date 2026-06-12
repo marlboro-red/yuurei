@@ -43,6 +43,28 @@ pub fn attachParentConsole() void {
     _ = exp.kernel32.AttachConsole(exp.ATTACH_PARENT_PROCESS);
 }
 
+/// Remove the Mark-of-the-Web (the Zone.Identifier alternate data
+/// stream) from a file we ship and trust. Files extracted from a
+/// downloaded release zip inherit the mark, and PowerShell's default
+/// RemoteSigned policy then refuses to run our unsigned shell
+/// integration script. The user already trusted the application
+/// itself (SmartScreen) and the script ships beside it, so unblocking
+/// it at injection time matches their intent. Failure (no mark
+/// present, file read-only) is ignored.
+pub fn unblockFile(path: []const u8) void {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const ads = std.fmt.bufPrint(
+        &buf,
+        "{s}:Zone.Identifier",
+        .{path},
+    ) catch return;
+
+    var wbuf: [std.fs.max_path_bytes]u16 = undefined;
+    const len = std.unicode.utf8ToUtf16Le(wbuf[0 .. wbuf.len - 1], ads) catch return;
+    wbuf[len] = 0;
+    _ = exp.kernel32.DeleteFileW(wbuf[0..len :0]);
+}
+
 /// Whether an executable can be found via the standard process search
 /// path (the same order CreateProcessW uses).
 pub fn isOnPath(name: []const u8) bool {
@@ -232,6 +254,9 @@ pub const exp = struct {
             lpBuffer: windows.LPWSTR,
         ) callconv(.winapi) windows.DWORD;
         pub extern "kernel32" fn GetConsoleWindow() callconv(.winapi) ?windows.HWND;
+        pub extern "kernel32" fn DeleteFileW(
+            lpFileName: [*:0]const u16,
+        ) callconv(.winapi) windows.BOOL;
         pub extern "kernel32" fn LoadLibraryExW(
             lpLibFileName: [*:0]const u16,
             hFile: ?windows.HANDLE,
