@@ -581,8 +581,23 @@ user-facing gaps they exposed:
 
 ### Phase 4 — Ship + polish strictly by user pain (ongoing)
 
-- Code signing, winget/Scoop manifests, crash reporting (Sentry supports
-  Windows minidumps; upstream already integrates sentry).
+**Distribution decision (2026-06-12): GitHub Releases only.** No code
+signing, no winget/Scoop, no installer — by choice. Landed:
+
+- [x] Inverted-icon branding (derivative of upstream's MIT artwork,
+  attribution + swap-on-request commitment in README), embedded via
+  dist/windows/ghostty.rc with a real VERSIONINFO (ProductName yuurei,
+  0.1.0), wired to the window class and tray icon.
+- [x] vendor/conpty: conpty.dll + OpenConsole.exe from
+  microsoft/terminal (MIT, NOTICE.md), shipped beside the exe in
+  releases. Best 10MB burst with it: 885 ms vs 1.25–1.5 s in-box
+  baseline (noisy machine, but the best time recorded).
+- [x] .github/workflows/release.yml: v* tag → ReleaseFast build +
+  suite → portable zip (bin/, share/, LICENSE, README,
+  THIRD_PARTY_NOTICES) + SHA256 → GitHub Release.
+
+Still open if user pain demands: crash reporting (Sentry supports
+Windows minidumps; upstream already integrates sentry).
 - Then, **in order of observed user pain, not spec order:** splits; DirectWrite
   fallback hardening; quick-terminal global hotkey; tray; jump lists;
   default-terminal registration; D3D11 backend **only when GL driver telemetry
