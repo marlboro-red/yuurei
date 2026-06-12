@@ -131,6 +131,7 @@ pub const MAPVK_VK_TO_CHAR: UINT = 2;
 // Messages
 pub const WM_NULL: UINT = 0x0000;
 pub const WM_DESTROY: UINT = 0x0002;
+pub const WM_MOVE: UINT = 0x0003;
 pub const WM_SIZE: UINT = 0x0005;
 pub const WM_SETFOCUS: UINT = 0x0007;
 pub const WM_KILLFOCUS: UINT = 0x0008;
@@ -556,6 +557,7 @@ pub extern "user32" fn DrawTextW(HDC, [*:0]const u16, i32, *RECT, UINT) callconv
 
 pub const TRANSPARENT_BK: i32 = 1;
 pub const DT_CENTER: UINT = 0x0001;
+pub const DT_RIGHT: UINT = 0x0002;
 pub const DT_VCENTER: UINT = 0x0004;
 pub const DT_SINGLELINE: UINT = 0x0020;
 pub const DT_LEFT: UINT = 0x0000;

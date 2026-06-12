@@ -15,6 +15,7 @@ const Surface = @import("Surface.zig");
 const Window = @import("Window.zig");
 const CommandPalette = @import("CommandPalette.zig");
 const InspectorWindow = @import("InspectorWindow.zig");
+const SearchBar = @import("SearchBar.zig");
 const winapi = @import("winapi.zig");
 
 const log = std.log.scoped(.win32);
@@ -108,6 +109,16 @@ pub fn init(
         .lpszClassName = InspectorWindow.class_name,
     };
     if (winapi.RegisterClassExW(&inspector_class) == 0) return error.RegisterClassFailed;
+
+    // The search bar popup class.
+    const search_class: winapi.WNDCLASSEXW = .{
+        .style = winapi.CS_HREDRAW | winapi.CS_VREDRAW | winapi.CS_DROPSHADOW,
+        .lpfnWndProc = SearchBar.wndProc,
+        .hInstance = hinstance,
+        .hbrBackground = null,
+        .lpszClassName = SearchBar.class_name,
+    };
+    if (winapi.RegisterClassExW(&search_class) == 0) return error.RegisterClassFailed;
 
     // Load our configuration
     var config = try Config.load(core_app.alloc);
@@ -523,6 +534,50 @@ pub fn performAction(
         .scrollbar => switch (target) {
             .app => return false,
             .surface => |surface| surface.rt_surface.updateScrollbar(value),
+        },
+
+        // Search lifecycle: the core drives these; the bar UI follows.
+        .start_search => switch (target) {
+            .app => return false,
+            .surface => |surface| {
+                const rt_surface = surface.rt_surface;
+                const window = rt_surface.window;
+                if (window.search) |search| {
+                    if (value.needle.len > 0) search.setNeedle(value.needle);
+                    search.focus();
+                } else {
+                    window.search = try SearchBar.create(
+                        self.core_app.alloc,
+                        rt_surface,
+                    );
+                    if (value.needle.len > 0) window.search.?.setNeedle(value.needle);
+                }
+            },
+        },
+
+        .end_search => switch (target) {
+            .app => return false,
+            .surface => |surface| {
+                if (surface.rt_surface.window.search) |search| search.destroy();
+            },
+        },
+
+        .search_total => switch (target) {
+            .app => return false,
+            .surface => |surface| {
+                if (surface.rt_surface.window.search) |search| {
+                    search.setTotal(value.total);
+                }
+            },
+        },
+
+        .search_selected => switch (target) {
+            .app => return false,
+            .surface => |surface| {
+                if (surface.rt_surface.window.search) |search| {
+                    search.setSelected(value.selected);
+                }
+            },
         },
 
         // Open a clicked/OSC8 link in the default handler. Schemes are

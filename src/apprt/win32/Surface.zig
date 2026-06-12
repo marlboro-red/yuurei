@@ -202,6 +202,11 @@ pub fn deinit(self: *Self) void {
     // go before the core surface does.
     if (self.inspector) |inspector| inspector.destroy();
 
+    // A search bar pinned to this surface must not outlive it.
+    if (self.window.search) |search| {
+        if (search.surface == self) search.destroy();
+    }
+
     if (self.title_text) |t| self.core_surface.alloc.free(t);
 
     // Remove ourselves from the list of known surfaces in the app.

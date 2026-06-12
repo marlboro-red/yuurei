@@ -12,6 +12,7 @@ const datastruct = @import("../../datastruct/main.zig");
 const App = @import("App.zig");
 const Surface = @import("Surface.zig");
 const CommandPalette = @import("CommandPalette.zig");
+const SearchBar = @import("SearchBar.zig");
 const winapi = @import("winapi.zig");
 const perf = @import("../../perf.zig");
 
@@ -90,6 +91,9 @@ tooltip_hash: u64 = 0,
 
 /// The command palette popup while it is open.
 palette: ?*CommandPalette = null,
+
+/// The search bar while a search is active.
+search: ?*SearchBar = null,
 
 /// Whether window-level transparency is currently applied; toggled by
 /// toggle_background_opacity on windows that start transparent.
@@ -233,6 +237,7 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
 pub fn destroy(self: *Window) void {
     const alloc = self.app.core_app.alloc;
     if (self.palette) |palette| palette.destroy();
+    if (self.search) |search| search.destroy();
     if (self.fonts) |f| {
         if (f.text) |t| _ = winapi.DeleteObject(t);
         if (f.glyph) |g| _ = winapi.DeleteObject(g);
@@ -1585,7 +1590,15 @@ pub fn wndProc(
             }
 
             self.layoutActiveTab();
+            if (self.search) |search| search.layout();
             _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+            return 0;
+        },
+
+        // The search bar is a popup in screen coordinates; keep it
+        // docked when the window moves.
+        winapi.WM_MOVE => {
+            if (self.search) |search| search.layout();
             return 0;
         },
 
