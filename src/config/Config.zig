@@ -2010,7 +2010,8 @@ keybind: Keybinds = .{},
 ///
 /// Changing this value at runtime will only affect new terminals.
 ///
-/// This setting is only supported currently on macOS.
+/// This setting is only supported currently on macOS and Windows
+/// (the WGL swap interval).
 @"window-vsync": bool = true,
 
 /// If true, new windows will inherit the working directory of the

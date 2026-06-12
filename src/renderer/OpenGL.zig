@@ -42,6 +42,10 @@ alloc: std.mem.Allocator,
 /// Alpha blending mode
 blending: configpkg.Config.AlphaBlending,
 
+/// Whether presents are throttled to the display refresh
+/// (window-vsync; used by the win32 WGL path).
+vsync: bool,
+
 /// The most recently presented target, in case we need to present it again.
 last_target: ?Target = null,
 
@@ -52,6 +56,7 @@ pub fn init(alloc: Allocator, opts: rendererpkg.Options) error{}!OpenGL {
     return .{
         .alloc = alloc,
         .blending = opts.config.blending,
+        .vsync = opts.config.vsync,
     };
 }
 
@@ -207,8 +212,6 @@ pub fn finalizeSurfaceInit(self: *const OpenGL, surface: *apprt.Surface) !void {
 
 /// Callback called by renderer.Thread when it begins.
 pub fn threadEnter(self: *const OpenGL, surface: *apprt.Surface) !void {
-    _ = self;
-
     switch (apprt.runtime) {
         else => @compileError("unsupported app runtime for OpenGL"),
 
@@ -232,10 +235,14 @@ pub fn threadEnter(self: *const OpenGL, surface: *apprt.Surface) !void {
             try surface.glMakeCurrent();
             try prepareContext(&apprt.win32.winapi.glGetProcAddress);
 
-            // Throttle presentation to the refresh rate. Without this
-            // SwapBuffers spins unthrottled, which can run the GPU hot
-            // enough to trigger driver timeouts (LiveKernelEvent 141).
-            if (!apprt.win32.winapi.setSwapInterval(1)) {
+            // Throttle presentation to the refresh rate unless the
+            // user opted out via window-vsync (lower latency). The
+            // default stays on: unthrottled SwapBuffers once ran the
+            // GPU hot enough to trigger driver timeouts
+            // (LiveKernelEvent 141), though occlusion handling has
+            // since removed the hidden-window presents that fed that.
+            const interval: i32 = if (self.vsync) 1 else 0;
+            if (!apprt.win32.winapi.setSwapInterval(interval)) {
                 log.warn("wglSwapIntervalEXT unavailable; presentation unthrottled", .{});
             }
         },
