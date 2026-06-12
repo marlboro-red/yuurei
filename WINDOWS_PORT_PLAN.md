@@ -426,7 +426,10 @@ runtime like `gtk.zig`.
     text landed only in the active tab, switching preserved both
     sessions' content, closing a tab re-laid-out the strip with the
     window surviving.
-  - Remaining polish: Mica/backdrop, tab drag-reorder, tab tooltips.
+  - Tab drag-reorder + `move_tab` landed 2026-06-12 (tabs activate on
+    press; captured drag reorders across slots; move_tab wraps
+    cyclically — all verified live via posted-message input).
+  - Remaining polish: Mica/backdrop, tab tooltips.
 - **Input gets disproportionate budget — it is where real terminals fail:**
   - The `TranslateMessage` ordering trap (handled `WM_KEYDOWN` must swallow its
     queued `WM_CHAR`).
