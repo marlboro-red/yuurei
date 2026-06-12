@@ -215,8 +215,84 @@ pub const IDXGIFactory2 = extern struct {
             ?*anyopaque, // restrict-to output
             *?*IDXGISwapChain1,
         ) callconv(.winapi) HRESULT,
+        // CreateSwapChainForCoreWindow through UnregisterOcclusionStatus.
+        pad: Pad(IDXGIFactory2, 8),
+        CreateSwapChainForComposition: *const fn (
+            *IDXGIFactory2,
+            *anyopaque, // the device
+            *const DXGI_SWAP_CHAIN_DESC1,
+            ?*anyopaque, // restrict-to output
+            *?*IDXGISwapChain1,
+        ) callconv(.winapi) HRESULT,
     },
 };
+
+// ---------------------------------------------------------------------
+// DirectComposition: the swapchain is attached to a DComp visual bound
+// to the host window. This is what Windows Terminal does and what DWM
+// will promote to a hardware overlay plane ("Hardware Composed:
+// Independent Flip") — hwnd-bound swapchains never got promoted in
+// our PresentMon measurements. Vtable layouts taken from mingw-w64's
+// dcomp.h (the float overloads precede the animation overloads).
+
+const IID_IDCompositionDevice: GUID = .{
+    .a = 0xc37ea93a,
+    .b = 0xe7aa,
+    .c = 0x450d,
+    .d = .{ 0xb1, 0x6f, 0x97, 0x46, 0xcb, 0x04, 0x07, 0xf3 },
+};
+
+pub const IDCompositionDevice = extern struct {
+    vtable: *const extern struct {
+        unknown: Unknown(IDCompositionDevice),
+        Commit: *const fn (*IDCompositionDevice) callconv(.winapi) HRESULT,
+        WaitForCommitCompletion: *const fn (*IDCompositionDevice) callconv(.winapi) HRESULT,
+        GetFrameStatistics: *const fn (*IDCompositionDevice) callconv(.winapi) HRESULT,
+        CreateTargetForHwnd: *const fn (
+            *IDCompositionDevice,
+            winapi.HWND,
+            windows.BOOL,
+            *?*IDCompositionTarget,
+        ) callconv(.winapi) HRESULT,
+        CreateVisual: *const fn (
+            *IDCompositionDevice,
+            *?*IDCompositionVisual,
+        ) callconv(.winapi) HRESULT,
+        // CreateSurface and the transform/animation factories follow.
+    },
+};
+
+pub const IDCompositionTarget = extern struct {
+    vtable: *const extern struct {
+        unknown: Unknown(IDCompositionTarget),
+        SetRoot: *const fn (
+            *IDCompositionTarget,
+            ?*IDCompositionVisual,
+        ) callconv(.winapi) HRESULT,
+    },
+};
+
+pub const IDCompositionVisual = extern struct {
+    vtable: *const extern struct {
+        unknown: Unknown(IDCompositionVisual),
+        // Slots 3..14: SetOffsetX/Y (float then animation variants),
+        // SetTransform (matrix then interface), SetTransformParent,
+        // SetEffect, SetBitmapInterpolationMode, SetBorderMode,
+        // SetClip (rect then interface).
+        pad: Pad(IDCompositionVisual, 12),
+        SetContent: *const fn (
+            *IDCompositionVisual,
+            ?*anyopaque, // IUnknown content (the swapchain)
+        ) callconv(.winapi) HRESULT,
+        // AddVisual, RemoveVisual, RemoveAllVisuals, SetCompositeMode.
+    },
+};
+
+extern "dcomp" fn DCompositionCreateDevice2(
+    renderingDevice: ?*anyopaque,
+    iid: *const GUID,
+    dcompositionDevice: *?*anyopaque,
+) callconv(.winapi) HRESULT;
 
 pub const IDXGISwapChain1 = extern struct {
     vtable: *const extern struct {
@@ -279,6 +355,7 @@ const DXGI_USAGE_RENDER_TARGET_OUTPUT: u32 = 0x20;
 const DXGI_SCALING_STRETCH: u32 = 0;
 const DXGI_SCALING_NONE: u32 = 1;
 const DXGI_SWAP_EFFECT_FLIP_DISCARD: u32 = 4;
+const DXGI_ALPHA_MODE_PREMULTIPLIED: u32 = 1;
 const DXGI_ALPHA_MODE_IGNORE: u32 = 3;
 const DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT: u32 = 0x40;
 
@@ -335,6 +412,12 @@ pub const Presenter = struct {
     device: *ID3D11Device,
     context: *ID3D11DeviceContext,
     swapchain: *IDXGISwapChain1,
+
+    /// The DirectComposition chain binding the swapchain to the host
+    /// window as a composition visual.
+    dcomp_device: *IDCompositionDevice,
+    dcomp_target: *IDCompositionTarget,
+    dcomp_visual: *IDCompositionVisual,
 
     interop: Interop,
     interop_device: windows.HANDLE,
@@ -409,30 +492,65 @@ pub const Presenter = struct {
         const factory: *IDXGIFactory2 = @ptrCast(@alignCast(factory_ptr.?));
         defer releaseAny(factory);
 
-        const desc: DXGI_SWAP_CHAIN_DESC1 = .{
+        // Composition swapchains require STRETCH scaling and a
+        // premultiplied or ignored alpha mode.
+        var desc: DXGI_SWAP_CHAIN_DESC1 = .{
             .Width = @max(1, width),
             .Height = @max(1, height),
             .Format = DXGI_FORMAT_B8G8R8A8_UNORM,
             .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT,
             .BufferCount = 2,
-            // Exact-size buffers; a promotion prerequisite for DWM's
-            // hardware overlay (independent flip) path.
-            .Scaling = DXGI_SCALING_NONE,
+            .Scaling = DXGI_SCALING_STRETCH,
             .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
             .AlphaMode = DXGI_ALPHA_MODE_IGNORE,
             .Flags = 0,
         };
         var swapchain: ?*IDXGISwapChain1 = null;
-        if (!ok(factory.vtable.CreateSwapChainForHwnd(
+        if (!ok(factory.vtable.CreateSwapChainForComposition(
             factory,
             device.?,
-            hwnd,
             &desc,
             null,
-            null,
             &swapchain,
-        ))) return error.SwapChainFailed;
+        ))) {
+            desc.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
+            if (!ok(factory.vtable.CreateSwapChainForComposition(
+                factory,
+                device.?,
+                &desc,
+                null,
+                &swapchain,
+            ))) return error.SwapChainFailed;
+        }
         errdefer swapchain.?.release();
+
+        // Bind the swapchain to the host window through a DComp
+        // visual; this is the form DWM promotes to hardware overlays.
+        var dcomp_ptr: ?*anyopaque = null;
+        if (!ok(DCompositionCreateDevice2(
+            device.?,
+            &IID_IDCompositionDevice,
+            &dcomp_ptr,
+        ))) return error.DCompDeviceFailed;
+        const dcomp: *IDCompositionDevice = @ptrCast(@alignCast(dcomp_ptr.?));
+        errdefer releaseAny(dcomp);
+
+        var target: ?*IDCompositionTarget = null;
+        if (!ok(dcomp.vtable.CreateTargetForHwnd(dcomp, hwnd, windows.TRUE, &target)))
+            return error.DCompTargetFailed;
+        errdefer releaseAny(target.?);
+
+        var visual: ?*IDCompositionVisual = null;
+        if (!ok(dcomp.vtable.CreateVisual(dcomp, &visual)))
+            return error.DCompVisualFailed;
+        errdefer releaseAny(visual.?);
+
+        if (!ok(visual.?.vtable.SetContent(visual.?, swapchain.?)))
+            return error.DCompContentFailed;
+        if (!ok(target.?.vtable.SetRoot(target.?, visual.?)))
+            return error.DCompRootFailed;
+        if (!ok(dcomp.vtable.Commit(dcomp)))
+            return error.DCompCommitFailed;
 
         // Cap the present queue at one frame. We deliberately do NOT
         // use the frame-latency waitable object: that pattern is for
@@ -465,6 +583,9 @@ pub const Presenter = struct {
             .device = device.?,
             .context = context.?,
             .swapchain = swapchain.?,
+            .dcomp_device = dcomp,
+            .dcomp_target = target.?,
+            .dcomp_visual = visual.?,
             .interop = interop,
             .interop_device = interop_device,
             .width = @max(1, width),
@@ -475,6 +596,9 @@ pub const Presenter = struct {
     pub fn deinit(self: *Presenter) void {
         self.releaseBackbuffer();
         _ = self.interop.close(self.interop_device);
+        releaseAny(self.dcomp_visual);
+        releaseAny(self.dcomp_target);
+        releaseAny(self.dcomp_device);
         self.swapchain.release();
         releaseAny(self.context);
         releaseAny(self.device);
