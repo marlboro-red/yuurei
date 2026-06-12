@@ -50,6 +50,9 @@ Working today, verified live on Windows 11:
   every named binding action plus custom `command-palette-entry` commands
 - **Terminal inspector** — the upstream Dear ImGui inspector in its own
   native window (toggle via keybind `inspector:toggle`)
+- **Desktop notifications** as native toasts (tray balloon path; note
+  that the in-box ConPTY currently swallows OSC 9/777 before any
+  terminal can see them)
 - **Background opacity** via window-level alpha with the runtime toggle
 - **Quick terminal** with system-wide global hotkeys (`global:` keybinds via
   `RegisterHotKey`)
@@ -59,10 +62,9 @@ Working today, verified live on Windows 11:
 - Stability: 45+ minute scroll soaks at stable memory; vsync and
   hidden-window present fixes after a real GPU-driver incident
 
-Honest remaining work: packaging/code signing/winget, WinRT toast
-notifications (interim flash+beep today), per-pixel transparency/blur
-(opacity is whole-window today), settings GUI, auto-update, Mica,
-ARM64. See the Phase 3/4
+Honest remaining work: packaging/code signing/winget, per-pixel
+transparency/blur (opacity is whole-window today), settings GUI,
+auto-update, Mica, ARM64. See the Phase 3/4
 checklists in [`WINDOWS_PORT_PLAN.md`](WINDOWS_PORT_PLAN.md) for the
 live list.
 

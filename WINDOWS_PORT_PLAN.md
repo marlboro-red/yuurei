@@ -456,8 +456,14 @@ Working down the gap list from the macOS comparison audit:
   notepad with the config path.
 - [x] `ring_bell`: taskbar/caption attention flash; beep only when the
   window is in the background.
-- [x] `desktop_notification` (interim): attention flash + beep + logged
-  title/body. TODO: WinRT toast notifications (COM/AUMID work).
+- [x] `desktop_notification` (2026-06-12, real): a lazily created tray
+  notify icon + NIF_INFO balloon tip, which Win 10/11 renders as a
+  toast — no AUMID/package identity needed (WinRT toasts can replace
+  this after packaging). Source window still flashes. Verified to the
+  OS boundary (dev machine has ToastEnabled=0 so Windows declines to
+  render). **Found:** stock conhost/ConPTY consumes OSC 9 and OSC 777
+  entirely (passes 0/7/52/133), so terminal-emitted notifications
+  can't reach us until the Phase 4 OpenConsole binaries drop.
 - [x] Clipboard confirmation: unsafe pastes (core's UnsafePaste) and
   OSC 52 reads/writes now prompt with a native yes/no warning dialog,
   defaulting to No. Verified live: multi-line paste into cmd.exe raised
