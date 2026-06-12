@@ -15,6 +15,7 @@ const Window = @import("Window.zig");
 const InspectorWindow = @import("InspectorWindow.zig");
 const Scrollbar = @import("Scrollbar.zig");
 const winapi = @import("winapi.zig");
+pub const dxgi = @import("dxgi.zig");
 
 const log = std.log.scoped(.win32);
 
@@ -60,6 +61,11 @@ gl_context: winapi.HGLRC,
 /// Custom-drawn scrollbar beside the host, fed by the core's
 /// `scrollbar` action (see Scrollbar.zig).
 scrollbar: ?*Scrollbar = null,
+
+/// Flip-model presentation state, owned by the renderer thread
+/// (created in threadEnter, destroyed in threadExit). Null means the
+/// legacy SwapBuffers path.
+presenter: ?dxgi.Presenter = null,
 
 /// Flagged for close; the App run loop performs the actual teardown.
 should_close: bool = false,
@@ -155,6 +161,14 @@ pub fn init(self: *Self, app: *App, window: *Window) !void {
         .gl_context = gl_context,
     };
 
+    // The renderer finds us from the host window (its only handle on
+    // the apprt surface) for flip-model presentation.
+    _ = winapi.SetWindowLongPtrW(
+        host,
+        winapi.GWLP_USERDATA,
+        @bitCast(@intFromPtr(self)),
+    );
+
     // The scrollbar is a sibling of the host (the host is disabled, so
     // it can't parent interactive children). Created hidden like the
     // host; setVisible and layoutActiveTab manage it. Failure is
@@ -206,6 +220,7 @@ pub fn deinit(self: *Self) void {
 
     _ = winapi.wglDeleteContext(self.gl_context);
     _ = winapi.ReleaseDC(self.host, self.hdc);
+    _ = winapi.SetWindowLongPtrW(self.host, winapi.GWLP_USERDATA, 0);
     _ = winapi.DestroyWindow(self.host);
     if (self.scrollbar) |sb| sb.destroy(self.app.core_app.alloc);
 }

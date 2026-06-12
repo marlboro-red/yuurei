@@ -236,15 +236,24 @@ pub fn threadEnter(self: *const OpenGL, surface: *apprt.Surface) !void {
             try surface.glMakeCurrent();
             try prepareContext(&apprt.win32.winapi.glGetProcAddress);
 
-            // Throttle presentation to the refresh rate unless the
-            // user opted out via window-vsync (lower latency). The
-            // default stays on: unthrottled SwapBuffers once ran the
-            // GPU hot enough to trigger driver timeouts
-            // (LiveKernelEvent 141), though occlusion handling has
-            // since removed the hidden-window presents that fed that.
-            const interval: i32 = if (self.vsync) 1 else 0;
-            if (!apprt.win32.winapi.setSwapInterval(interval)) {
-                log.warn("wglSwapIntervalEXT unavailable; presentation unthrottled", .{});
+            // Prefer flip-model presentation: a DXGI swapchain on the
+            // host window fed through WGL_NV_DX_interop2, with the
+            // present queue capped at one frame. This is the
+            // low-latency path (what Windows Terminal uses);
+            // SwapBuffers goes through DWM's redirected surface and
+            // costs 1-2 extra frames of compositor latency.
+            if (initPresenter(surface)) {
+                log.info("flip-model presentation active", .{});
+            } else {
+                // Legacy path. Throttle presentation to the refresh
+                // rate unless the user opted out via window-vsync.
+                // The default stays on: unthrottled SwapBuffers once
+                // ran the GPU hot enough to trigger driver timeouts
+                // (LiveKernelEvent 141).
+                const interval: i32 = if (self.vsync) 1 else 0;
+                if (!apprt.win32.winapi.setSwapInterval(interval)) {
+                    log.warn("wglSwapIntervalEXT unavailable; presentation unthrottled", .{});
+                }
             }
         },
     }
@@ -266,8 +275,86 @@ pub fn threadExit(self: *const OpenGL) void {
             // TODO: see threadEnter
         },
 
-        apprt.win32 => apprt.win32.Surface.glReleaseCurrent(),
+        apprt.win32 => {
+            // Tear down flip-model state while the context is still
+            // current (the interop handles are bound to it).
+            if (currentWin32Surface()) |surface| deinitPresenter(surface);
+            apprt.win32.Surface.glReleaseCurrent();
+        },
     }
+}
+
+/// The apprt surface owning the current WGL context, recovered from
+/// the host window (the renderer thread's only route back).
+fn currentWin32Surface() ?*apprt.win32.Surface {
+    const winapi = apprt.win32.winapi;
+    const hdc = winapi.wglGetCurrentDC() orelse return null;
+    const hwnd = winapi.WindowFromDC(hdc) orelse return null;
+    const ptr = winapi.GetWindowLongPtrW(hwnd, winapi.GWLP_USERDATA);
+    if (ptr == 0) return null;
+    return @ptrFromInt(@as(usize, @bitCast(ptr)));
+}
+
+/// Set up flip-model presentation for a surface: swapchain, interop,
+/// and the GL renderbuffer+FBO pair aliasing the backbuffer. Returns
+/// false (leaving the surface on the SwapBuffers path) on any failure.
+fn initPresenter(surface: *apprt.Surface) bool {
+    if (comptime apprt.runtime != apprt.win32) return false;
+    const winapi = apprt.win32.winapi;
+
+    var client: winapi.RECT = undefined;
+    if (winapi.GetClientRect(surface.host, &client) == 0) return false;
+
+    var presenter = apprt.win32.Surface.dxgi.Presenter.init(
+        surface.host,
+        @intCast(@max(1, client.right - client.left)),
+        @intCast(@max(1, client.bottom - client.top)),
+    ) catch |err| {
+        log.info("flip-model unavailable, using SwapBuffers err={}", .{err});
+        return false;
+    };
+
+    if (!attachBackbuffer(&presenter)) {
+        presenter.deinit();
+        return false;
+    }
+
+    surface.presenter = presenter;
+    return true;
+}
+
+fn deinitPresenter(surface: *apprt.win32.Surface) void {
+    if (surface.presenter) |*p| {
+        const ctx = gl.glad.context;
+        if (p.fbo != 0) ctx.DeleteFramebuffers.?(1, &p.fbo);
+        if (p.renderbuffer != 0) ctx.DeleteRenderbuffers.?(1, &p.renderbuffer);
+        p.deinit();
+        surface.presenter = null;
+    }
+}
+
+/// (Re)create the GL renderbuffer aliasing the swapchain backbuffer
+/// and the FBO wrapping it.
+fn attachBackbuffer(p: *apprt.win32.Surface.dxgi.Presenter) bool {
+    const ctx = gl.glad.context;
+
+    if (p.renderbuffer == 0) ctx.GenRenderbuffers.?(1, &p.renderbuffer);
+    if (p.fbo == 0) ctx.GenFramebuffers.?(1, &p.fbo);
+
+    p.acquireBackbuffer(p.renderbuffer) catch |err| {
+        log.warn("backbuffer interop failed err={}", .{err});
+        return false;
+    };
+
+    ctx.BindFramebuffer.?(gl.c.GL_FRAMEBUFFER, p.fbo);
+    ctx.FramebufferRenderbuffer.?(
+        gl.c.GL_FRAMEBUFFER,
+        gl.c.GL_COLOR_ATTACHMENT0,
+        gl.c.GL_RENDERBUFFER,
+        p.renderbuffer,
+    );
+    ctx.BindFramebuffer.?(gl.c.GL_FRAMEBUFFER, 0);
+    return true;
 }
 
 pub fn displayRealized(self: *const OpenGL) void {
@@ -307,13 +394,30 @@ pub fn drawFrameStart(self: *OpenGL) void {
             rect.right - rect.left,
             rect.bottom - rect.top,
         );
+
+        // Flip-model: bound the present queue (the latency cap) and
+        // track window resizes with the swapchain.
+        if (currentWin32Surface()) |surface| {
+            if (surface.presenter) |*p| {
+                p.waitFrame();
+
+                const w: u32 = @intCast(@max(1, rect.right - rect.left));
+                const h: u32 = @intCast(@max(1, rect.bottom - rect.top));
+                if (w != p.width or h != p.height) resize: {
+                    p.resize(w, h) catch |err| {
+                        log.warn("swapchain resize failed err={}", .{err});
+                        deinitPresenter(surface);
+                        break :resize;
+                    };
+                    if (!attachBackbuffer(p)) deinitPresenter(surface);
+                }
+            }
+        }
     }
 }
 
 /// Actions taken after `drawFrame` is done.
 pub fn drawFrameEnd(self: *OpenGL) void {
-    _ = self;
-
     // We own the swap chain on win32: present the default framebuffer.
     // Hidden windows (background tabs) skip presentation entirely; with
     // vsync on, presenting an invisible window would also block this
@@ -323,6 +427,51 @@ pub fn drawFrameEnd(self: *OpenGL) void {
         if (winapi.wglGetCurrentDC()) |hdc| {
             const hwnd = winapi.WindowFromDC(hdc);
             if (hwnd != null and winapi.IsWindowVisible(hwnd.?) == 0) return;
+
+            present: {
+                // Flip-model: copy the rendered frame (GL default
+                // framebuffer, bottom-left origin) into the swapchain
+                // backbuffer (top-left origin: flipped blit) and
+                // present without queueing.
+                if (currentWin32Surface()) |surface| {
+                    if (surface.presenter) |*p| {
+                        if (!p.lock()) {
+                            log.warn("interop lock failed; dropping flip-model", .{});
+                            deinitPresenter(surface);
+                            break :present;
+                        }
+
+                        const ctx = gl.glad.context;
+                        ctx.BindFramebuffer.?(gl.c.GL_READ_FRAMEBUFFER, 0);
+                        ctx.BindFramebuffer.?(gl.c.GL_DRAW_FRAMEBUFFER, p.fbo);
+                        const w: i32 = @intCast(p.width);
+                        const h: i32 = @intCast(p.height);
+                        ctx.BlitFramebuffer.?(
+                            0,
+                            0,
+                            w,
+                            h,
+                            0,
+                            h,
+                            w,
+                            0,
+                            gl.c.GL_COLOR_BUFFER_BIT,
+                            gl.c.GL_NEAREST,
+                        );
+                        ctx.BindFramebuffer.?(gl.c.GL_FRAMEBUFFER, 0);
+
+                        p.unlock();
+                        p.present(self.vsync);
+
+                        if (perf.keyToPresent()) |ns| {
+                            log.info("perf: key-to-present {d} us", .{ns / 1000});
+                        }
+                        return;
+                    }
+                }
+            }
+
+            // Legacy path.
             if (winapi.SwapBuffers(hdc) == 0) {
                 log.warn("SwapBuffers failed", .{});
             }
