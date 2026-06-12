@@ -64,6 +64,9 @@ pub fn init(
         return error.GetModuleHandleFailed;
     const hinstance: winapi.HINSTANCE = @ptrCast(module);
 
+    // Registers the common-control classes (tooltips for the strip).
+    winapi.InitCommonControls();
+
     // One window class for all top-level windows.
     const class: winapi.WNDCLASSEXW = .{
         .style = winapi.CS_HREDRAW | winapi.CS_VREDRAW,

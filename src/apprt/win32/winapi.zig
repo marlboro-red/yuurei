@@ -346,6 +346,32 @@ pub extern "user32" fn UnregisterHotKey(?HWND, i32) callconv(.winapi) BOOL;
 pub const WS_EX_TOOLWINDOW: DWORD = 0x00000080;
 pub const WS_EX_TOPMOST: DWORD = 0x00000008;
 
+// Tooltips (comctl32)
+pub const tooltips_class = std.unicode.utf8ToUtf16LeStringLiteral("tooltips_class32");
+pub const TTS_ALWAYSTIP: DWORD = 0x01;
+pub const TTS_NOPREFIX: DWORD = 0x02;
+pub const TTF_SUBCLASS: UINT = 0x0010;
+pub const TTM_RELAYEVENT: UINT = 0x0400 + 7;
+pub const TTM_ADDTOOLW: UINT = 0x0400 + 50;
+pub const TTM_DELTOOLW: UINT = 0x0400 + 51;
+pub const TTM_NEWTOOLRECTW: UINT = 0x0400 + 52;
+pub const TTM_UPDATETIPTEXTW: UINT = 0x0400 + 57;
+pub const TOOLINFOW = extern struct {
+    cbSize: UINT = @sizeOf(TOOLINFOW),
+    uFlags: UINT = 0,
+    hwnd: ?HWND = null,
+    uId: usize = 0,
+    rect: RECT = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
+    hinst: ?HINSTANCE = null,
+    lpszText: ?[*:0]const u16 = null,
+    lParam: LPARAM = 0,
+    lpReserved: ?*anyopaque = null,
+};
+pub extern "user32" fn SendMessageW(HWND, UINT, WPARAM, LPARAM) callconv(.winapi) LRESULT;
+// Importing anything from comctl32 makes the loader bring it in so
+// the tooltips window class exists.
+pub extern "comctl32" fn InitCommonControls() callconv(.winapi) void;
+
 // Tray icon + balloon notifications (rendered as toasts on Win 10/11)
 pub const NOTIFYICONDATAW = extern struct {
     cbSize: DWORD = @sizeOf(NOTIFYICONDATAW),

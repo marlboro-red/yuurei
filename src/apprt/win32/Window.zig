@@ -59,6 +59,13 @@ divider_drag: ?DividerHit = null,
 /// Index of the tab being drag-reordered, if any.
 tab_drag: ?usize = null,
 
+/// Tooltip control showing full tab titles on hover, with one tool
+/// per tab slot (kept in sync by paintTitlebar).
+tooltip: ?winapi.HWND = null,
+
+/// How many tab tools are currently registered with the tooltip.
+tooltip_tools: usize = 0,
+
 /// The command palette popup while it is open.
 palette: ?*CommandPalette = null,
 
@@ -154,6 +161,22 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
         0,
         winapi.SWP_NOMOVE | winapi.SWP_NOSIZE | winapi.SWP_NOZORDER |
             winapi.SWP_NOACTIVATE | winapi.SWP_FRAMECHANGED,
+    );
+
+    // Tooltips for truncated tab titles. Failure is cosmetic-only.
+    self.tooltip = winapi.CreateWindowExW(
+        0,
+        winapi.tooltips_class,
+        std.unicode.utf8ToUtf16LeStringLiteral(""),
+        winapi.WS_POPUP | winapi.TTS_ALWAYSTIP | winapi.TTS_NOPREFIX,
+        0,
+        0,
+        0,
+        0,
+        hwnd,
+        null,
+        app.hinstance,
+        null,
     );
 
     _ = try self.newTab();
@@ -813,6 +836,100 @@ fn hitTestStrip(self: *const Window, x: i32, y: i32) Hover {
 // ---------------------------------------------------------------------
 // Painting
 
+/// Keep one tooltip tool per tab slot with the full title as its text
+/// (tab labels ellipsize). Called from paintTitlebar because every tab
+/// change — create/close/reorder/retitle/resize — repaints the strip.
+fn syncTabTooltips(self: *Window) void {
+    const tooltip = self.tooltip orelse return;
+    const n = self.tabs.items.len;
+
+    // Drop tools for slots that no longer exist.
+    while (self.tooltip_tools > n) {
+        self.tooltip_tools -= 1;
+        var ti: winapi.TOOLINFOW = .{
+            .hwnd = self.hwnd,
+            .uId = self.tooltip_tools,
+        };
+        _ = winapi.SendMessageW(
+            tooltip,
+            winapi.TTM_DELTOOLW,
+            0,
+            @bitCast(@intFromPtr(&ti)),
+        );
+    }
+
+    for (self.tabs.items, 0..) |*tab, i| {
+        const title = title: {
+            const title = tab.focused.title_text orelse "Ghostty";
+            // Truncate at a codepoint boundary so the UTF-16 buffer
+            // below is always large enough.
+            var end = @min(title.len, 255);
+            while (end > 0 and title[end - 1] & 0xC0 == 0x80) end -= 1;
+            break :title title[0..end];
+        };
+        var text: [256:0]u16 = undefined;
+        const len = std.unicode.utf8ToUtf16Le(text[0..255], title) catch 0;
+        text[len] = 0;
+
+        // No TTF_SUBCLASS: mouse messages are relayed explicitly from
+        // the window procedure (relayToTooltip), which is deterministic
+        // where comctl32's subclassing is not.
+        var ti: winapi.TOOLINFOW = .{
+            .hwnd = self.hwnd,
+            .uId = i,
+            .rect = self.tabRect(i),
+            .lpszText = &text,
+        };
+        if (i < self.tooltip_tools) {
+            _ = winapi.SendMessageW(
+                tooltip,
+                winapi.TTM_NEWTOOLRECTW,
+                0,
+                @bitCast(@intFromPtr(&ti)),
+            );
+            _ = winapi.SendMessageW(
+                tooltip,
+                winapi.TTM_UPDATETIPTEXTW,
+                0,
+                @bitCast(@intFromPtr(&ti)),
+            );
+        } else {
+            _ = winapi.SendMessageW(
+                tooltip,
+                winapi.TTM_ADDTOOLW,
+                0,
+                @bitCast(@intFromPtr(&ti)),
+            );
+        }
+    }
+    self.tooltip_tools = n;
+}
+
+/// Relay a mouse message to the tooltip control so it can run its
+/// hover show/hide logic against the tab tools.
+fn relayToTooltip(
+    self: *Window,
+    msg: winapi.UINT,
+    wparam: winapi.WPARAM,
+    lparam: winapi.LPARAM,
+) void {
+    const tooltip = self.tooltip orelse return;
+    var m: winapi.MSG = .{
+        .hwnd = self.hwnd,
+        .message = msg,
+        .wParam = wparam,
+        .lParam = lparam,
+        .time = 0,
+        .pt = .{ .x = 0, .y = 0 },
+    };
+    _ = winapi.SendMessageW(
+        tooltip,
+        winapi.TTM_RELAYEVENT,
+        0,
+        @bitCast(@intFromPtr(&m)),
+    );
+}
+
 fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
     const height = self.titlebarHeight();
     var strip: winapi.RECT = .{
@@ -1033,6 +1150,8 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
             );
         }
     }
+
+    self.syncTabTooltips();
 }
 
 fn captionButtonClick(self: *Window, button: CaptionButton) void {
@@ -1489,6 +1608,8 @@ pub fn wndProc(
                 return 0;
             }
 
+            self.relayToTooltip(msg, wparam, lparam);
+
             const hover: Hover = if (y < self.titlebarHeight())
                 self.hitTestStrip(x, y)
             else
@@ -1517,6 +1638,9 @@ pub fn wndProc(
         winapi.WM_MBUTTONDOWN,
         winapi.WM_MBUTTONUP,
         => {
+            // Button presses dismiss any showing tab tooltip.
+            self.relayToTooltip(msg, wparam, lparam);
+
             // A tab drag in progress ends on release wherever it is.
             if (self.tab_drag != null and msg == winapi.WM_LBUTTONUP) {
                 self.tab_drag = null;
