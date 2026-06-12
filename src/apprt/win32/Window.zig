@@ -59,6 +59,10 @@ divider_drag: ?DividerHit = null,
 /// The command palette popup while it is open.
 palette: ?*CommandPalette = null,
 
+/// Whether window-level transparency is currently applied; toggled by
+/// toggle_background_opacity on windows that start transparent.
+transparent: bool = false,
+
 /// The key event from the last WM_KEYDOWN that the core did not
 /// consume; WM_CHAR completes it with the layout-cooked text.
 pending_key_event: ?input.KeyEvent = null,
@@ -152,6 +156,12 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
     _ = try self.newTab();
     errdefer self.closeAllTabs();
 
+    // Window-level alpha is the pragmatic background-opacity for a
+    // GL-in-DWM window (per-pixel GL alpha needs DirectComposition).
+    if (app.config.@"background-opacity" < 1.0) self.setOpacity(
+        app.config.@"background-opacity",
+    );
+
     _ = winapi.ShowWindow(hwnd, winapi.SW_SHOWDEFAULT);
 
     // Report the OS theme so window-theme=auto and light/dark
@@ -208,6 +218,36 @@ pub fn newTab(self: *Window) !*Surface {
     try self.tabs.append(alloc, .{ .tree = tree, .focused = surface });
     self.activateTab(self.tabs.items.len - 1);
     return surface;
+}
+
+/// Apply (or remove, at >= 1.0) window-level opacity.
+fn setOpacity(self: *Window, opacity: f64) void {
+    const ex = winapi.GetWindowLongPtrW(self.hwnd, winapi.GWL_EXSTYLE);
+    if (opacity >= 1.0) {
+        _ = winapi.SetWindowLongPtrW(
+            self.hwnd,
+            winapi.GWL_EXSTYLE,
+            ex & ~@as(isize, winapi.WS_EX_LAYERED),
+        );
+        self.transparent = false;
+        return;
+    }
+    _ = winapi.SetWindowLongPtrW(
+        self.hwnd,
+        winapi.GWL_EXSTYLE,
+        ex | winapi.WS_EX_LAYERED,
+    );
+    const alpha: u8 = @intFromFloat(std.math.clamp(opacity, 0.0, 1.0) * 255.0);
+    _ = winapi.SetLayeredWindowAttributes(self.hwnd, 0, alpha, winapi.LWA_ALPHA);
+    self.transparent = true;
+}
+
+/// Toggle between the configured background opacity and opaque; only
+/// meaningful for windows whose config starts them transparent.
+pub fn toggleOpacity(self: *Window) void {
+    const configured = self.app.config.@"background-opacity";
+    if (configured >= 1.0) return;
+    self.setOpacity(if (self.transparent) 1.0 else configured);
 }
 
 /// Toggle the command palette popup.

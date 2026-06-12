@@ -482,6 +482,11 @@ pub fn performAction(
             .surface => |surface| try surface.rt_surface.window.togglePalette(),
         },
 
+        .toggle_background_opacity => switch (target) {
+            .app => return false,
+            .surface => |surface| surface.rt_surface.window.toggleOpacity(),
+        },
+
         // Open the config file in the default text editor (notepad as
         // the universal fallback; .ghostty has no file association).
         .open_config => {

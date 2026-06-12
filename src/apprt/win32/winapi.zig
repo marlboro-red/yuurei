@@ -345,6 +345,12 @@ pub extern "user32" fn UnregisterHotKey(?HWND, i32) callconv(.winapi) BOOL;
 // Quick terminal window styling/placement
 pub const WS_EX_TOOLWINDOW: DWORD = 0x00000080;
 pub const WS_EX_TOPMOST: DWORD = 0x00000008;
+
+// Window-level transparency (background-opacity)
+pub const GWL_EXSTYLE: i32 = -20;
+pub const WS_EX_LAYERED: DWORD = 0x00080000;
+pub const LWA_ALPHA: DWORD = 0x00000002;
+pub extern "user32" fn SetLayeredWindowAttributes(HWND, u32, u8, DWORD) callconv(.winapi) BOOL;
 pub const SW_HIDE: i32 = 0;
 pub const SW_SHOW: i32 = 5;
 pub const SM_CXSCREEN: i32 = 0;
