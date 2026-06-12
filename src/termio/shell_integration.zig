@@ -899,6 +899,40 @@ fn setupNushell(
     // of the later checks abort the rest of our automatic integration.
     if (!try setupXdgDataDirs(alloc, resource_dir, env)) return null;
 
+    // Windows has no POSIX shell to resolve the quoting in the shell
+    // command string built below ('use ghostty *' reached nu as three
+    // mangled arguments); build a direct argv instead.
+    if (comptime builtin.target.os.tag == .windows) {
+        var args: std.ArrayList([:0]const u8) = .empty;
+
+        var iter = try command.argIterator(alloc);
+        defer iter.deinit();
+
+        const exe = iter.next() orelse return null;
+        try args.append(alloc, try alloc.dupeZ(u8, exe));
+        try args.append(alloc, "--execute");
+        try args.append(alloc, "use ghostty *");
+
+        // Same bail-outs as the POSIX path below; after `-`/`--` the
+        // remaining arguments are positional and pass through without
+        // option scanning.
+        var passthrough = false;
+        while (iter.next()) |arg| {
+            if (!passthrough) {
+                if (std.mem.eql(u8, arg, "--command") or
+                    std.mem.eql(u8, arg, "--lsp")) return null;
+                if (arg.len > 1 and arg[0] == '-' and arg[1] != '-') {
+                    if (std.mem.indexOfScalar(u8, arg, 'c') != null) return null;
+                }
+                if (std.mem.eql(u8, arg, "-") or std.mem.eql(u8, arg, "--"))
+                    passthrough = true;
+            }
+            try args.append(alloc, try alloc.dupeZ(u8, arg));
+        }
+
+        return .{ .direct = try args.toOwnedSlice(alloc) };
+    }
+
     var stack_fallback = std.heap.stackFallback(4096, alloc);
     var cmd = internal_os.shell.ShellCommandBuilder.init(stack_fallback.get());
     defer cmd.deinit();
@@ -967,7 +1001,14 @@ test "nushell" {
     defer env.deinit();
 
     const command = try setupNushell(alloc, .{ .shell = "nu" }, res.path, &env);
-    try testing.expectEqualStrings("nu --execute 'use ghostty *'", command.?.shell);
+    if (comptime builtin.target.os.tag == .windows) {
+        try testing.expectEqual(3, command.?.direct.len);
+        try testing.expectEqualStrings("nu", command.?.direct[0]);
+        try testing.expectEqualStrings("--execute", command.?.direct[1]);
+        try testing.expectEqualStrings("use ghostty *", command.?.direct[2]);
+    } else {
+        try testing.expectEqualStrings("nu --execute 'use ghostty *'", command.?.shell);
+    }
 
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     try testing.expectEqualStrings(
