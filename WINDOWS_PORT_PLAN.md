@@ -1,7 +1,10 @@
 # Ghostty Windows Port — High-Level Plan
 
-**Repo:** `marlboro-red/yuurei` (fork of `ghostty-org/ghostty`)
-**Working branch:** `windows-port` (`main` stays clean, tracking upstream)
+**Repo:** `marlboro-red/yuurei` (permanent fork of `ghostty-org/ghostty`)
+**Working branch:** `main` *(since 2026-06-12; the old `windows-port`
+staging branch was fast-forwarded into `main` when the project became a
+standalone fork — upstream is tracked via the `upstream` remote and
+merged in by release tag)*
 **Date:** 2026-06-11
 **Status:** Plan v2.1 — supersedes the standalone `yurei` attempt; updated same
 day with the findings of the in-tree audit (§4a), which moved Phase 0 to
@@ -58,8 +61,10 @@ Each one corresponds to a specific, documented failure of the previous attempt.
    consumes it.
 4. **No optimization, no benchmarks, until the slice works.** Correctness
    first; measure on real Windows hardware afterward.
-5. **Track upstream weekly.** Rebase `windows-port` onto upstream `main` on a
-   schedule. Divergence is debt; small frequent payments.
+5. **Track upstream on its release cadence.** Merge upstream release tags
+   into `main` (merge, never rebase — public history stays stable for a
+   standalone project). Divergence is debt; keeping the win32 layer
+   additive keeps each payment small.
 
 ---
 

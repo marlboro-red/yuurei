@@ -8,7 +8,7 @@
 
 on:
   push:
-    branches: [windows-port]
+    branches: [main]
   pull_request: {}
   workflow_dispatch: {}
 

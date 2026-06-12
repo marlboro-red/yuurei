@@ -89,11 +89,11 @@ support — upstream's resources apply unchanged:
 ## Relationship to upstream
 
 yuurei is its own project, maintained permanently as a fork — there is no
-plan to merge the Windows port into upstream Ghostty. `main` stays clean
-and tracks upstream so the shared core keeps improving underneath us; the
-port lives on the `windows-port` branch and rebases regularly. All credit
-for the core belongs upstream; all responsibility for the Windows layer
-lives here.
+plan to merge the Windows port into upstream Ghostty. The port lives on
+`main`; upstream Ghostty is tracked via the `upstream` remote and merged
+in by release tag so the shared core keeps improving underneath us. All
+credit for the core belongs upstream; all responsibility for the Windows
+layer lives here.
 
 ## AI assistance disclosure
 
