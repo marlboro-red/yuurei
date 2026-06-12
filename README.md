@@ -48,6 +48,8 @@ Working today, verified live on Windows 11:
   shared split tree
 - **Command palette** (Ctrl+Shift+P) — a native filterable popup over
   every named binding action plus custom `command-palette-entry` commands
+- **Terminal inspector** — the upstream Dear ImGui inspector in its own
+  native window (toggle via keybind `inspector:toggle`)
 - **Background opacity** via window-level alpha with the runtime toggle
 - **Quick terminal** with system-wide global hotkeys (`global:` keybinds via
   `RegisterHotKey`)
@@ -58,9 +60,9 @@ Working today, verified live on Windows 11:
   hidden-window present fixes after a real GPU-driver incident
 
 Honest remaining work: packaging/code signing/winget, WinRT toast
-notifications (interim flash+beep today), inspector wiring,
-per-pixel transparency/blur (opacity is whole-window today), settings
-GUI, auto-update, Mica, ARM64. See the Phase 3/4
+notifications (interim flash+beep today), per-pixel transparency/blur
+(opacity is whole-window today), settings GUI, auto-update, Mica,
+ARM64. See the Phase 3/4
 checklists in [`WINDOWS_PORT_PLAN.md`](WINDOWS_PORT_PLAN.md) for the
 live list.
 

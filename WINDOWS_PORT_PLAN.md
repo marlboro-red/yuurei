@@ -516,8 +516,15 @@ Working down the gap list from the macOS comparison audit:
   between configured and opaque. Per-pixel GL alpha (true blur/Mica
   behind text) needs a DirectComposition swap chain — future work.
   Verified live at 0.85 with the toggle.
-- Remaining from the audit, in rough order: inspector wiring, settings
-  GUI, auto-update, WinRT toasts.
+- [x] **Inspector (2026-06-12)** — `inspector` toggle/show/hide opens a
+  native top-level window hosting the shared Dear ImGui inspector
+  (own WGL context on the main thread, ~30fps timer +
+  `render_inspector` repaints, ImGui io input translation, DPI-scaled
+  style). Found live: the imgui GL3 backend leaves GL_SCISSOR_TEST on,
+  confining the next clear to the last clip rect. The surface owns its
+  inspector window and tears it down before the core surface dies.
+- Remaining from the audit, in rough order: settings GUI, auto-update,
+  WinRT toasts.
 
 ### Phase 4 — Ship + polish strictly by user pain (ongoing)
 
