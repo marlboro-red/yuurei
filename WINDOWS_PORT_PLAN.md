@@ -586,13 +586,24 @@ Landed fixes:
   border resizes run the full per-split resize pipeline (ConPTY
   resize + renderer resize); both are throttled to ~60 Hz with an
   exact final layout on release/exit (WM_EXITSIZEMOVE).
-- Tried and rejected: 64 KB ConPTY read buffer (vs upstream's 1 KB) —
-  measured neutral on a 10 MB burst; ConPTY emits small chunks and the
-  wall clock is dominated by conhost's re-render. Noted in Exec.zig.
+- [x] **Hover repaint isolation**: strip hover changes invalidated the
+  whole window, so crossing the tab strip redrew the terminal per
+  hover change. Now: `invalidateStrip()` for strip-only changes,
+  region-aware WM_PAINT (strip paints skip the renderer refresh and
+  background fill; terminal paints skip the strip), and a fingerprint
+  guard on the tooltip re-sync. Verified: a 60-toggle hover storm
+  produced zero renderer activity (was one full refresh per toggle).
+- Tried and rejected (both noted in-source so nobody retries blind):
+  64 KB ConPTY read buffer (Exec.zig) and 128 KB ConPTY output pipe
+  buffer (pty.zig) — both measured neutral on the 10 MB burst. The
+  burst wall clock is conhost's re-render inside ConPTY; nothing on
+  our side of the pipe moves it. The real lever is the Phase 4
+  OpenConsole binaries drop (a newer, faster conhost).
 
-Candidate future work: a raw-pipe profile of the io thread's parse
-path during bursts (mutex hold times per chunk), DWM/Mica interactions
-with present timing, and re-running the suite after upstream merges.
+Candidate future work: io-thread parse profiling during bursts (mutex
+hold times per chunk), input-latency instrumentation (key event →
+present), DWM present timing/Mica interactions, and re-running this
+table after upstream merges (the suite lives in this section).
 
 ---
 
