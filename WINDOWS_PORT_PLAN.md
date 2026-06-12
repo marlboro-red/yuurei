@@ -593,6 +593,10 @@ Landed fixes:
   background fill; terminal paints skip the strip), and a fingerprint
   guard on the tooltip re-sync. Verified: a 60-toggle hover storm
   produced zero renderer activity (was one full refresh per toggle).
+- [x] **window-vsync honored** (was hardcoded on): `window-vsync =
+  false` now sets WGL swap interval 0 for minimum input latency;
+  default remains on. Safety-checked: busy output with vsync off holds
+  the same CPU as on (the renderer is damage-driven, no free-spin).
 - Tried and rejected (both noted in-source so nobody retries blind):
   64 KB ConPTY read buffer (Exec.zig) and 128 KB ConPTY output pipe
   buffer (pty.zig) — both measured neutral on the 10 MB burst. The
