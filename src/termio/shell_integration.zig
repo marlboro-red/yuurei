@@ -908,7 +908,11 @@ fn setupNushell(
 
     // Windows has no POSIX shell to resolve the quoting in the shell
     // command string built below ('use ghostty *' reached nu as three
-    // mangled arguments); build a direct argv instead.
+    // mangled arguments), and the XDG_DATA_DIRS vendor-autoload path
+    // can't work either: nu splits that variable on ':', which
+    // destroys drive-letter paths. Build a direct argv that sources
+    // the integration file explicitly (what autoload would have done)
+    // and then imports the module.
     if (comptime builtin.target.os.tag == .windows) {
         var args: std.ArrayList([:0]const u8) = .empty;
 
@@ -917,8 +921,23 @@ fn setupNushell(
 
         const exe = iter.next() orelse return null;
         try args.append(alloc, try alloc.dupeZ(u8, exe));
+
+        // Forward slashes: backslashes are escapes in nu strings.
+        const script = try std.fmt.allocPrintSentinel(
+            alloc,
+            "{s}/shell-integration/nushell/vendor/autoload/ghostty.nu",
+            .{resource_dir},
+            0,
+        );
+        std.mem.replaceScalar(u8, script, '\\', '/');
+
         try args.append(alloc, "--execute");
-        try args.append(alloc, "use ghostty *");
+        try args.append(alloc, try std.fmt.allocPrintSentinel(
+            alloc,
+            "source '{s}'; use ghostty *",
+            .{script},
+            0,
+        ));
 
         // Same bail-outs as the POSIX path below; after `-`/`--` the
         // remaining arguments are positional and pass through without
@@ -1012,7 +1031,15 @@ test "nushell" {
         try testing.expectEqual(3, command.?.direct.len);
         try testing.expectEqualStrings("nu", command.?.direct[0]);
         try testing.expectEqualStrings("--execute", command.?.direct[1]);
-        try testing.expectEqualStrings("use ghostty *", command.?.direct[2]);
+
+        const script = try std.fmt.allocPrintSentinel(
+            alloc,
+            "source '{s}/shell-integration/nushell/vendor/autoload/ghostty.nu'; use ghostty *",
+            .{res.path},
+            0,
+        );
+        std.mem.replaceScalar(u8, script, '\\', '/');
+        try testing.expectEqualStrings(script, command.?.direct[2]);
     } else {
         try testing.expectEqualStrings("nu --execute 'use ghostty *'", command.?.shell);
     }

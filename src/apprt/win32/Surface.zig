@@ -13,6 +13,7 @@ const CoreSurface = @import("../../Surface.zig");
 const App = @import("App.zig");
 const Window = @import("Window.zig");
 const InspectorWindow = @import("InspectorWindow.zig");
+const Scrollbar = @import("Scrollbar.zig");
 const winapi = @import("winapi.zig");
 
 const log = std.log.scoped(.win32);
@@ -56,9 +57,9 @@ host: winapi.HWND,
 hdc: winapi.HDC,
 gl_context: winapi.HGLRC,
 
-/// Native vertical scrollbar beside the host, fed by the core's
-/// `scrollbar` action; WM_VSCROLL on the parent scrolls the terminal.
-scrollbar: ?winapi.HWND = null,
+/// Custom-drawn scrollbar beside the host, fed by the core's
+/// `scrollbar` action (see Scrollbar.zig).
+scrollbar: ?*Scrollbar = null,
 
 /// Flagged for close; the App run loop performs the actual teardown.
 should_close: bool = false,
@@ -145,25 +146,6 @@ pub fn init(self: *Self, app: *App, window: *Window) !void {
         return error.CreateGLContextFailed;
     errdefer _ = winapi.wglDeleteContext(gl_context);
 
-    // The scrollbar is a sibling of the host (the host is disabled, so
-    // it can't parent interactive children). Created hidden like the
-    // host; setVisible and layoutActiveTab manage it. Failure is
-    // cosmetic-only.
-    const scrollbar = winapi.CreateWindowExW(
-        0,
-        winapi.scrollbar_class,
-        std.unicode.utf8ToUtf16LeStringLiteral(""),
-        winapi.WS_CHILD | winapi.SBS_VERT,
-        0,
-        0,
-        0,
-        0,
-        window.hwnd,
-        null,
-        app.hinstance,
-        null,
-    );
-
     self.* = .{
         .app = app,
         .window = window,
@@ -171,8 +153,13 @@ pub fn init(self: *Self, app: *App, window: *Window) !void {
         .host = host,
         .hdc = hdc,
         .gl_context = gl_context,
-        .scrollbar = scrollbar,
     };
+
+    // The scrollbar is a sibling of the host (the host is disabled, so
+    // it can't parent interactive children). Created hidden like the
+    // host; setVisible and layoutActiveTab manage it. Failure is
+    // cosmetic-only.
+    self.scrollbar = Scrollbar.create(app.core_app.alloc, self) catch null;
 
     // Add ourselves to the list of surfaces on the app.
     try app.core_app.addSurface(self);
@@ -220,7 +207,7 @@ pub fn deinit(self: *Self) void {
     _ = winapi.wglDeleteContext(self.gl_context);
     _ = winapi.ReleaseDC(self.host, self.hdc);
     _ = winapi.DestroyWindow(self.host);
-    if (self.scrollbar) |sb| _ = winapi.DestroyWindow(sb);
+    if (self.scrollbar) |sb| sb.destroy(self.app.core_app.alloc);
 }
 
 pub fn core(self: *Self) *CoreSurface {
@@ -241,24 +228,19 @@ pub fn close(self: *Self, process_active: bool) void {
 /// Show or hide the GL host (tab activation).
 pub fn setVisible(self: *Self, visible: bool) void {
     _ = winapi.ShowWindow(self.host, if (visible) 5 else 0); // SW_SHOW/SW_HIDE
-    if (self.scrollbar) |sb| _ = winapi.ShowWindow(sb, if (visible) 5 else 0);
+    if (self.scrollbar) |sb| {
+        _ = winapi.ShowWindow(sb.hwnd, if (visible) 5 else 0);
+    }
 
     // Tell the renderer thread: occluded surfaces stop rebuilding
     // cells and drawing entirely (it catches up on re-show).
     self.core_surface.occlusionCallback(visible) catch {};
 }
 
-/// Feed core scrollbar state (rows) into the native control.
+/// Feed core scrollbar state (rows) into our scrollbar.
 pub fn updateScrollbar(self: *Self, sb: terminal.Scrollbar) void {
-    const hwnd = self.scrollbar orelse return;
-    const si: winapi.SCROLLINFO = .{
-        .fMask = winapi.SIF_RANGE | winapi.SIF_PAGE | winapi.SIF_POS,
-        .nMin = 0,
-        .nMax = @intCast(@max(1, sb.total) - 1),
-        .nPage = @intCast(sb.len),
-        .nPos = @intCast(sb.offset),
-    };
-    _ = winapi.SetScrollInfo(hwnd, winapi.SB_CTL, &si, winapi.TRUE);
+    const scrollbar = self.scrollbar orelse return;
+    scrollbar.update(sb.total, sb.offset, sb.len);
 }
 
 // ---------------------------------------------------------------------

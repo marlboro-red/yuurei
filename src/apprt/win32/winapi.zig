@@ -347,36 +347,19 @@ pub extern "user32" fn UnregisterHotKey(?HWND, i32) callconv(.winapi) BOOL;
 pub const WS_EX_TOOLWINDOW: DWORD = 0x00000080;
 pub const WS_EX_TOPMOST: DWORD = 0x00000008;
 
-// Scrollbar control
-pub const scrollbar_class = std.unicode.utf8ToUtf16LeStringLiteral("SCROLLBAR");
-pub const SBS_VERT: DWORD = 0x0001;
-pub const SB_CTL: i32 = 2;
-pub const WM_VSCROLL: UINT = 0x0115;
-pub const SB_LINEUP: u16 = 0;
-pub const SB_LINEDOWN: u16 = 1;
-pub const SB_PAGEUP: u16 = 2;
-pub const SB_PAGEDOWN: u16 = 3;
-pub const SB_THUMBPOSITION: u16 = 4;
-pub const SB_THUMBTRACK: u16 = 5;
-pub const SB_TOP: u16 = 6;
-pub const SB_BOTTOM: u16 = 7;
-pub const SB_ENDSCROLL: u16 = 8;
-pub const SCROLLINFO = extern struct {
-    cbSize: UINT = @sizeOf(SCROLLINFO),
-    fMask: UINT = 0,
-    nMin: i32 = 0,
-    nMax: i32 = 0,
-    nPage: UINT = 0,
-    nPos: i32 = 0,
-    nTrackPos: i32 = 0,
+// Custom scrollbar (Scrollbar.zig)
+pub extern "gdi32" fn RoundRect(HDC, i32, i32, i32, i32, i32, i32) callconv(.winapi) BOOL;
+pub extern "gdi32" fn CreatePen(i32, i32, u32) callconv(.winapi) ?*anyopaque;
+pub const PS_NULL: i32 = 5;
+pub const WM_MOUSELEAVE: UINT = 0x02A3;
+pub const TRACKMOUSEEVENT = extern struct {
+    cbSize: DWORD = @sizeOf(TRACKMOUSEEVENT),
+    dwFlags: DWORD = 0,
+    hwndTrack: ?HWND = null,
+    dwHoverTime: DWORD = 0,
 };
-pub const SIF_RANGE: UINT = 0x01;
-pub const SIF_PAGE: UINT = 0x02;
-pub const SIF_POS: UINT = 0x04;
-pub const SIF_TRACKPOS: UINT = 0x10;
-pub extern "user32" fn SetScrollInfo(HWND, i32, *const SCROLLINFO, BOOL) callconv(.winapi) i32;
-pub extern "user32" fn GetScrollInfo(HWND, i32, *SCROLLINFO) callconv(.winapi) BOOL;
-pub const SM_CXVSCROLL: i32 = 2;
+pub const TME_LEAVE: DWORD = 0x02;
+pub extern "user32" fn TrackMouseEvent(*TRACKMOUSEEVENT) callconv(.winapi) BOOL;
 
 // Tooltips (comctl32)
 pub const tooltips_class = std.unicode.utf8ToUtf16LeStringLiteral("tooltips_class32");

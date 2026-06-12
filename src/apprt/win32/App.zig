@@ -15,6 +15,7 @@ const Surface = @import("Surface.zig");
 const Window = @import("Window.zig");
 const CommandPalette = @import("CommandPalette.zig");
 const InspectorWindow = @import("InspectorWindow.zig");
+const Scrollbar = @import("Scrollbar.zig");
 const SearchBar = @import("SearchBar.zig");
 const winapi = @import("winapi.zig");
 
@@ -115,6 +116,16 @@ pub fn init(
         .lpszClassName = InspectorWindow.class_name,
     };
     if (winapi.RegisterClassExW(&inspector_class) == 0) return error.RegisterClassFailed;
+
+    // The custom scrollbar class.
+    const scroll_class: winapi.WNDCLASSEXW = .{
+        .style = winapi.CS_HREDRAW | winapi.CS_VREDRAW,
+        .lpfnWndProc = Scrollbar.wndProc,
+        .hInstance = hinstance,
+        .hbrBackground = null,
+        .lpszClassName = Scrollbar.class_name,
+    };
+    if (winapi.RegisterClassExW(&scroll_class) == 0) return error.RegisterClassFailed;
 
     // The search bar popup class.
     const search_class: winapi.WNDCLASSEXW = .{
