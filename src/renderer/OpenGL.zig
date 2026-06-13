@@ -44,8 +44,13 @@ alloc: std.mem.Allocator,
 blending: configpkg.Config.AlphaBlending,
 
 /// Whether presents are throttled to the display refresh
-/// (window-vsync; used by the win32 WGL path).
+/// (window-vsync; used by the win32 flip-model path).
 vsync: bool,
+
+/// Whether the win32 flip-model presentation path is enabled
+/// (windows-flip-model; the classic SwapBuffers path is the default
+/// for its measured typing latency).
+flip_model: bool,
 
 /// The most recently presented target, in case we need to present it again.
 last_target: ?Target = null,
@@ -58,6 +63,7 @@ pub fn init(alloc: Allocator, opts: rendererpkg.Options) error{}!OpenGL {
         .alloc = alloc,
         .blending = opts.config.blending,
         .vsync = opts.config.vsync,
+        .flip_model = opts.config.windows_flip_model,
     };
 }
 
@@ -236,22 +242,27 @@ pub fn threadEnter(self: *const OpenGL, surface: *apprt.Surface) !void {
             try surface.glMakeCurrent();
             try prepareContext(&apprt.win32.winapi.glGetProcAddress);
 
-            // Prefer flip-model presentation: a DXGI swapchain on the
-            // host window fed through WGL_NV_DX_interop2, with the
-            // present queue capped at one frame. This is the
-            // low-latency path (what Windows Terminal uses);
-            // SwapBuffers goes through DWM's redirected surface and
-            // costs 1-2 extra frames of compositor latency.
-            if (initPresenter(surface)) {
+            // Two presentation paths, selected by windows-flip-model:
+            //
+            // Classic (default): SwapBuffers into the window's
+            // redirected surface. Camera-measured typing latency
+            // favors this class of presentation (GDI conhost is the
+            // fastest-measured Windows terminal; all flip/GPU
+            // terminals measured ~2x slower) and our own PresentMon
+            // numbers agree. Always vsync-throttled: sporadic typing
+            // presents never block on the interval anyway, sustained
+            // bursts throttle at the driver, and unthrottled
+            // SwapBuffers once ran the GPU hot enough to trigger
+            // driver timeouts (LiveKernelEvent 141).
+            //
+            // Flip-model (opt-in): DXGI swapchain on a DComp visual
+            // (the Windows Terminal architecture), eligible for
+            // hardware-overlay promotion, and the foundation for
+            // future per-pixel transparency.
+            if (self.flip_model and initPresenter(surface)) {
                 log.info("flip-model presentation active", .{});
             } else {
-                // Legacy path. Throttle presentation to the refresh
-                // rate unless the user opted out via window-vsync.
-                // The default stays on: unthrottled SwapBuffers once
-                // ran the GPU hot enough to trigger driver timeouts
-                // (LiveKernelEvent 141).
-                const interval: i32 = if (self.vsync) 1 else 0;
-                if (!apprt.win32.winapi.setSwapInterval(interval)) {
+                if (!apprt.win32.winapi.setSwapInterval(1)) {
                     log.warn("wglSwapIntervalEXT unavailable; presentation unthrottled", .{});
                 }
             }

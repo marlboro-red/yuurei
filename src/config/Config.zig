@@ -2011,8 +2011,25 @@ keybind: Keybinds = .{},
 /// Changing this value at runtime will only affect new terminals.
 ///
 /// This setting is only supported currently on macOS and Windows
-/// (the WGL swap interval).
+/// (the WGL swap interval; on Windows it only applies when
+/// `windows-flip-model` is enabled).
 @"window-vsync": bool = true,
+
+/// Windows only (yuurei): present frames through a DXGI flip-model
+/// swapchain on a DirectComposition visual — the Windows Terminal
+/// presentation architecture — instead of the classic SwapBuffers
+/// path.
+///
+/// Camera-measured keyboard-to-photon latency favors the classic
+/// path for typing (the same reason classic conhost measures faster
+/// than every GPU-accelerated terminal), so it is the default. The
+/// flip path can be promoted by the compositor to hardware overlay
+/// planes and is the foundation for future per-pixel transparency;
+/// enable it if sustained-throughput rendering matters more to you
+/// than typing feel, or to experiment.
+///
+/// Changing this value at runtime will only affect new terminals.
+@"windows-flip-model": bool = false,
 
 /// If true, new windows will inherit the working directory of the
 /// previously focused window. If no window was previously focused, the default
