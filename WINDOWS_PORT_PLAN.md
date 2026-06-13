@@ -756,11 +756,23 @@ not repainted after window resizes — reproduced identically on the
 legacy SwapBuffers path. Likely ConPTY-reflow interaction with our
 resize pipeline; needs its own investigation.
 
+- [x] **Classic presentation by default (2026-06-13)** — second
+  deep-research pass (wezterm/alacritty source + camera measurements)
+  found the GPU-terminal ecosystem has no answer to GDI conhost's
+  33 ms keyboard-to-photon: WezTerm (ANGLE+swapinterval 0), Alacritty
+  (WGL blt+vsync off+user pacing), and WT (flip+waitable) all
+  measured 62–87 ms. Our PresentMon data matched (blt 17.3 ms vs flip
+  19.05 ms medians). New `windows-flip-model` config (default false):
+  classic SwapBuffers is the typing-latency default, always
+  vsync-throttled (TDR footgun closed permanently); the flip+DComp
+  stack stays as the opt-in for MPO eligibility and the transparency
+  future. Verified both paths select correctly via config.
+
 Candidate future work: per-pixel transparency on the DComp visual
 (premultiplied alpha — background-opacity without the layered-window
-path), ALLOW_TEARING min-latency mode, the post-resize prompt repaint
-issue, and re-running this table after upstream merges (the suite
-lives in this section).
+path; requires windows-flip-model), ALLOW_TEARING min-latency mode on
+the flip path, the post-resize prompt repaint issue, and re-running
+this table after upstream merges (the suite lives in this section).
 
 ---
 

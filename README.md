@@ -36,11 +36,13 @@ Working today, verified live on Windows 11:
 - **OpenGL rendering** via WGL — the same GPU renderer and HarfBuzz/FreeType
   text stack as upstream (vttest-verified through WSL, SGR/truecolor,
   DEC line drawing, CJK wide chars, emoji)
-- **Low-latency presentation** — frames present through a DXGI
-  flip-model swapchain on a DirectComposition visual (the Windows
-  Terminal architecture), measured faster than Windows Terminal in
-  matched-session PresentMon comparisons; set `GHOSTTY_NO_FLIP=1` to
-  fall back to classic SwapBuffers
+- **Low-latency presentation** — defaults to the classic presentation
+  path that camera-measured studies show is the fastest class for
+  typing on Windows (the conhost class; every GPU/flip-model terminal
+  measures slower), with an opt-in DXGI flip-model + DirectComposition
+  path (`windows-flip-model = true`, the Windows Terminal
+  architecture) that measured faster than Windows Terminal itself in
+  matched-session PresentMon comparisons
 - **Keyboard input** through Ghostty's real key encoder (surrogate pairs,
   layout-aware keybinds) and **IME via imm32** with inline preedit at the
   cursor cell — implemented to contract, *CJK-user verification still pending*
