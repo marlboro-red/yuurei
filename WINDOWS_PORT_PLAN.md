@@ -768,6 +768,58 @@ resize pipeline; needs its own investigation.
   stack stays as the opt-in for MPO eligibility and the transparency
   future. Verified both paths select correctly via config.
 
+- [x] **The real latency bug: lost renderer wakeups (libxev IOCP),
+  2026-06-13** — the headline. After every present-path experiment
+  above failed to make typing feel as snappy as `wsl.exe`, a software
+  photon-proxy benchmark (`bench/`, key injection → tight-loop screen
+  capture until pixels change) finally measured the gap objectively:
+  **Windows Terminal+WSL ~16.9 ms median, yuurei ~433 ms.** A 25×
+  difference, not the sub-frame margins the present work was chasing.
+
+  Pipeline tracing (`GHOSTTY_PERF_TRACE`, per-stage `key+Nms` logs)
+  showed the echo was *processed* at key+0 ms — pty read, parse, and
+  `queueRender` all fired immediately — but the renderer's next actual
+  wake+present landed at key+433 ms. The tell: changing the benchmark's
+  inter-sample settle from 600 ms to 950 ms moved the median to 150 ms.
+  The latency was **phase-locked to the cursor-blink timer**: the
+  renderer was only ever redrawn when the blink timer happened to fire,
+  never by the keystroke itself.
+
+  Root cause is in **libxev's `AsyncIOCP`**. It stored its notify state
+  (`wakeup` flag, `waiter`) in inline struct fields. Ghostty copies the
+  renderer thread's wakeup `Async` *by value* into termio
+  (`renderer_wakeup = render_thread.wakeup`) before the renderer thread
+  ever calls `wait()`. So the renderer registers its waiter on *its*
+  copy, while termio's copy keeps `waiter == null` forever — every
+  `queueRender → notify()` from the IO thread just sets a dead
+  `wakeup = true` latch on termio's private copy and posts nothing to
+  the loop. The eventfd (Linux) and mach-port (macOS) backends survive
+  the same by-value copy because they hold a *shared kernel object*
+  (an fd / a port) that copies fine; only the IOCP backend used
+  copy-fragile inline state. An instrumented build confirmed the dead
+  branch fired 35× during one bench run (`LATCHED count`), then 0×
+  after the fix.
+
+  Fix: **vendored libxev** (`vendor/libxev/`, `build.zig.zon` now
+  points there) with `AsyncIOCP` heap-allocating its state behind a
+  `*State` pointer, so by-value copies share one allocation and
+  `notify()` through any copy reaches the registered waiter — the same
+  shared-on-copy semantics the fd/port backends already have. Single
+  owner deinits it (the copies are notify-only aliases, never deinit'd,
+  exactly as on Linux), so no double-free. **Result: yuurei ~17 ms
+  median, flat across settle times, `LATCHED count` 0** — parity with
+  Windows Terminal, at the one-vblank 60 Hz compositor floor. This,
+  not the present path, was what made `wsl.exe` "feel WAAAYYY snappier."
+
+  Footnote that closes the vsync question for good: with the wakeup
+  fixed, `window-vsync` on vs off measured **identical** (17.4 ms vs
+  17.0 ms) on the classic path — the vsynced SwapBuffers does not add a
+  frame here. So the classic path stays *always* vsync-throttled (the
+  TDR footgun from the 2026-06-13 classic-default commit stays closed);
+  there is no latency reason to expose interval 0, and an earlier
+  attempt to honor `window-vsync=false` there was dropped as
+  unnecessary risk.
+
 Candidate future work: per-pixel transparency on the DComp visual
 (premultiplied alpha — background-opacity without the layered-window
 path; requires windows-flip-model), ALLOW_TEARING min-latency mode on

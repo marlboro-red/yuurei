@@ -36,13 +36,18 @@ Working today, verified live on Windows 11:
 - **OpenGL rendering** via WGL — the same GPU renderer and HarfBuzz/FreeType
   text stack as upstream (vttest-verified through WSL, SGR/truecolor,
   DEC line drawing, CJK wide chars, emoji)
-- **Low-latency presentation** — defaults to the classic presentation
-  path that camera-measured studies show is the fastest class for
-  typing on Windows (the conhost class; every GPU/flip-model terminal
-  measures slower), with an opt-in DXGI flip-model + DirectComposition
-  path (`windows-flip-model = true`, the Windows Terminal
-  architecture) that measured faster than Windows Terminal itself in
-  matched-session PresentMon comparisons
+- **Low-latency typing** — measured at parity with Windows Terminal +
+  WSL (~17 ms vs ~16.9 ms median keyboard-to-pixels on a 60 Hz panel,
+  the one-vblank compositor floor) by a software photon-proxy benchmark
+  (`bench/`). Getting there meant fixing a lost-wakeup bug in the IOCP
+  event loop where keystroke echoes waited for the cursor-blink timer
+  instead of waking the renderer — a 25× win (see
+  [`WINDOWS_PORT_PLAN.md`](WINDOWS_PORT_PLAN.md)). Presentation defaults
+  to the classic path that camera-measured studies rank as the fastest
+  class for typing on Windows (the conhost class), with an opt-in DXGI
+  flip-model + DirectComposition path (`windows-flip-model = true`, the
+  Windows Terminal architecture) for MPO eligibility and the
+  transparency future
 - **Keyboard input** through Ghostty's real key encoder (surrogate pairs,
   layout-aware keybinds) and **IME via imm32** with inline preedit at the
   cursor cell — implemented to contract, *CJK-user verification still pending*
