@@ -62,6 +62,10 @@ Working today, verified live on Windows 11:
   every named binding action plus custom `command-palette-entry` commands
 - **Terminal inspector** — the upstream Dear ImGui inspector in its own
   native window (toggle via keybind `inspector:toggle`)
+- **Settings window** (Ctrl+,) — a native dialog over the most-changed
+  options (theme, font size, cursor style, opacity, cursor blink) that
+  reads your config file, writes changes back preserving your comments,
+  and reloads live; an "Open config file" button covers everything else
 - **Desktop notifications** as native toasts (tray balloon path),
   triggered by OSC 9 / OSC 777 — verified end-to-end through ConPTY
 - **Scrollbars** — a native per-split scrollbar fed by the core's
@@ -82,10 +86,9 @@ Working today, verified live on Windows 11:
   hidden-window present fixes after a real GPU-driver incident
 
 Honest remaining work: packaging/code signing/winget, per-pixel
-transparency/blur (opacity is whole-window today), settings GUI,
-auto-update, Mica, ARM64. See the Phase 3/4
-checklists in [`WINDOWS_PORT_PLAN.md`](WINDOWS_PORT_PLAN.md) for the
-live list.
+transparency/blur (opacity is whole-window today), auto-update, Mica,
+ARM64. See the Phase 3/4 checklists in
+[`WINDOWS_PORT_PLAN.md`](WINDOWS_PORT_PLAN.md) for the live list.
 
 ## Installing
 

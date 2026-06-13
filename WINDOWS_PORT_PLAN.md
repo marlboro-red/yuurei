@@ -595,6 +595,23 @@ signing, no winget/Scoop, no installer — by choice. Landed:
 - [x] .github/workflows/release.yml: v* tag → ReleaseFast build +
   suite → portable zip (bin/, share/, LICENSE, README,
   THIRD_PARTY_NOTICES) + SHA256 → GitHub Release.
+- [x] **Native settings window (2026-06-14)** — closes the "no settings
+  GUI" gap vs Windows Terminal. A curated dialog
+  (src/apprt/win32/SettingsWindow.zig) over the most-changed options:
+  Theme (enumerated from the bundled themes dir), Font size, Cursor
+  style, Background opacity, Blink-the-cursor, plus Open-config and
+  Close. Reachable via the open_config binding (Ctrl+, / command
+  palette), which on win32 now opens this GUI instead of notepad (the
+  raw file is one button away). Deliberately plain user32/gdi32 (native
+  comboboxes/checkbox/buttons, GDI-painted labels) — no
+  DirectComposition/swapchain/GL, so unlike the parked acrylic work it
+  carries zero compositor-hang risk. Operates on the config file as
+  text: reads current values to pre-select controls, rewrites the one
+  changed `key = value` line preserving comments and every other line,
+  then triggers a normal reload so edits apply live. Verified
+  end-to-end on Windows 11. Possible follow-ups: dark-themed controls
+  (owner-draw), Tab/Esc dialog navigation, font-family enumeration,
+  tighter sizing at high DPI.
 
 Still open if user pain demands: crash reporting (Sentry supports
 Windows minidumps; upstream already integrates sentry).
