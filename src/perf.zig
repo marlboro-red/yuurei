@@ -34,13 +34,32 @@ pub fn isEnabled() bool {
 pub fn keyPress() void {
     if (!isEnabled()) return;
     echo_seen.store(false, .monotonic);
-    key_press_ns.store(@intCast(std.time.nanoTimestamp()), .monotonic);
+    const now: i64 = @intCast(std.time.nanoTimestamp());
+    key_press_ns.store(now, .monotonic);
+    last_key_ns.store(now, .monotonic);
 }
+
+/// Like key_press_ns but never consumed, so timeline tracing can
+/// reference presents after the echo present was already counted.
+var last_key_ns: std.atomic.Value(i64) = .init(0);
 
 /// Called by the io read thread when pty output arrives; marks the
 /// pending key press (if any) as echoed.
 pub fn ptyData() void {
     if (key_press_ns.load(.monotonic) != 0) echo_seen.store(true, .monotonic);
+}
+
+/// Elapsed ms since the most recent key press (within 2s), or null.
+/// Used by timeline tracing to correlate pipeline stages; not consumed
+/// by keyToPresent so post-echo presents still correlate.
+pub fn sinceKeyMs() ?i64 {
+    if (!isEnabled()) return null;
+    const t = last_key_ns.load(.monotonic);
+    if (t == 0) return null;
+    const now: i64 = @intCast(std.time.nanoTimestamp());
+    const ms = @divTrunc(now - t, std.time.ns_per_ms);
+    if (ms > 2000) return null;
+    return ms;
 }
 
 /// Consume the pending key press and return the elapsed time to now,

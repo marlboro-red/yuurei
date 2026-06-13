@@ -102,6 +102,9 @@ pub const StreamHandler = struct {
     /// isn't guaranteed to happen immediately but it will happen as soon as
     /// practical.
     pub inline fn queueRender(self: *StreamHandler) !void {
+        if (@import("../perf.zig").sinceKeyMs()) |ms| {
+            log.info("perf: queueRender key+{d}ms", .{ms});
+        }
         try self.renderer_wakeup.notify();
     }
 

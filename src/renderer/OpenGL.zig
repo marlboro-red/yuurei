@@ -503,6 +503,9 @@ pub fn drawFrameEnd(self: *OpenGL) void {
             if (perf.keyToPresent()) |ns| {
                 log.info("perf: key-to-present {d} us", .{ns / 1000});
             }
+            if (perf.sinceKeyMs()) |ms| {
+                log.info("perf: present key+{d}ms", .{ms});
+            }
         }
     }
 }

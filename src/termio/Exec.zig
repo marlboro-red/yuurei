@@ -1422,6 +1422,9 @@ pub const ReadThread = struct {
                 if (tracing) {
                     const t0 = std.time.nanoTimestamp();
                     if (stat_start == 0) stat_start = t0;
+                    if (perf.sinceKeyMs()) |ms| {
+                        log.info("perf: ptychunk key+{d}ms {d}B", .{ ms, n });
+                    }
                     @call(.always_inline, termio.Termio.processOutput, .{ io, buf[0..n] });
                     perf.ptyData();
                     const t1 = std.time.nanoTimestamp();
