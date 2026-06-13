@@ -49,7 +49,14 @@ jobs:
           Copy-Item -Recurse zig-out\share "$pkg\share"
           Copy-Item LICENSE "$pkg\"
           Copy-Item README.md "$pkg\"
-          Copy-Item vendor\conpty\NOTICE.md "$pkg\THIRD_PARTY_NOTICES.md"
+          # Third-party notices: vendored conpty (MIT, microsoft/terminal)
+          # plus vendored libxev (MIT, mitchellh/libxev — statically linked).
+          $notices = (Get-Content vendor\conpty\NOTICE.md -Raw) + "`n`n---`n`n" +
+            "## libxev (vendored, statically linked)`n`n" +
+            "yuurei vendors a fork of libxev (mitchellh/libxev) with a Windows`n" +
+            "IOCP wakeup fix; see vendor/libxev. Original license:`n`n" +
+            (Get-Content vendor\libxev\LICENSE -Raw)
+          Set-Content -Path "$pkg\THIRD_PARTY_NOTICES.md" -Value $notices
           Compress-Archive -Path $pkg -DestinationPath "$pkg.zip"
           $hash = (Get-FileHash "$pkg.zip" -Algorithm SHA256).Hash.ToLower()
           Set-Content -Path "$pkg.zip.sha256" -Value "$hash  $pkg.zip"
