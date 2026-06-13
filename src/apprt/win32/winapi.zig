@@ -97,6 +97,11 @@ pub const WS_CHILD: DWORD = 0x40000000;
 pub const WS_VISIBLE: DWORD = 0x10000000;
 pub const WS_DISABLED: DWORD = 0x08000000;
 pub const WS_CLIPCHILDREN: DWORD = 0x02000000;
+pub const WS_TABSTOP: DWORD = 0x00010000;
+pub const WS_VSCROLL: DWORD = 0x00200000;
+pub const WS_BORDER: DWORD = 0x00800000;
+pub const WS_SYSMENU: DWORD = 0x00080000;
+pub const WS_CAPTION: DWORD = 0x00C00000;
 
 pub extern "user32" fn GetWindowRect(HWND, *RECT) callconv(.winapi) BOOL;
 pub const CW_USEDEFAULT: i32 = @bitCast(@as(u32, 0x80000000));
@@ -159,6 +164,26 @@ pub const WM_MOUSEWHEEL: UINT = 0x020A;
 pub const WM_DPICHANGED: UINT = 0x02E0;
 pub const WM_SETCURSOR: UINT = 0x0020;
 pub const WM_SETTINGCHANGE: UINT = 0x001A;
+pub const WM_COMMAND: UINT = 0x0111;
+pub const WM_SETFONT: UINT = 0x0030;
+
+// Child controls (settings window). All are user32 classes, so no
+// comctl32 / common-controls init is required.
+pub const combobox_class = std.unicode.utf8ToUtf16LeStringLiteral("COMBOBOX");
+pub const button_class = std.unicode.utf8ToUtf16LeStringLiteral("BUTTON");
+pub const CBS_DROPDOWNLIST: DWORD = 0x0003;
+pub const CBS_HASSTRINGS: DWORD = 0x0200;
+pub const CBS_SORT: DWORD = 0x0100;
+pub const BS_AUTOCHECKBOX: DWORD = 0x0003;
+pub const CB_ADDSTRING: UINT = 0x0143;
+pub const CB_SETCURSEL: UINT = 0x014E;
+pub const CB_GETCURSEL: UINT = 0x0147;
+pub const BM_GETCHECK: UINT = 0x00F0;
+pub const BM_SETCHECK: UINT = 0x00F1;
+pub const BST_CHECKED: usize = 1;
+/// HIWORD(wParam) notification codes delivered via WM_COMMAND.
+pub const CBN_SELCHANGE: u16 = 1;
+pub const BN_CLICKED: u16 = 0;
 
 // System cursor ids for LoadCursorW(null, id)
 pub const IDC_ARROW: u16 = 32512;

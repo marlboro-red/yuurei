@@ -17,6 +17,7 @@ const CommandPalette = @import("CommandPalette.zig");
 const InspectorWindow = @import("InspectorWindow.zig");
 const Scrollbar = @import("Scrollbar.zig");
 const SearchBar = @import("SearchBar.zig");
+const SettingsWindow = @import("SettingsWindow.zig");
 const winapi = @import("winapi.zig");
 
 const log = std.log.scoped(.win32);
@@ -39,6 +40,10 @@ windows: std.ArrayList(*Window) = .empty,
 /// The quick terminal window, if it has been summoned. It may be
 /// hidden; toggling shows/hides it.
 quick: ?*Window = null,
+
+/// The settings window, if open. Only one at a time; open_config
+/// focuses the existing one rather than spawning another.
+settings: ?*SettingsWindow = null,
 
 /// Actions for registered global hotkeys, indexed by hotkey id - 1.
 /// The inner slices are owned (duped from the config at registration,
@@ -144,6 +149,16 @@ pub fn init(
         .lpszClassName = SearchBar.class_name,
     };
     if (winapi.RegisterClassExW(&search_class) == 0) return error.RegisterClassFailed;
+
+    // The settings window class (a plain dialog hosting Win32 controls).
+    const settings_class: winapi.WNDCLASSEXW = .{
+        .style = winapi.CS_HREDRAW | winapi.CS_VREDRAW,
+        .lpfnWndProc = SettingsWindow.wndProc,
+        .hInstance = hinstance,
+        .hbrBackground = null,
+        .lpszClassName = SettingsWindow.class_name,
+    };
+    if (winapi.RegisterClassExW(&settings_class) == 0) return error.RegisterClassFailed;
 
     // Probe flip-model capability now that the host class exists.
     const flip_capable = !std.process.hasEnvVarConstant("GHOSTTY_NO_FLIP") and
@@ -684,24 +699,18 @@ pub fn performAction(
             },
         },
 
-        // Open the config file in the default text editor (notepad as
-        // the universal fallback; .ghostty has no file association).
+        // Open the native settings window (yuurei): a GUI over the
+        // most-changed options, with an "Open config file" button for
+        // the raw-file escape hatch. Only one at a time.
         .open_config => {
-            const path = try configpkg.edit.openPath(self.core_app.alloc);
-            defer self.core_app.alloc.free(path);
-
-            var path_w: [std.fs.max_path_bytes]u16 = undefined;
-            const len = std.unicode.utf8ToUtf16Le(path_w[0 .. path_w.len - 1], path) catch
-                return false;
-            path_w[len] = 0;
-            _ = winapi.ShellExecuteW(
-                null,
-                null,
-                std.unicode.utf8ToUtf16LeStringLiteral("notepad.exe"),
-                path_w[0..len :0],
-                null,
-                winapi.SW_SHOWDEFAULT,
-            );
+            if (self.settings) |s| {
+                _ = winapi.SetForegroundWindow(s.hwnd);
+            } else if (self.activeWindow()) |window| {
+                self.settings = SettingsWindow.create(self.core_app.alloc, window) catch |err| {
+                    log.warn("failed to open settings window err={}", .{err});
+                    return false;
+                };
+            } else return false;
         },
 
         .ring_bell => switch (target) {
@@ -866,6 +875,19 @@ fn truncateUtf8(s: []const u8, max: usize) []const u8 {
 }
 
 /// Reload the configuration; see the GLFW reference implementation.
+/// The window to anchor app-targeted UI (e.g. the settings window) to:
+/// the foreground window if it's one of ours, else the most recent.
+fn activeWindow(self: *App) ?*Window {
+    const fg = winapi.GetForegroundWindow();
+    for (self.windows.items) |w| {
+        if (fg == w.hwnd) return w;
+    }
+    return if (self.windows.items.len > 0)
+        self.windows.items[self.windows.items.len - 1]
+    else
+        null;
+}
+
 fn reloadConfig(
     self: *App,
     target: apprt.action.Target,
