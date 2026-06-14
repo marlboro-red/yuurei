@@ -52,3 +52,14 @@ if 'GHOSTTY_SHELL_INTEGRATION_XDG_DIR' in $env {
   }
   hide-env GHOSTTY_SHELL_INTEGRATION_XDG_DIR
 }
+
+# Report the working directory to Ghostty (OSC 7) on each prompt so new
+# tabs and windows can inherit it (window/tab-inherit-working-directory).
+# The path is sent as a file:// URI with forward slashes; on Windows
+# Ghostty converts it back to a native path. (yuurei addition: upstream's
+# nushell integration does not report the cwd.)
+$env.config.hooks.pre_prompt = ($env.config.hooks.pre_prompt | append {||
+  let p = ($env.PWD | str replace --all '\' '/')
+  let host = ($env.COMPUTERNAME? | default 'localhost')
+  print -rn $"\u{1b}]7;file://($host)/($p)\u{7}"
+})

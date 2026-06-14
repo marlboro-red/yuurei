@@ -1151,7 +1151,7 @@ pub const StreamHandler = struct {
         }
 
         if (builtin.os.tag == .windows) {
-            log.warn("reportPwd unimplemented on windows", .{});
+            try self.reportPwdWindows(url);
             return;
         }
 
@@ -1220,6 +1220,70 @@ pub const StreamHandler = struct {
         }
 
         // If we haven't seen a title, use our pwd as the title.
+        if (!self.seen_title) {
+            try self.windowTitle(path);
+            self.seen_title = false;
+        }
+    }
+
+    /// OSC 7 on Windows: parse a `file://[host]/C:/path` URI into a
+    /// native `C:\path` and store it as the pwd. Done with a manual
+    /// parse because the std.Uri-based path above assumes a POSIX path
+    /// and a required host, neither of which holds for Windows file://
+    /// URIs (commonly `file:///C:/Users/me`, no host).
+    fn reportPwdWindows(self: *StreamHandler, url: []const u8) !void {
+        if (!std.mem.startsWith(u8, url, "file://")) {
+            log.warn("OSC 7 (windows) expects a file:// URI, got: {s}", .{url});
+            return;
+        }
+        // After "file://" an optional host runs up to the first '/'.
+        const after = url["file://".len..];
+        const slash = std.mem.indexOfScalar(u8, after, '/') orelse {
+            log.warn("OSC 7 (windows) uri has no path: {s}", .{url});
+            return;
+        };
+        const raw = after[slash + 1 ..]; // path without its leading '/'
+        if (raw.len == 0) return;
+
+        // Percent-decode and turn forward slashes into backslashes.
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        var n: usize = 0;
+        var i: usize = 0;
+        while (i < raw.len and n < buf.len) {
+            const c = raw[i];
+            if (c == '%' and i + 2 < raw.len) {
+                const hi = std.fmt.charToDigit(raw[i + 1], 16) catch {
+                    buf[n] = c;
+                    n += 1;
+                    i += 1;
+                    continue;
+                };
+                const lo = std.fmt.charToDigit(raw[i + 2], 16) catch {
+                    buf[n] = c;
+                    n += 1;
+                    i += 1;
+                    continue;
+                };
+                buf[n] = @intCast(@as(u16, hi) * 16 + lo);
+                n += 1;
+                i += 3;
+            } else {
+                buf[n] = if (c == '/') '\\' else c;
+                n += 1;
+                i += 1;
+            }
+        }
+        const path = buf[0..n];
+
+        log.debug("terminal pwd (windows): {s}", .{path});
+        try self.terminal.setPwd(path);
+
+        if (apprt.surface.Message.WriteReq.init(self.alloc, path)) |req| {
+            self.surfaceMessageWriter(.{ .pwd_change = req });
+        } else |err| {
+            log.warn("error notifying surface of pwd change err={}", .{err});
+        }
+
         if (!self.seen_title) {
             try self.windowTitle(path);
             self.seen_title = false;

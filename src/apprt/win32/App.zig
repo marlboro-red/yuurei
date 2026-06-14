@@ -752,6 +752,12 @@ pub fn performAction(
             }
         },
 
+        // The pwd is tracked by the core (terminal.getPwd, used for
+        // working-directory inheritance); the apprt has nothing to do
+        // with the notification, so accept it silently rather than log
+        // "unimplemented" on every prompt.
+        .pwd => {},
+
         // Everything else is honestly unimplemented for the skeleton:
         // report "not performed" so the core can fall back or ignore.
         else => {
