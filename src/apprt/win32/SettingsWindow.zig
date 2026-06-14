@@ -70,7 +70,7 @@ const Palette = struct {
 };
 
 /// Hover targets for highlight.
-const Hot = enum { none, theme, font_size, cursor, opacity, blink, open, close };
+const Hot = enum { none, theme, font_size, cursor, opacity, blink, blur, open, close };
 
 app: *App,
 window: *Window,
@@ -85,6 +85,7 @@ font_idx: ?usize = null,
 cursor_idx: ?usize = null,
 opacity_idx: ?usize = null,
 blink: bool = false,
+blur: bool = false,
 
 hot: Hot = .none,
 tracking: bool = false,
@@ -94,6 +95,7 @@ dropdown: ?*DropdownPopup = null,
 client_w: i32 = 0,
 pills: [4]winapi.RECT = undefined,
 blink_rect: winapi.RECT = undefined,
+blur_rect: winapi.RECT = undefined,
 open_rect: winapi.RECT = undefined,
 close_rect: winapi.RECT = undefined,
 
@@ -212,6 +214,14 @@ fn computeLayout(self: *SettingsWindow, client_w: i32) void {
         .right = pad + win.scale(220),
         .bottom = y + win.scale(28),
     };
+    y += win.scale(40);
+
+    self.blur_rect = .{
+        .left = pad,
+        .top = y,
+        .right = pad + win.scale(220),
+        .bottom = y + win.scale(28),
+    };
     y += pitch;
 
     const btn_w = win.scale(150);
@@ -290,6 +300,9 @@ fn loadCurrentValues(self: *SettingsWindow) void {
     if (configValue(text, "cursor-style")) |v| self.cursor_idx = indexOf(&cursor_styles, v);
     if (configValue(text, "background-opacity")) |v| self.opacity_idx = indexOf(&opacities, v);
     if (configValue(text, "cursor-style-blink")) |v| self.blink = std.ascii.eqlIgnoreCase(v, "true");
+    if (configValue(text, "background-blur")) |v| {
+        self.blur = !std.ascii.eqlIgnoreCase(v, "false") and !std.mem.eql(u8, v, "0");
+    }
 }
 
 fn indexOf(values: []const []const u8, current: []const u8) ?usize {
@@ -482,44 +495,42 @@ fn paint(self: *SettingsWindow, hdc: winapi.HDC) void {
         polyline(hdc, &chevron, p.fg_dim, win.scale(2));
     }
 
-    // Checkbox row.
-    {
-        const box = win.scale(20);
-        const by = @divTrunc(self.blink_rect.top + self.blink_rect.bottom - box, 2);
-        const br: winapi.RECT = .{
-            .left = self.blink_rect.left,
-            .top = by,
-            .right = self.blink_rect.left + box,
-            .bottom = by + box,
-        };
-        const hovered = self.hot == .blink;
-        roundRect(
-            hdc,
-            br,
-            if (self.blink) p.accent else (if (hovered) p.card_hover else p.card),
-            if (self.blink) p.accent else p.border,
-            win.scale(5),
-        );
-        if (self.blink) {
-            const check = [_]winapi.POINT{
-                .{ .x = br.left + win.scale(5), .y = by + @divTrunc(box, 2) },
-                .{ .x = br.left + win.scale(9), .y = br.bottom - win.scale(6) },
-                .{ .x = br.right - win.scale(5), .y = by + win.scale(5) },
-            };
-            polyline(hdc, &check, 0x00FFFFFF, win.scale(2));
-        }
-        var tr: winapi.RECT = .{
-            .left = br.right + win.scale(10),
-            .top = self.blink_rect.top,
-            .right = self.blink_rect.right + win.scale(120),
-            .bottom = self.blink_rect.bottom,
-        };
-        drawText(hdc, "Blink the cursor", &tr, p.fg, winapi.DT_LEFT | winapi.DT_VCENTER | winapi.DT_SINGLELINE);
-    }
+    // Checkbox rows.
+    self.paintCheckbox(hdc, self.blink_rect, self.blink, self.hot == .blink, "Blink the cursor", p);
+    self.paintCheckbox(hdc, self.blur_rect, self.blur, self.hot == .blur, "Background blur", p);
 
     // Buttons.
     self.paintButton(hdc, self.open_rect, "Open config file\u{2026}", self.hot == .open, p);
     self.paintButton(hdc, self.close_rect, "Close", self.hot == .close, p);
+}
+
+fn paintCheckbox(self: *SettingsWindow, hdc: winapi.HDC, row: winapi.RECT, checked: bool, hovered: bool, label: []const u8, p: Palette) void {
+    const win = self.window;
+    const box = win.scale(20);
+    const by = @divTrunc(row.top + row.bottom - box, 2);
+    const br: winapi.RECT = .{ .left = row.left, .top = by, .right = row.left + box, .bottom = by + box };
+    roundRect(
+        hdc,
+        br,
+        if (checked) p.accent else (if (hovered) p.card_hover else p.card),
+        if (checked) p.accent else p.border,
+        win.scale(5),
+    );
+    if (checked) {
+        const mark = [_]winapi.POINT{
+            .{ .x = br.left + win.scale(5), .y = by + @divTrunc(box, 2) },
+            .{ .x = br.left + win.scale(9), .y = br.bottom - win.scale(6) },
+            .{ .x = br.right - win.scale(5), .y = by + win.scale(5) },
+        };
+        polyline(hdc, &mark, 0x00FFFFFF, win.scale(2));
+    }
+    var tr: winapi.RECT = .{
+        .left = br.right + win.scale(10),
+        .top = row.top,
+        .right = row.right + win.scale(120),
+        .bottom = row.bottom,
+    };
+    drawText(hdc, label, &tr, p.fg, winapi.DT_LEFT | winapi.DT_VCENTER | winapi.DT_SINGLELINE);
 }
 
 fn paintButton(self: *SettingsWindow, hdc: winapi.HDC, r: winapi.RECT, text: []const u8, hovered: bool, p: Palette) void {
@@ -592,6 +603,7 @@ fn hitTest(self: *const SettingsWindow, x: i32, y: i32) Hot {
         if (inRect(self.pills[i], x, y)) return hotForField(@enumFromInt(i));
     }
     if (inRect(self.blink_rect, x, y)) return .blink;
+    if (inRect(self.blur_rect, x, y)) return .blur;
     if (inRect(self.open_rect, x, y)) return .open;
     if (inRect(self.close_rect, x, y)) return .close;
     return .none;
@@ -663,6 +675,11 @@ pub fn wndProc(
                 .blink => {
                     self.blink = !self.blink;
                     self.setValue("cursor-style-blink", if (self.blink) "true" else "false");
+                    _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+                },
+                .blur => {
+                    self.blur = !self.blur;
+                    self.setValue("background-blur", if (self.blur) "true" else "false");
                     _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
                 },
                 .open => self.openConfigFile(),

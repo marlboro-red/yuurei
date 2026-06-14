@@ -927,6 +927,11 @@ fn reloadConfig(
     self.config.deinit();
     self.config = config;
 
+    // Window-level transparency/blur are applied by the apprt (not the
+    // renderer), so re-apply them here for background-opacity /
+    // background-blur changes to take effect live.
+    for (self.windows.items) |window| window.reapplyTransparency();
+
     // Global hotkeys may have changed.
     self.registerGlobalHotkeys();
 }

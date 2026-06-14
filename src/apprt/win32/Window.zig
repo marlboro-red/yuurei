@@ -315,6 +315,15 @@ pub fn moveTab(self: *Window, amount: isize) void {
     self.invalidateStrip();
 }
 
+/// Re-apply window-level transparency and blur from the current config.
+/// Called on config reload so changing background-opacity/background-blur
+/// (e.g. from the settings window) takes effect live, not just on the
+/// next launch.
+pub fn reapplyTransparency(self: *Window) void {
+    self.setOpacity(self.app.config.@"background-opacity");
+    self.applyBlur();
+}
+
 /// Frost the desktop behind the window when `background-blur` is set.
 /// Uses the DWM accent policy (a compositor effect), so it only shows
 /// where the window is translucent — i.e. it pairs with
