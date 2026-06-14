@@ -585,6 +585,34 @@ pub extern "dwmapi" fn DwmSetWindowAttribute(
     value_size: DWORD,
 ) callconv(.winapi) i32;
 
+// Undocumented DWM accent policy (SetWindowCompositionAttribute) — the
+// widely-used path for blur/acrylic behind a Win32 window. It is a pure
+// DWM compositor effect: no GL/D3D/DirectComposition involvement, so it
+// can't touch the GPU-interop path. Used for the frosted blur.
+pub const ACCENT_DISABLED: u32 = 0;
+pub const ACCENT_ENABLE_BLURBEHIND: u32 = 3;
+pub const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
+pub const WCA_ACCENT_POLICY: DWORD = 19;
+
+pub const ACCENT_POLICY = extern struct {
+    AccentState: u32 = 0,
+    AccentFlags: u32 = 0,
+    /// Tint in 0xAABBGGRR. The alpha byte sets the tint strength.
+    GradientColor: u32 = 0,
+    AnimationId: u32 = 0,
+};
+
+pub const WINDOWCOMPOSITIONATTRIBDATA = extern struct {
+    Attrib: DWORD,
+    pvData: *anyopaque,
+    cbData: usize,
+};
+
+pub extern "user32" fn SetWindowCompositionAttribute(
+    hwnd: HWND,
+    data: *WINDOWCOMPOSITIONATTRIBDATA,
+) callconv(.winapi) BOOL;
+
 // IME (imm32)
 pub const HIMC = *opaque {};
 

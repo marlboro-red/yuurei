@@ -223,6 +223,10 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
         app.config.@"background-opacity",
     );
 
+    // background-blur: frost the desktop behind the (translucent) window
+    // via the DWM accent policy. Pure compositor effect — no GL interop.
+    self.applyBlur();
+
     _ = winapi.ShowWindow(hwnd, winapi.SW_SHOWDEFAULT);
 
     // Report the OS theme so window-theme=auto and light/dark
@@ -309,6 +313,32 @@ pub fn moveTab(self: *Window, amount: isize) void {
     self.tabs.insertAssumeCapacity(target, tab);
     self.active_tab = target;
     self.invalidateStrip();
+}
+
+/// Frost the desktop behind the window when `background-blur` is set.
+/// Uses the DWM accent policy (a compositor effect), so it only shows
+/// where the window is translucent — i.e. it pairs with
+/// `background-opacity` < 1. Whole-window, so text is frosted too; the
+/// crisp per-pixel variant needs the DirectComposition path. No GL/D3D
+/// interop here, so this cannot affect the GPU the way that path can.
+fn applyBlur(self: *Window) void {
+    const enabled = self.app.config.@"background-blur".enabled();
+    const light = winapi.appsUseLightTheme();
+    // A faint tint over the blur for legibility (0xAABBGGRR).
+    const tint: u32 = if (light) 0x14FFFFFF else 0x14000000;
+    var accent: winapi.ACCENT_POLICY = .{
+        .AccentState = if (enabled)
+            winapi.ACCENT_ENABLE_ACRYLICBLURBEHIND
+        else
+            winapi.ACCENT_DISABLED,
+        .GradientColor = tint,
+    };
+    var data: winapi.WINDOWCOMPOSITIONATTRIBDATA = .{
+        .Attrib = winapi.WCA_ACCENT_POLICY,
+        .pvData = &accent,
+        .cbData = @sizeOf(winapi.ACCENT_POLICY),
+    };
+    _ = winapi.SetWindowCompositionAttribute(self.hwnd, &data);
 }
 
 /// Apply (or remove, at >= 1.0) window-level opacity.
