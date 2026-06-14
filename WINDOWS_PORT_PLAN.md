@@ -625,6 +625,21 @@ signing, no winget/Scoop, no installer — by choice. Landed:
   pairs with background-opacity < 1. Verified on Windows 11, no hang.
   The crisp text-over-blur variant (DComp per-pixel, parked) remains the
   follow-up, to be attempted carefully if the frosted look isn't enough.
+- [x] **Tab rename + font-family dropdown + cwd inheritance (2026-06-14)**
+  — a batch of user-requested polish. (1) Right-click a tab → context
+  menu (Rename / Close); rename is an in-strip editable field (own
+  UTF-16 buffer + GDI paint + caret, the search-bar pattern — a
+  subclassed EDIT didn't reliably capture input), stored as a per-tab
+  custom_title override. (2) Settings window gained a Font-family
+  dropdown populated from installed monospace families (GDI
+  EnumFontFamiliesExW). (3) **OSC 7 cwd reporting implemented on
+  Windows** (reportPwd was a no-op there): new tabs/windows now inherit
+  the working directory, and tab titles show the cwd. Added an OSC 7
+  emitter to the nushell integration (upstream's reports none); pwsh
+  already reported it. `working-directory` (default dir) and
+  `*-inherit-working-directory` (default on) were already config
+  options; the missing piece was the Windows OSC 7 parse. Verified
+  end-to-end with pwsh and nushell.
 
 Still open if user pain demands: crash reporting (Sentry supports
 Windows minidumps; upstream already integrates sentry).

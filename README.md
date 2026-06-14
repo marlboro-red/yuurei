@@ -30,7 +30,9 @@ Working today, verified live on Windows 11:
 
 - **Native window** with a Windows 11-style custom frame (caption buttons,
   drag, snap/maximize) and a real **tab strip** — new/switch/close tabs,
-  plus multiple top-level windows
+  drag-reorder, **right-click to rename**, plus multiple top-level windows.
+  New tabs/windows inherit the current working directory (OSC 7), and tab
+  titles reflect it
 - **ConPTY** shell hosting with headless integration tests; prefers a
   vendored `conpty.dll` next to the exe, falling back to the OS ConPTY
 - **OpenGL rendering** via WGL — the same GPU renderer and HarfBuzz/FreeType
@@ -63,7 +65,8 @@ Working today, verified live on Windows 11:
 - **Terminal inspector** — the upstream Dear ImGui inspector in its own
   native window (toggle via keybind `inspector:toggle`)
 - **Settings window** (Ctrl+,) — a native dialog over the most-changed
-  options (theme, font size, cursor style, opacity, cursor blink) that
+  options (theme, font family, font size, cursor style, opacity, cursor
+  blink, background blur) that
   reads your config file, writes changes back preserving your comments,
   and reloads live; an "Open config file" button covers everything else
 - **Desktop notifications** as native toasts (tray balloon path),
