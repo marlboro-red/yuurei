@@ -324,6 +324,41 @@ pub extern "user32" fn ShowWindow(HWND, i32) callconv(.winapi) BOOL;
 pub extern "user32" fn GetClientRect(HWND, *RECT) callconv(.winapi) BOOL;
 pub extern "user32" fn GetDC(?HWND) callconv(.winapi) ?HDC;
 pub extern "user32" fn ReleaseDC(?HWND, HDC) callconv(.winapi) i32;
+
+// Font family enumeration (settings font-family dropdown).
+pub const DEFAULT_CHARSET: u8 = 1;
+pub const FIXED_PITCH: u8 = 1;
+pub const LOGFONTW = extern struct {
+    lfHeight: i32 = 0,
+    lfWidth: i32 = 0,
+    lfEscapement: i32 = 0,
+    lfOrientation: i32 = 0,
+    lfWeight: i32 = 0,
+    lfItalic: u8 = 0,
+    lfUnderline: u8 = 0,
+    lfStrikeOut: u8 = 0,
+    lfCharSet: u8 = 0,
+    lfOutPrecision: u8 = 0,
+    lfClipPrecision: u8 = 0,
+    lfQuality: u8 = 0,
+    lfPitchAndFamily: u8 = 0,
+    lfFaceName: [32]u16 = [_]u16{0} ** 32,
+};
+/// The callback's first arg is really ENUMLOGFONTEXW, which begins with
+/// a LOGFONTW; we only read the leading LOGFONTW fields.
+pub const FONTENUMPROCW = *const fn (
+    *const LOGFONTW,
+    *const anyopaque,
+    DWORD,
+    LPARAM,
+) callconv(.winapi) i32;
+pub extern "gdi32" fn EnumFontFamiliesExW(
+    hdc: HDC,
+    lpLogfont: *LOGFONTW,
+    lpProc: FONTENUMPROCW,
+    lParam: LPARAM,
+    dwFlags: DWORD,
+) callconv(.winapi) i32;
 pub extern "user32" fn SetWindowTextW(HWND, [*:0]const u16) callconv(.winapi) BOOL;
 pub extern "user32" fn GetDpiForWindow(HWND) callconv(.winapi) UINT;
 pub extern "user32" fn WindowFromDC(HDC) callconv(.winapi) ?HWND;

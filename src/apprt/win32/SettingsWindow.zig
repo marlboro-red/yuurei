@@ -34,7 +34,7 @@ const opacities = [_][]const u8{
 };
 
 /// The dropdown rows, in display order.
-const Field = enum { theme, font_size, cursor, opacity };
+const Field = enum { theme, font_family, font_size, cursor, opacity };
 
 const Palette = struct {
     bg: u32,
@@ -70,7 +70,7 @@ const Palette = struct {
 };
 
 /// Hover targets for highlight.
-const Hot = enum { none, theme, font_size, cursor, opacity, blink, blur, open, close };
+const Hot = enum { none, theme, font_family, font_size, cursor, opacity, blink, blur, open, close };
 
 app: *App,
 window: *Window,
@@ -79,8 +79,10 @@ font: ?*anyopaque = null,
 
 arena: std.heap.ArenaAllocator,
 themes: [][]const u8 = &.{},
+fonts: [][]const u8 = &.{},
 
 theme_idx: ?usize = null,
+font_family_idx: ?usize = null,
 font_idx: ?usize = null,
 cursor_idx: ?usize = null,
 opacity_idx: ?usize = null,
@@ -93,7 +95,7 @@ dropdown: ?*DropdownPopup = null,
 
 // Layout rects in client coords, filled by computeLayout().
 client_w: i32 = 0,
-pills: [4]winapi.RECT = undefined,
+pills: [5]winapi.RECT = undefined,
 blink_rect: winapi.RECT = undefined,
 blur_rect: winapi.RECT = undefined,
 open_rect: winapi.RECT = undefined,
@@ -162,6 +164,7 @@ pub fn create(alloc: Allocator, window: *Window) !*SettingsWindow {
     );
 
     self.collectThemes();
+    self.collectFonts();
     self.loadCurrentValues();
 
     // Lay out at the desired client width, then resize the window so the
@@ -275,12 +278,66 @@ fn collectThemes(self: *SettingsWindow) void {
         names.append(arena, name) catch continue;
     }
 
-    std.mem.sort([]const u8, names.items, {}, struct {
-        fn lt(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.lessThan(u8, a, b);
-        }
-    }.lt);
+    std.mem.sort([]const u8, names.items, {}, lessThanName);
     self.themes = names.toOwnedSlice(arena) catch &.{};
+}
+
+fn lessThanName(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.lessThan(u8, a, b);
+}
+
+/// Collector for EnumFontFamiliesExW (the C callback can't capture).
+const FontCollector = struct {
+    alloc: Allocator,
+    list: *std.ArrayList([]const u8),
+};
+
+fn fontEnumProc(
+    lf: *const winapi.LOGFONTW,
+    tm: *const anyopaque,
+    font_type: winapi.DWORD,
+    lparam: winapi.LPARAM,
+) callconv(.winapi) i32 {
+    _ = tm;
+    _ = font_type;
+    const c: *FontCollector = @ptrFromInt(@as(usize, @bitCast(lparam)));
+    // Monospace only (terminal use), and skip '@'-prefixed vertical fonts.
+    if ((lf.lfPitchAndFamily & 0x03) != winapi.FIXED_PITCH) return 1;
+    if (lf.lfFaceName[0] == 0 or lf.lfFaceName[0] == '@') return 1;
+    var n: usize = 0;
+    while (n < lf.lfFaceName.len and lf.lfFaceName[n] != 0) : (n += 1) {}
+    var buf: [128]u8 = undefined;
+    const len = std.unicode.utf16LeToUtf8(&buf, lf.lfFaceName[0..n]) catch return 1;
+    const name = c.alloc.dupe(u8, buf[0..len]) catch return 1;
+    c.list.append(c.alloc, name) catch return 1;
+    return 1; // continue enumeration
+}
+
+/// Enumerate installed monospace font families for the Font dropdown.
+fn collectFonts(self: *SettingsWindow) void {
+    const arena = self.arena.allocator();
+    const hdc = winapi.GetDC(null) orelse return;
+    defer _ = winapi.ReleaseDC(null, hdc);
+
+    var names: std.ArrayList([]const u8) = .empty;
+    var collector: FontCollector = .{ .alloc = arena, .list = &names };
+    var lf: winapi.LOGFONTW = .{ .lfCharSet = winapi.DEFAULT_CHARSET };
+    _ = winapi.EnumFontFamiliesExW(
+        hdc,
+        &lf,
+        fontEnumProc,
+        @bitCast(@intFromPtr(&collector)),
+        0,
+    );
+
+    std.mem.sort([]const u8, names.items, {}, lessThanName);
+    // EnumFontFamiliesEx can repeat a family per charset; dedup adjacent.
+    var deduped: std.ArrayList([]const u8) = .empty;
+    for (names.items, 0..) |name, i| {
+        if (i > 0 and std.mem.eql(u8, name, names.items[i - 1])) continue;
+        deduped.append(arena, name) catch continue;
+    }
+    self.fonts = deduped.toOwnedSlice(arena) catch &.{};
 }
 
 fn loadCurrentValues(self: *SettingsWindow) void {
@@ -296,6 +353,7 @@ fn loadCurrentValues(self: *SettingsWindow) void {
     defer alloc.free(text);
 
     if (configValue(text, "theme")) |v| self.theme_idx = indexOf(self.themes, v);
+    if (configValue(text, "font-family")) |v| self.font_family_idx = indexOf(self.fonts, v);
     if (configValue(text, "font-size")) |v| self.font_idx = indexOf(&font_sizes, v);
     if (configValue(text, "cursor-style")) |v| self.cursor_idx = indexOf(&cursor_styles, v);
     if (configValue(text, "background-opacity")) |v| self.opacity_idx = indexOf(&opacities, v);
@@ -397,6 +455,11 @@ fn onDropdownResult(self: *SettingsWindow, field: Field, idx: usize) void {
             self.theme_idx = idx;
             self.setValue("theme", self.themes[idx]);
         },
+        .font_family => {
+            if (idx >= self.fonts.len) return;
+            self.font_family_idx = idx;
+            self.setValue("font-family", self.fonts[idx]);
+        },
         .font_size => {
             self.font_idx = idx;
             self.setValue("font-size", font_sizes[idx]);
@@ -416,6 +479,7 @@ fn onDropdownResult(self: *SettingsWindow, field: Field, idx: usize) void {
 fn fieldItems(self: *const SettingsWindow, field: Field) []const []const u8 {
     return switch (field) {
         .theme => self.themes,
+        .font_family => self.fonts,
         .font_size => &font_sizes,
         .cursor => &cursor_styles,
         .opacity => &opacities,
@@ -425,6 +489,7 @@ fn fieldItems(self: *const SettingsWindow, field: Field) []const []const u8 {
 fn fieldIndex(self: *const SettingsWindow, field: Field) ?usize {
     return switch (field) {
         .theme => self.theme_idx,
+        .font_family => self.font_family_idx,
         .font_size => self.font_idx,
         .cursor => self.cursor_idx,
         .opacity => self.opacity_idx,
@@ -434,7 +499,7 @@ fn fieldIndex(self: *const SettingsWindow, field: Field) ?usize {
 // ---------------------------------------------------------------------
 // Painting
 
-const labels = [_][]const u8{ "Theme", "Font size", "Cursor style", "Background opacity" };
+const labels = [_][]const u8{ "Theme", "Font", "Font size", "Cursor style", "Background opacity" };
 
 fn paint(self: *SettingsWindow, hdc: winapi.HDC) void {
     const win = self.window;
@@ -452,7 +517,7 @@ fn paint(self: *SettingsWindow, hdc: winapi.HDC) void {
     const pad = win.scale(22);
 
     // Dropdown rows: label on the left, value pill on the right.
-    inline for (0..4) |i| {
+    inline for (0..5) |i| {
         const field: Field = @enumFromInt(i);
         var lr: winapi.RECT = .{
             .left = pad,
@@ -542,6 +607,7 @@ fn paintButton(self: *SettingsWindow, hdc: winapi.HDC, r: winapi.RECT, text: []c
 fn hotForField(field: Field) Hot {
     return switch (field) {
         .theme => .theme,
+        .font_family => .font_family,
         .font_size => .font_size,
         .cursor => .cursor,
         .opacity => .opacity,
@@ -599,7 +665,7 @@ fn inRect(r: winapi.RECT, x: i32, y: i32) bool {
 }
 
 fn hitTest(self: *const SettingsWindow, x: i32, y: i32) Hot {
-    inline for (0..4) |i| {
+    inline for (0..5) |i| {
         if (inRect(self.pills[i], x, y)) return hotForField(@enumFromInt(i));
     }
     if (inRect(self.blink_rect, x, y)) return .blink;
@@ -669,6 +735,7 @@ pub fn wndProc(
         winapi.WM_LBUTTONDOWN => {
             switch (self.hitTest(lparamX(lparam), lparamY(lparam))) {
                 .theme => self.openDropdown(.theme),
+                .font_family => self.openDropdown(.font_family),
                 .font_size => self.openDropdown(.font_size),
                 .cursor => self.openDropdown(.cursor),
                 .opacity => self.openDropdown(.opacity),
