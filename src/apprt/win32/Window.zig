@@ -25,6 +25,15 @@ pub const Tree = datastruct.SplitTree(Surface);
 pub const Tab = struct {
     tree: Tree,
     focused: *Surface,
+    /// A manual rename (right-click -> Rename), owned by the app
+    /// allocator; overrides the surface's auto-title when set.
+    custom_title: ?[]const u8 = null,
+
+    /// The title to display: manual rename, else the focused surface's
+    /// title, else a default.
+    pub fn title(self: *const Tab) []const u8 {
+        return self.custom_title orelse (self.focused.title_text orelse "Ghostty");
+    }
 };
 
 /// The window class name, registered once by App.
@@ -60,6 +69,16 @@ divider_drag: ?DividerHit = null,
 
 /// Index of the tab being drag-reordered, if any.
 tab_drag: ?usize = null,
+
+/// In-strip tab rename: when active, the tab `rename_tab` shows an
+/// editable text field backed by `rename_buf` (UTF-16, like the search
+/// bar's needle). Keys are captured by the window proc while active.
+rename_active: bool = false,
+rename_tab: usize = 0,
+rename_buf: std.ArrayList(u16) = .empty,
+/// True until the first keystroke of a rename, so the pre-filled title
+/// behaves like a selection (the first key replaces it).
+rename_fresh: bool = false,
 
 /// Last divider-drag relayout instant, for throttling: every layout
 /// runs the full resize pipeline (ConPTY resize + renderer resize per
@@ -240,6 +259,7 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
 /// inside the window procedure.
 pub fn destroy(self: *Window) void {
     const alloc = self.app.core_app.alloc;
+    self.rename_buf.deinit(alloc);
     if (self.palette) |palette| palette.destroy();
     if (self.search) |search| search.destroy();
     if (self.fonts) |f| {
@@ -255,8 +275,8 @@ pub fn destroy(self: *Window) void {
 
 fn closeAllTabs(self: *Window) void {
     const alloc = self.app.core_app.alloc;
-    _ = alloc;
     while (self.tabs.pop()) |tab| {
+        if (tab.custom_title) |t| alloc.free(t);
         var tree = tab.tree;
         tree.deinit();
     }
@@ -409,6 +429,7 @@ pub fn removeSurface(self: *Window, surface: *Surface) void {
 
     if (tab.tree.isEmpty()) {
         new_tree.deinit();
+        if (tab.custom_title) |t| alloc.free(t);
         _ = self.tabs.orderedRemove(tab_idx);
         if (self.tabs.items.len == 0) {
             self.should_close = true;
@@ -427,6 +448,105 @@ pub fn removeSurface(self: *Window, surface: *Surface) void {
     }
     self.layoutActiveTab();
     self.syncTitle();
+}
+
+/// Right-click context menu for tab `idx`: Rename / Close.
+fn showTabMenu(self: *Window, idx: usize) void {
+    if (idx >= self.tabs.items.len) return;
+    const menu = winapi.CreatePopupMenu() orelse return;
+    defer _ = winapi.DestroyMenu(menu);
+    _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 1, std.unicode.utf8ToUtf16LeStringLiteral("Rename\u{2026}"));
+    _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 2, std.unicode.utf8ToUtf16LeStringLiteral("Close Tab"));
+
+    var pt: winapi.POINT = .{ .x = 0, .y = 0 };
+    _ = winapi.GetCursorPos(&pt);
+    const cmd = winapi.TrackPopupMenu(
+        menu,
+        winapi.TPM_RIGHTBUTTON | winapi.TPM_RETURNCMD,
+        pt.x,
+        pt.y,
+        0,
+        self.hwnd,
+        null,
+    );
+    switch (cmd) {
+        // Defer rename until the menu's modal loop has fully exited and
+        // focus has settled, else the new EDIT gets an immediate
+        // WM_KILLFOCUS and commits empty.
+        1 => _ = winapi.PostMessageW(self.hwnd, winapi.WM_APP_RENAME, idx, 0),
+        2 => {
+            var it = self.tabs.items[idx].tree.iterator();
+            while (it.next()) |entry| entry.view.should_close = true;
+            self.app.wakeup();
+        },
+        else => {},
+    }
+}
+
+/// Begin an in-strip rename of tab `idx`: the tab becomes an editable
+/// field pre-filled with the current title. The window proc captures
+/// keys while active (Enter commits, Escape cancels, Backspace edits).
+fn startRenameTab(self: *Window, idx: usize) void {
+    if (self.rename_active) self.commitRename(false);
+    if (idx >= self.tabs.items.len) return;
+    const alloc = self.app.core_app.alloc;
+
+    self.rename_buf.clearRetainingCapacity();
+    var buf: [512]u16 = undefined;
+    const title = self.tabs.items[idx].title();
+    const n = std.unicode.utf8ToUtf16Le(&buf, title) catch 0;
+    self.rename_buf.appendSlice(alloc, buf[0..n]) catch {};
+
+    self.rename_active = true;
+    self.rename_fresh = true;
+    self.rename_tab = idx;
+    _ = winapi.SetFocus(self.hwnd); // route keys to the window proc
+    self.invalidateStrip();
+}
+
+/// Commit (save=true) or cancel the in-progress rename.
+fn commitRename(self: *Window, save: bool) void {
+    if (!self.rename_active) return;
+    self.rename_active = false;
+
+    if (save and self.rename_tab < self.tabs.items.len and self.rename_buf.items.len > 0) {
+        var u8buf: [1024]u8 = undefined;
+        const len = std.unicode.utf16LeToUtf8(&u8buf, self.rename_buf.items) catch 0;
+        if (len > 0) {
+            const alloc = self.app.core_app.alloc;
+            const tab = &self.tabs.items[self.rename_tab];
+            if (tab.custom_title) |prev| alloc.free(prev);
+            tab.custom_title = alloc.dupe(u8, u8buf[0..len]) catch null;
+        }
+    }
+
+    self.rename_buf.clearRetainingCapacity();
+    self.invalidateStrip();
+    self.syncTitle();
+    if (self.activeSurface()) |s| self.focusSurface(s);
+}
+
+/// Handle a typed character during a rename. Returns true if consumed.
+fn renameChar(self: *Window, ch: u16) bool {
+    if (!self.rename_active) return false;
+    // Esc/Enter/Tab are handled as keys, not text.
+    if (ch == 0x1B or ch == 0x0D or ch == 0x09) return true;
+    const alloc = self.app.core_app.alloc;
+    // First edit replaces the pre-filled title (select-all behavior).
+    if (self.rename_fresh) {
+        self.rename_buf.clearRetainingCapacity();
+        self.rename_fresh = false;
+    }
+    if (ch == 0x08) {
+        // Backspace: drop one codepoint (both surrogate halves).
+        if (self.rename_buf.pop()) |unit| {
+            if (unit >= 0xDC00 and unit <= 0xDFFF) _ = self.rename_buf.pop();
+        }
+    } else if (ch >= 0x20 and ch != 0x7F) {
+        self.rename_buf.append(alloc, ch) catch {};
+    }
+    self.invalidateStrip();
+    return true;
 }
 
 /// Flag every surface in the tab containing the given surface for
@@ -806,7 +926,7 @@ pub fn gotoTab(self: *Window, target: apprt.action.GotoTab) void {
 /// tab and repaint the strip.
 pub fn syncTitle(self: *Window) void {
     const tab = self.activeTab() orelse return;
-    const title = tab.focused.title_text orelse "Ghostty";
+    const title = tab.title();
     var buf: [512]u16 = undefined;
     const len = std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], title) catch return;
     buf[len] = 0;
@@ -968,7 +1088,7 @@ fn syncTabTooltips(self: *Window) void {
         const w = self.tabWidth();
         hasher.update(std.mem.asBytes(&w));
         for (self.tabs.items) |*tab| {
-            hasher.update(tab.focused.title_text orelse "Ghostty");
+            hasher.update(tab.title());
             hasher.update(&.{0});
         }
         break :hash hasher.final();
@@ -993,7 +1113,7 @@ fn syncTabTooltips(self: *Window) void {
 
     for (self.tabs.items, 0..) |*tab, i| {
         const title = title: {
-            const title = tab.focused.title_text orelse "Ghostty";
+            const title = tab.title();
             // Truncate at a codepoint boundary so the UTF-16 buffer
             // below is always large enough.
             var end = @min(title.len, 255);
@@ -1157,7 +1277,7 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
             }
         }
 
-        // Tab title
+        // Tab title (or the editable rename buffer + caret).
         if (text_font) |f| {
             const old = winapi.SelectObject(hdc, f);
             defer if (old) |o| {
@@ -1165,20 +1285,24 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
             };
             _ = winapi.SetTextColor(hdc, if (active) fg else fg_dim);
 
-            const title = tab.focused.title_text orelse "Ghostty";
+            const renaming = self.rename_active and i == self.rename_tab;
             var buf: [512]u16 = undefined;
-            const len = std.unicode.utf8ToUtf16Le(
-                buf[0 .. buf.len - 1],
-                title,
-            ) catch 0;
+            var len: usize = 0;
+            if (renaming) {
+                len = @min(self.rename_buf.items.len, buf.len - 1);
+                @memcpy(buf[0..len], self.rename_buf.items[0..len]);
+            } else {
+                len = std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], tab.title()) catch 0;
+            }
+            buf[len] = 0;
+            const text_left = rect.left + self.scale(10);
+            var text_rect: winapi.RECT = .{
+                .left = text_left,
+                .top = rect.top,
+                .right = self.tabCloseRect(i).left - self.scale(4),
+                .bottom = rect.bottom,
+            };
             if (len > 0) {
-                buf[len] = 0;
-                var text_rect: winapi.RECT = .{
-                    .left = rect.left + self.scale(10),
-                    .top = rect.top,
-                    .right = self.tabCloseRect(i).left - self.scale(4),
-                    .bottom = rect.bottom,
-                };
                 _ = winapi.DrawTextW(
                     hdc,
                     buf[0..len :0],
@@ -1187,6 +1311,23 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
                     winapi.DT_LEFT | winapi.DT_VCENTER |
                         winapi.DT_SINGLELINE | winapi.DT_END_ELLIPSIS,
                 );
+            }
+            if (renaming) {
+                // Draw a caret after the text to signal edit mode.
+                var extent: winapi.SIZE = .{ .cx = 0, .cy = 0 };
+                if (len > 0) _ = winapi.GetTextExtentPoint32W(hdc, &buf, @intCast(len), &extent);
+                const cx = text_left + extent.cx + self.scale(1);
+                const mid = @divTrunc(rect.top + rect.bottom, 2);
+                var caret: winapi.RECT = .{
+                    .left = cx,
+                    .top = mid - self.scale(8),
+                    .right = cx + self.scale(2),
+                    .bottom = mid + self.scale(8),
+                };
+                if (winapi.CreateSolidBrush(fg)) |b| {
+                    defer _ = winapi.DeleteObject(b);
+                    _ = winapi.FillRect(hdc, &caret, b);
+                }
             }
         }
 
@@ -1594,6 +1735,12 @@ pub fn wndProc(
             return 0;
         },
 
+        // Deferred tab rename (posted from the context menu).
+        winapi.WM_APP_RENAME => {
+            self.startRenameTab(@truncate(wparam));
+            return 0;
+        },
+
         // Dropped files paste their paths into the focused surface,
         // double-quoted when cmd/pwsh would split them.
         winapi.WM_DROPFILES => {
@@ -1773,6 +1920,20 @@ pub fn wndProc(
         winapi.WM_SYSKEYDOWN,
         winapi.WM_SYSKEYUP,
         => {
+            // While renaming a tab, the window captures Enter/Escape.
+            if (self.rename_active and msg == winapi.WM_KEYDOWN) {
+                switch (@as(u8, @truncate(wparam))) {
+                    winapi.VK_RETURN => {
+                        self.commitRename(true);
+                        return 0;
+                    },
+                    winapi.VK_ESCAPE => {
+                        self.commitRename(false);
+                        return 0;
+                    },
+                    else => return 0,
+                }
+            }
             self.keyEvent(msg, wparam, lparam);
             if (msg == winapi.WM_SYSKEYDOWN or msg == winapi.WM_SYSKEYUP)
                 return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -1780,6 +1941,7 @@ pub fn wndProc(
         },
 
         winapi.WM_CHAR => {
+            if (self.renameChar(@truncate(wparam))) return 0;
             self.charEvent(@truncate(wparam));
             return 0;
         },
@@ -1876,6 +2038,13 @@ pub fn wndProc(
         winapi.WM_MBUTTONDOWN,
         winapi.WM_MBUTTONUP,
         => {
+            // A click anywhere commits an in-progress tab rename.
+            if (self.rename_active and (msg == winapi.WM_LBUTTONDOWN or
+                msg == winapi.WM_RBUTTONDOWN or msg == winapi.WM_MBUTTONDOWN))
+            {
+                self.commitRename(true);
+            }
+
             // Button presses dismiss any showing tab tooltip.
             self.relayToTooltip(msg, wparam, lparam);
 
@@ -1919,6 +2088,13 @@ pub fn wndProc(
                         .new_tab => _ = self.newTab() catch |err| {
                             log.err("error creating tab err={}", .{err});
                         },
+                    }
+                }
+                // Right-click a tab for its context menu (Rename / Close).
+                if (msg == winapi.WM_RBUTTONUP) {
+                    switch (self.hitTestStrip(lparamX(lparam), cy)) {
+                        .tab => |i| self.showTabMenu(i),
+                        else => {},
                     }
                 }
                 return 0;

@@ -368,6 +368,15 @@ pub extern "user32" fn ClientToScreen(HWND, *POINT) callconv(.winapi) BOOL;
 pub extern "user32" fn SetFocus(?HWND) callconv(.winapi) ?HWND;
 pub extern "user32" fn SetWindowLongPtrW(HWND, i32, isize) callconv(.winapi) isize;
 pub extern "user32" fn GetWindowLongPtrW(HWND, i32) callconv(.winapi) isize;
+
+// Popup menu (tab right-click context menu).
+pub const MF_STRING: UINT = 0x0000;
+pub const TPM_RIGHTBUTTON: UINT = 0x0002;
+pub const TPM_RETURNCMD: UINT = 0x0100;
+pub extern "user32" fn CreatePopupMenu() callconv(.winapi) ?HMENU;
+pub extern "user32" fn AppendMenuW(HMENU, UINT, usize, ?[*:0]const u16) callconv(.winapi) BOOL;
+pub extern "user32" fn TrackPopupMenu(HMENU, UINT, i32, i32, i32, HWND, ?*const RECT) callconv(.winapi) i32;
+pub extern "user32" fn DestroyMenu(HMENU) callconv(.winapi) BOOL;
 pub extern "user32" fn GetKeyState(i32) callconv(.winapi) i16;
 pub extern "user32" fn MapVirtualKeyW(UINT, UINT) callconv(.winapi) UINT;
 // The name parameter is untyped because MAKEINTRESOURCE ids are
@@ -448,6 +457,11 @@ pub const TOOLINFOW = extern struct {
     lpReserved: ?*anyopaque = null,
 };
 pub extern "user32" fn SendMessageW(HWND, UINT, WPARAM, LPARAM) callconv(.winapi) LRESULT;
+pub extern "user32" fn PostMessageW(HWND, UINT, WPARAM, LPARAM) callconv(.winapi) BOOL;
+/// App-private message: deferred tab rename (posted from the context
+/// menu so the EDIT is created after the menu's modal loop fully exits,
+/// avoiding an immediate focus-loss that would commit it empty).
+pub const WM_APP_RENAME: UINT = 0x8000 + 1;
 // Importing anything from comctl32 makes the loader bring it in so
 // the tooltips window class exists.
 pub extern "comctl32" fn InitCommonControls() callconv(.winapi) void;
