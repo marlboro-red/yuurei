@@ -1,15 +1,15 @@
-//! Native settings window (yuurei): a small dialog exposing the
-//! most-changed config options as real Win32 controls — dropdowns, a
-//! checkbox, and buttons. It is deliberately *not* a GPU surface: there
-//! is no DirectComposition, swapchain, or GL involvement here, just
-//! user32/gdi32 controls, so it cannot affect the compositor.
+//! Native settings window (yuurei), custom-drawn to match the command
+//! palette / search bar: a theme-aware (light/dark) dialog with rounded
+//! "pill" dropdowns (each opening a styled list popup), a custom
+//! checkbox, and rounded buttons, under a dark native title bar. Pure
+//! GDI — no DirectComposition, swapchain, or GL — so unlike the parked
+//! acrylic work it carries no compositor-hang risk.
 //!
-//! It operates on the config FILE as text: current values are read from
-//! it to populate the controls, and a change rewrites the relevant
-//! `key = value` line (preserving comments and every other line) and
-//! triggers Ghostty's normal config reload, so edits apply live. The
-//! file stays the source of truth; "Open config file" is the escape
-//! hatch for everything not surfaced here.
+//! It operates on the config FILE as text: current values are read to
+//! pre-select the controls, and a change rewrites the relevant
+//! `key = value` line (preserving comments and every other line) then
+//! triggers a normal config reload, so edits apply live. The file stays
+//! the source of truth; "Open config file" is the escape hatch.
 const SettingsWindow = @This();
 
 const std = @import("std");
@@ -22,20 +22,9 @@ const global_state = &@import("../../global.zig").state;
 
 const log = std.log.scoped(.win32);
 
-/// Registered once by App.
+/// Registered once by App (along with DropdownPopup.class_name).
 pub const class_name = std.unicode.utf8ToUtf16LeStringLiteral("ghostty-settings");
 
-// Child control identifiers (passed as the hMenu of each control).
-const id_theme: usize = 1;
-const id_font_size: usize = 2;
-const id_cursor: usize = 3;
-const id_opacity: usize = 4;
-const id_blink: usize = 5;
-const id_open_config: usize = 100;
-const id_close: usize = 101;
-
-// Static option lists (index maps directly to the written value; no
-// CBS_SORT, so combobox order matches these).
 const font_sizes = [_][]const u8{
     "8", "9", "10", "11", "12", "13", "14", "16", "18", "20", "24",
 };
@@ -44,20 +33,69 @@ const opacities = [_][]const u8{
     "1.0", "0.95", "0.9", "0.85", "0.8", "0.75", "0.7", "0.65", "0.6",
 };
 
+/// The dropdown rows, in display order.
+const Field = enum { theme, font_size, cursor, opacity };
+
+const Palette = struct {
+    bg: u32,
+    card: u32,
+    card_hover: u32,
+    border: u32,
+    fg: u32,
+    fg_dim: u32,
+    accent: u32,
+    sel: u32,
+
+    fn current() Palette {
+        return if (winapi.appsUseLightTheme()) .{
+            .bg = 0x00F3F3F3,
+            .card = 0x00FFFFFF,
+            .card_hover = 0x00ECECEC,
+            .border = 0x00C8C8C8,
+            .fg = 0x00202020,
+            .fg_dim = 0x00606060,
+            .accent = 0x00C57A3C,
+            .sel = 0x00EAD9C8,
+        } else .{
+            .bg = 0x001C1C1C,
+            .card = 0x002A2A2A,
+            .card_hover = 0x00343434,
+            .border = 0x00454545,
+            .fg = 0x00F0F0F0,
+            .fg_dim = 0x009A9A9A,
+            .accent = 0x00D08A4C,
+            .sel = 0x00403524,
+        };
+    }
+};
+
+/// Hover targets for highlight.
+const Hot = enum { none, theme, font_size, cursor, opacity, blink, open, close };
+
 app: *App,
 window: *Window,
 hwnd: winapi.HWND,
 font: ?*anyopaque = null,
 
-/// Owns the enumerated theme name strings referenced by `themes`.
 arena: std.heap.ArenaAllocator,
 themes: [][]const u8 = &.{},
 
-theme_combo: winapi.HWND = undefined,
-font_size_combo: winapi.HWND = undefined,
-cursor_combo: winapi.HWND = undefined,
-opacity_combo: winapi.HWND = undefined,
-blink_check: winapi.HWND = undefined,
+theme_idx: ?usize = null,
+font_idx: ?usize = null,
+cursor_idx: ?usize = null,
+opacity_idx: ?usize = null,
+blink: bool = false,
+
+hot: Hot = .none,
+tracking: bool = false,
+dropdown: ?*DropdownPopup = null,
+
+// Layout rects in client coords, filled by computeLayout().
+client_w: i32 = 0,
+pills: [4]winapi.RECT = undefined,
+blink_rect: winapi.RECT = undefined,
+open_rect: winapi.RECT = undefined,
+close_rect: winapi.RECT = undefined,
 
 pub fn create(alloc: Allocator, window: *Window) !*SettingsWindow {
     const app = window.app;
@@ -72,27 +110,15 @@ pub fn create(alloc: Allocator, window: *Window) !*SettingsWindow {
     };
     errdefer self.arena.deinit();
 
-    // Size the dialog from the parent window's DPI (it opens on the
-    // same monitor). AdjustWindowRect is skipped; the layout leaves
-    // slack so non-client chrome doesn't crowd the controls.
-    const w = window.scale(460);
-    const h = window.scale(360);
-
-    // Center on the parent.
-    var pr: winapi.RECT = undefined;
-    _ = winapi.GetWindowRect(window.hwnd, &pr);
-    const x = pr.left + @divTrunc((pr.right - pr.left) - w, 2);
-    const y = pr.top + @divTrunc((pr.bottom - pr.top) - h, 2);
-
     const hwnd = winapi.CreateWindowExW(
         0,
         class_name,
         std.unicode.utf8ToUtf16LeStringLiteral("yuurei Settings"),
         winapi.WS_CAPTION | winapi.WS_SYSMENU,
-        x,
-        y,
-        w,
-        h,
+        winapi.CW_USEDEFAULT,
+        winapi.CW_USEDEFAULT,
+        window.scale(400),
+        window.scale(400),
         window.hwnd,
         null,
         app.hinstance,
@@ -105,6 +131,15 @@ pub fn create(alloc: Allocator, window: *Window) !*SettingsWindow {
         hwnd,
         winapi.GWLP_USERDATA,
         @bitCast(@intFromPtr(self)),
+    );
+
+    // Dark caption to match the dark client area (Win11 22H2+).
+    const dark: winapi.BOOL = if (winapi.appsUseLightTheme()) winapi.FALSE else winapi.TRUE;
+    _ = winapi.DwmSetWindowAttribute(
+        hwnd,
+        winapi.DWMWA_USE_IMMERSIVE_DARK_MODE,
+        &dark,
+        @sizeOf(winapi.BOOL),
     );
 
     self.font = winapi.CreateFontW(
@@ -125,26 +160,27 @@ pub fn create(alloc: Allocator, window: *Window) !*SettingsWindow {
     );
 
     self.collectThemes();
-    self.buildControls();
     self.loadCurrentValues();
+
+    // Lay out at the desired client width, then resize the window so the
+    // client area exactly fits the content and center it on the parent.
+    self.computeLayout(window.scale(400));
+    self.fitAndCenter();
 
     _ = winapi.ShowWindow(hwnd, winapi.SW_SHOWDEFAULT);
     _ = winapi.SetFocus(hwnd);
     return self;
 }
 
-/// Close the window. Teardown happens in WM_DESTROY (see cleanup) so
-/// the same path also covers the owner window being destroyed while
-/// we're open.
+/// Close the window. Teardown happens in WM_DESTROY (cleanup) so the
+/// same path covers the owner window being destroyed while we're open.
 pub fn destroy(self: *SettingsWindow) void {
     _ = winapi.DestroyWindow(self.hwnd);
 }
 
-/// Free our state. Runs on WM_DESTROY (from destroy() or the owner
-/// window closing). Clears GWLP_USERDATA first so the trailing
-/// WM_NCDESTROY can't dispatch into freed memory.
 fn cleanup(self: *SettingsWindow) void {
     const alloc = self.app.core_app.alloc;
+    if (self.dropdown) |d| d.destroy();
     self.app.settings = null;
     _ = winapi.SetWindowLongPtrW(self.hwnd, winapi.GWLP_USERDATA, 0);
     if (self.font) |f| _ = winapi.DeleteObject(f);
@@ -152,7 +188,64 @@ fn cleanup(self: *SettingsWindow) void {
     alloc.destroy(self);
 }
 
-/// Enumerate theme files (best effort) from the resources themes dir.
+// ---------------------------------------------------------------------
+// Layout
+
+fn computeLayout(self: *SettingsWindow, client_w: i32) void {
+    const win = self.window;
+    self.client_w = client_w;
+    const pad = win.scale(22);
+    const pill_x = win.scale(168);
+    const pill_w = client_w - pill_x - pad;
+    const pill_h = win.scale(36);
+    const pitch = win.scale(52);
+    var y = win.scale(20);
+
+    for (&self.pills) |*r| {
+        r.* = .{ .left = pill_x, .top = y, .right = pill_x + pill_w, .bottom = y + pill_h };
+        y += pitch;
+    }
+
+    self.blink_rect = .{
+        .left = pad,
+        .top = y,
+        .right = pad + win.scale(220),
+        .bottom = y + win.scale(28),
+    };
+    y += pitch;
+
+    const btn_w = win.scale(150);
+    const btn_h = win.scale(38);
+    self.open_rect = .{ .left = pad, .top = y, .right = pad + btn_w, .bottom = y + btn_h };
+    self.close_rect = .{ .left = client_w - pad - btn_w, .top = y, .right = client_w - pad, .bottom = y + btn_h };
+}
+
+fn contentHeight(self: *const SettingsWindow) i32 {
+    return self.close_rect.bottom + self.window.scale(22);
+}
+
+/// Resize the window so its client area matches the computed content,
+/// then center it on the parent.
+fn fitAndCenter(self: *SettingsWindow) void {
+    var wr: winapi.RECT = undefined;
+    var cr: winapi.RECT = undefined;
+    _ = winapi.GetWindowRect(self.hwnd, &wr);
+    _ = winapi.GetClientRect(self.hwnd, &cr);
+    const nc_w = (wr.right - wr.left) - (cr.right - cr.left);
+    const nc_h = (wr.bottom - wr.top) - (cr.bottom - cr.top);
+    const w = self.client_w + nc_w;
+    const h = self.contentHeight() + nc_h;
+
+    var pr: winapi.RECT = undefined;
+    _ = winapi.GetWindowRect(self.window.hwnd, &pr);
+    const x = pr.left + @divTrunc((pr.right - pr.left) - w, 2);
+    const y = pr.top + @divTrunc((pr.bottom - pr.top) - h, 2);
+    _ = winapi.SetWindowPos(self.hwnd, null, x, y, w, h, winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE);
+}
+
+// ---------------------------------------------------------------------
+// Config plumbing
+
 fn collectThemes(self: *SettingsWindow) void {
     const arena = self.arena.allocator();
     var names: std.ArrayList([]const u8) = .empty;
@@ -180,122 +273,6 @@ fn collectThemes(self: *SettingsWindow) void {
     self.themes = names.toOwnedSlice(arena) catch &.{};
 }
 
-fn buildControls(self: *SettingsWindow) void {
-    const win = self.window;
-    const label_x = win.scale(20);
-    const ctrl_x = win.scale(180);
-    const ctrl_w = win.scale(250);
-    const row_h = win.scale(44);
-    const combo_h = win.scale(240); // includes dropdown room
-    var y = win.scale(16);
-
-    self.theme_combo = self.makeCombo(id_theme, ctrl_x, y, ctrl_w, combo_h);
-    y += row_h;
-    self.font_size_combo = self.makeCombo(id_font_size, ctrl_x, y, ctrl_w, combo_h);
-    y += row_h;
-    self.cursor_combo = self.makeCombo(id_cursor, ctrl_x, y, ctrl_w, combo_h);
-    y += row_h;
-    self.opacity_combo = self.makeCombo(id_opacity, ctrl_x, y, ctrl_w, combo_h);
-    y += row_h;
-
-    // Checkbox spans the row (its own label text).
-    self.blink_check = winapi.CreateWindowExW(
-        0,
-        winapi.button_class,
-        std.unicode.utf8ToUtf16LeStringLiteral("Blink the cursor"),
-        winapi.WS_CHILD | winapi.WS_VISIBLE | winapi.WS_TABSTOP | winapi.BS_AUTOCHECKBOX,
-        label_x,
-        y + win.scale(4),
-        ctrl_w,
-        win.scale(24),
-        self.hwnd,
-        @ptrFromInt(id_blink),
-        self.app.hinstance,
-        null,
-    ) orelse undefined;
-    self.applyFont(self.blink_check);
-    y += row_h + win.scale(8);
-
-    // Buttons.
-    const btn_w = win.scale(150);
-    const btn_h = win.scale(30);
-    _ = self.makeButton(id_open_config, "Open config file\u{2026}", label_x, y, btn_w, btn_h);
-    _ = self.makeButton(id_close, "Close", ctrl_x + ctrl_w - btn_w, y, btn_w, btn_h);
-
-    // Combobox option lists.
-    for (font_sizes) |v| self.comboAdd(self.font_size_combo, v);
-    for (cursor_styles) |v| self.comboAdd(self.cursor_combo, v);
-    for (opacities) |v| self.comboAdd(self.opacity_combo, v);
-    for (self.themes) |v| self.comboAdd(self.theme_combo, v);
-}
-
-fn makeCombo(self: *SettingsWindow, id: usize, x: i32, y: i32, w: i32, h: i32) winapi.HWND {
-    const hwnd = winapi.CreateWindowExW(
-        0,
-        winapi.combobox_class,
-        std.unicode.utf8ToUtf16LeStringLiteral(""),
-        winapi.WS_CHILD | winapi.WS_VISIBLE | winapi.WS_TABSTOP |
-            winapi.WS_VSCROLL | winapi.CBS_DROPDOWNLIST | winapi.CBS_HASSTRINGS,
-        x,
-        y,
-        w,
-        h,
-        self.hwnd,
-        @ptrFromInt(id),
-        self.app.hinstance,
-        null,
-    ) orelse return undefined;
-    self.applyFont(hwnd);
-    return hwnd;
-}
-
-fn makeButton(self: *SettingsWindow, id: usize, text: []const u8, x: i32, y: i32, w: i32, h: i32) winapi.HWND {
-    var buf: [128]u16 = undefined;
-    const n = std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], text) catch 0;
-    buf[n] = 0;
-    const hwnd = winapi.CreateWindowExW(
-        0,
-        winapi.button_class,
-        buf[0..n :0],
-        winapi.WS_CHILD | winapi.WS_VISIBLE | winapi.WS_TABSTOP,
-        x,
-        y,
-        w,
-        h,
-        self.hwnd,
-        @ptrFromInt(id),
-        self.app.hinstance,
-        null,
-    ) orelse return undefined;
-    self.applyFont(hwnd);
-    return hwnd;
-}
-
-fn applyFont(self: *SettingsWindow, ctrl: winapi.HWND) void {
-    if (self.font) |f| _ = winapi.SendMessageW(
-        ctrl,
-        winapi.WM_SETFONT,
-        @intFromPtr(f),
-        1,
-    );
-}
-
-fn comboAdd(self: *SettingsWindow, combo: winapi.HWND, utf8: []const u8) void {
-    _ = self;
-    var buf: [256]u16 = undefined;
-    const n = std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], utf8) catch return;
-    buf[n] = 0;
-    _ = winapi.SendMessageW(
-        combo,
-        winapi.CB_ADDSTRING,
-        0,
-        @bitCast(@intFromPtr(&buf)),
-    );
-}
-
-/// Read current values from the config file and reflect them in the
-/// controls. Missing keys leave the control unselected (Ghostty default
-/// applies until the user picks something).
 fn loadCurrentValues(self: *SettingsWindow) void {
     const alloc = self.app.core_app.alloc;
     const path = configpkg.edit.openPath(alloc) catch return;
@@ -308,31 +285,18 @@ fn loadCurrentValues(self: *SettingsWindow) void {
     file.close();
     defer alloc.free(text);
 
-    if (configValue(text, "theme")) |v| selectMatch(self.theme_combo, self.themes, v);
-    if (configValue(text, "font-size")) |v| selectMatch(self.font_size_combo, &font_sizes, v);
-    if (configValue(text, "cursor-style")) |v| selectMatch(self.cursor_combo, &cursor_styles, v);
-    if (configValue(text, "background-opacity")) |v| selectMatch(self.opacity_combo, &opacities, v);
-    if (configValue(text, "cursor-style-blink")) |v| {
-        const on = std.ascii.eqlIgnoreCase(v, "true");
-        _ = winapi.SendMessageW(
-            self.blink_check,
-            winapi.BM_SETCHECK,
-            if (on) winapi.BST_CHECKED else 0,
-            0,
-        );
-    }
+    if (configValue(text, "theme")) |v| self.theme_idx = indexOf(self.themes, v);
+    if (configValue(text, "font-size")) |v| self.font_idx = indexOf(&font_sizes, v);
+    if (configValue(text, "cursor-style")) |v| self.cursor_idx = indexOf(&cursor_styles, v);
+    if (configValue(text, "background-opacity")) |v| self.opacity_idx = indexOf(&opacities, v);
+    if (configValue(text, "cursor-style-blink")) |v| self.blink = std.ascii.eqlIgnoreCase(v, "true");
 }
 
-fn selectMatch(combo: winapi.HWND, values: []const []const u8, current: []const u8) void {
-    for (values, 0..) |v, i| {
-        if (std.mem.eql(u8, v, current)) {
-            _ = winapi.SendMessageW(combo, winapi.CB_SETCURSEL, i, 0);
-            return;
-        }
-    }
+fn indexOf(values: []const []const u8, current: []const u8) ?usize {
+    for (values, 0..) |v, i| if (std.mem.eql(u8, v, current)) return i;
+    return null;
 }
 
-/// Return the active (uncommented) value for `key`, a slice into `text`.
 fn configValue(text: []const u8, key: []const u8) ?[]const u8 {
     var it = std.mem.splitScalar(u8, text, '\n');
     while (it.next()) |raw| {
@@ -365,16 +329,12 @@ fn setValue(self: *SettingsWindow, key: []const u8, value: []const u8) void {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
 
-    // Reconstruct the file line by line (joining segments with '\n' so
-    // we neither add nor drop a trailing newline), replacing the first
-    // active occurrence of `key` and copying every other line verbatim.
     var replaced = false;
     var first = true;
     var it = std.mem.splitScalar(u8, text, '\n');
     while (it.next()) |raw| {
         if (!first) out.append(alloc, '\n') catch return;
         first = false;
-
         if (!replaced) {
             const line = std.mem.trim(u8, raw, " \t\r");
             if (line.len > 0 and line[0] != '#') {
@@ -411,68 +371,239 @@ fn setValue(self: *SettingsWindow, key: []const u8, value: []const u8) void {
         return;
     };
 
-    self.reload();
+    if (self.app.performAction(.app, .reload_config, .{})) |_| {} else |err| {
+        log.warn("settings: reload failed err={}", .{err});
+    }
 }
 
-fn reload(self: *SettingsWindow) void {
-    _ = self.app.performAction(.app, .reload_config, .{}) catch |err| {
-        log.warn("settings: reload failed err={}", .{err});
+/// Called by the dropdown popup when an item is chosen.
+fn onDropdownResult(self: *SettingsWindow, field: Field, idx: usize) void {
+    switch (field) {
+        .theme => {
+            if (idx >= self.themes.len) return;
+            self.theme_idx = idx;
+            self.setValue("theme", self.themes[idx]);
+        },
+        .font_size => {
+            self.font_idx = idx;
+            self.setValue("font-size", font_sizes[idx]);
+        },
+        .cursor => {
+            self.cursor_idx = idx;
+            self.setValue("cursor-style", cursor_styles[idx]);
+        },
+        .opacity => {
+            self.opacity_idx = idx;
+            self.setValue("background-opacity", opacities[idx]);
+        },
+    }
+    _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+}
+
+fn fieldItems(self: *const SettingsWindow, field: Field) []const []const u8 {
+    return switch (field) {
+        .theme => self.themes,
+        .font_size => &font_sizes,
+        .cursor => &cursor_styles,
+        .opacity => &opacities,
     };
 }
 
-fn comboValue(combo: winapi.HWND, values: []const []const u8) ?[]const u8 {
-    const idx = winapi.SendMessageW(combo, winapi.CB_GETCURSEL, 0, 0);
-    if (idx < 0) return null;
-    const i: usize = @intCast(idx);
-    if (i >= values.len) return null;
-    return values[i];
+fn fieldIndex(self: *const SettingsWindow, field: Field) ?usize {
+    return switch (field) {
+        .theme => self.theme_idx,
+        .font_size => self.font_idx,
+        .cursor => self.cursor_idx,
+        .opacity => self.opacity_idx,
+    };
 }
 
 // ---------------------------------------------------------------------
 // Painting
 
+const labels = [_][]const u8{ "Theme", "Font size", "Cursor style", "Background opacity" };
+
 fn paint(self: *SettingsWindow, hdc: winapi.HDC) void {
     const win = self.window;
+    const p = Palette.current();
     var client: winapi.RECT = undefined;
     _ = winapi.GetClientRect(self.hwnd, &client);
 
-    // Standard light dialog background; controls use their native chrome.
-    if (winapi.CreateSolidBrush(0x00F0F0F0)) |b| {
-        defer _ = winapi.DeleteObject(b);
-        _ = winapi.FillRect(hdc, &client, b);
-    }
-
+    fillRect(hdc, client, p.bg);
     _ = winapi.SetBkMode(hdc, winapi.TRANSPARENT_BK);
-    _ = winapi.SetTextColor(hdc, 0x00202020);
-    const old = if (self.font) |f| winapi.SelectObject(hdc, f) else null;
-    defer if (old) |o| {
+    const old_font = if (self.font) |f| winapi.SelectObject(hdc, f) else null;
+    defer if (old_font) |o| {
         _ = winapi.SelectObject(hdc, o);
     };
 
-    const label_x = win.scale(20);
-    const row_h = win.scale(44);
-    const label_w = win.scale(150);
-    const labels = [_][]const u8{ "Theme", "Font size", "Cursor style", "Background opacity" };
-    var y = win.scale(16);
-    for (labels) |text| {
-        var buf: [64]u16 = undefined;
-        const n = std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], text) catch 0;
-        buf[n] = 0;
-        var rect: winapi.RECT = .{
-            .left = label_x,
-            .top = y,
-            .right = label_x + label_w,
-            .bottom = y + win.scale(28),
+    const pad = win.scale(22);
+
+    // Dropdown rows: label on the left, value pill on the right.
+    inline for (0..4) |i| {
+        const field: Field = @enumFromInt(i);
+        var lr: winapi.RECT = .{
+            .left = pad,
+            .top = self.pills[i].top,
+            .right = self.pills[i].left - win.scale(8),
+            .bottom = self.pills[i].bottom,
         };
-        _ = winapi.DrawTextW(
+        drawText(hdc, labels[i], &lr, p.fg, winapi.DT_LEFT | winapi.DT_VCENTER | winapi.DT_SINGLELINE);
+
+        const hovered = self.hot == hotForField(field);
+        roundRect(hdc, self.pills[i], if (hovered) p.card_hover else p.card, p.border, win.scale(7));
+
+        const val: []const u8 = if (self.fieldIndex(field)) |idx|
+            self.fieldItems(field)[idx]
+        else
+            "default";
+        var vr: winapi.RECT = .{
+            .left = self.pills[i].left + win.scale(12),
+            .top = self.pills[i].top,
+            .right = self.pills[i].right - win.scale(28),
+            .bottom = self.pills[i].bottom,
+        };
+        drawText(
             hdc,
-            buf[0..n :0],
-            @intCast(n),
-            &rect,
-            winapi.DT_LEFT | winapi.DT_VCENTER | winapi.DT_SINGLELINE,
+            val,
+            &vr,
+            if (self.fieldIndex(field) == null) p.fg_dim else p.fg,
+            winapi.DT_LEFT | winapi.DT_VCENTER | winapi.DT_SINGLELINE | winapi.DT_END_ELLIPSIS,
         );
-        y += row_h;
+
+        // Chevron.
+        const cx = self.pills[i].right - win.scale(16);
+        const cy = @divTrunc(self.pills[i].top + self.pills[i].bottom, 2);
+        const d = win.scale(4);
+        const chevron = [_]winapi.POINT{
+            .{ .x = cx - d, .y = cy - @divTrunc(d, 2) },
+            .{ .x = cx, .y = cy + @divTrunc(d, 2) },
+            .{ .x = cx + d, .y = cy - @divTrunc(d, 2) },
+        };
+        polyline(hdc, &chevron, p.fg_dim, win.scale(2));
     }
+
+    // Checkbox row.
+    {
+        const box = win.scale(20);
+        const by = @divTrunc(self.blink_rect.top + self.blink_rect.bottom - box, 2);
+        const br: winapi.RECT = .{
+            .left = self.blink_rect.left,
+            .top = by,
+            .right = self.blink_rect.left + box,
+            .bottom = by + box,
+        };
+        const hovered = self.hot == .blink;
+        roundRect(
+            hdc,
+            br,
+            if (self.blink) p.accent else (if (hovered) p.card_hover else p.card),
+            if (self.blink) p.accent else p.border,
+            win.scale(5),
+        );
+        if (self.blink) {
+            const check = [_]winapi.POINT{
+                .{ .x = br.left + win.scale(5), .y = by + @divTrunc(box, 2) },
+                .{ .x = br.left + win.scale(9), .y = br.bottom - win.scale(6) },
+                .{ .x = br.right - win.scale(5), .y = by + win.scale(5) },
+            };
+            polyline(hdc, &check, 0x00FFFFFF, win.scale(2));
+        }
+        var tr: winapi.RECT = .{
+            .left = br.right + win.scale(10),
+            .top = self.blink_rect.top,
+            .right = self.blink_rect.right + win.scale(120),
+            .bottom = self.blink_rect.bottom,
+        };
+        drawText(hdc, "Blink the cursor", &tr, p.fg, winapi.DT_LEFT | winapi.DT_VCENTER | winapi.DT_SINGLELINE);
+    }
+
+    // Buttons.
+    self.paintButton(hdc, self.open_rect, "Open config file\u{2026}", self.hot == .open, p);
+    self.paintButton(hdc, self.close_rect, "Close", self.hot == .close, p);
+}
+
+fn paintButton(self: *SettingsWindow, hdc: winapi.HDC, r: winapi.RECT, text: []const u8, hovered: bool, p: Palette) void {
+    roundRect(hdc, r, if (hovered) p.card_hover else p.card, p.border, self.window.scale(7));
+    var tr = r;
+    drawText(hdc, text, &tr, p.fg, winapi.DT_CENTER | winapi.DT_VCENTER | winapi.DT_SINGLELINE);
+}
+
+fn hotForField(field: Field) Hot {
+    return switch (field) {
+        .theme => .theme,
+        .font_size => .font_size,
+        .cursor => .cursor,
+        .opacity => .opacity,
+    };
+}
+
+// Small GDI helpers.
+
+fn fillRect(hdc: winapi.HDC, r: winapi.RECT, color: u32) void {
+    const b = winapi.CreateSolidBrush(color) orelse return;
+    defer _ = winapi.DeleteObject(b);
+    var rr = r;
+    _ = winapi.FillRect(hdc, &rr, b);
+}
+
+fn roundRect(hdc: winapi.HDC, r: winapi.RECT, fill: u32, border: u32, radius: i32) void {
+    const pen = winapi.CreatePen(winapi.PS_SOLID, 1, border) orelse return;
+    defer _ = winapi.DeleteObject(pen);
+    const brush = winapi.CreateSolidBrush(fill) orelse return;
+    defer _ = winapi.DeleteObject(brush);
+    const op = winapi.SelectObject(hdc, pen);
+    defer if (op) |o| {
+        _ = winapi.SelectObject(hdc, o);
+    };
+    const ob = winapi.SelectObject(hdc, brush);
+    defer if (ob) |o| {
+        _ = winapi.SelectObject(hdc, o);
+    };
+    _ = winapi.RoundRect(hdc, r.left, r.top, r.right, r.bottom, radius * 2, radius * 2);
+}
+
+fn polyline(hdc: winapi.HDC, pts: []const winapi.POINT, color: u32, width: i32) void {
+    const pen = winapi.CreatePen(winapi.PS_SOLID, width, color) orelse return;
+    defer _ = winapi.DeleteObject(pen);
+    const op = winapi.SelectObject(hdc, pen);
+    defer if (op) |o| {
+        _ = winapi.SelectObject(hdc, o);
+    };
+    _ = winapi.Polyline(hdc, pts.ptr, @intCast(pts.len));
+}
+
+fn drawText(hdc: winapi.HDC, text: []const u8, rect: *winapi.RECT, color: u32, flags: winapi.UINT) void {
+    var buf: [256]u16 = undefined;
+    const n = std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], text) catch return;
+    buf[n] = 0;
+    _ = winapi.SetTextColor(hdc, color);
+    _ = winapi.DrawTextW(hdc, buf[0..n :0], @intCast(n), rect, flags);
+}
+
+// ---------------------------------------------------------------------
+// Hit testing
+
+fn inRect(r: winapi.RECT, x: i32, y: i32) bool {
+    return x >= r.left and x < r.right and y >= r.top and y < r.bottom;
+}
+
+fn hitTest(self: *const SettingsWindow, x: i32, y: i32) Hot {
+    inline for (0..4) |i| {
+        if (inRect(self.pills[i], x, y)) return hotForField(@enumFromInt(i));
+    }
+    if (inRect(self.blink_rect, x, y)) return .blink;
+    if (inRect(self.open_rect, x, y)) return .open;
+    if (inRect(self.close_rect, x, y)) return .close;
+    return .none;
+}
+
+fn openDropdown(self: *SettingsWindow, field: Field) void {
+    if (self.dropdown != null) return;
+    const i = @intFromEnum(field);
+    var origin: winapi.POINT = .{ .x = self.pills[i].left, .y = self.pills[i].bottom + self.window.scale(2) };
+    _ = winapi.ClientToScreen(self.hwnd, &origin);
+    const w = self.pills[i].right - self.pills[i].left;
+    self.dropdown = DropdownPopup.create(self, field, origin.x, origin.y, w) catch null;
 }
 
 // ---------------------------------------------------------------------
@@ -489,6 +620,8 @@ pub fn wndProc(
     const self: *SettingsWindow = @ptrFromInt(@as(usize, @bitCast(ptr)));
 
     switch (msg) {
+        winapi.WM_ERASEBKGND => return 1,
+
         winapi.WM_PAINT => {
             var ps: winapi.PAINTSTRUCT = undefined;
             if (winapi.BeginPaint(hwnd, &ps)) |hdc| {
@@ -498,10 +631,49 @@ pub fn wndProc(
             return 0;
         },
 
-        winapi.WM_COMMAND => {
-            const id: usize = @as(u16, @truncate(wparam));
-            const code: u16 = @truncate(wparam >> 16);
-            self.onCommand(id, code);
+        winapi.WM_MOUSEMOVE => {
+            if (!self.tracking) {
+                var tme: winapi.TRACKMOUSEEVENT = .{ .dwFlags = winapi.TME_LEAVE, .hwndTrack = hwnd };
+                _ = winapi.TrackMouseEvent(&tme);
+                self.tracking = true;
+            }
+            const hot = self.hitTest(lparamX(lparam), lparamY(lparam));
+            if (hot != self.hot) {
+                self.hot = hot;
+                _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+            }
+            return 0;
+        },
+
+        winapi.WM_MOUSELEAVE => {
+            self.tracking = false;
+            if (self.hot != .none) {
+                self.hot = .none;
+                _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+            }
+            return 0;
+        },
+
+        winapi.WM_LBUTTONDOWN => {
+            switch (self.hitTest(lparamX(lparam), lparamY(lparam))) {
+                .theme => self.openDropdown(.theme),
+                .font_size => self.openDropdown(.font_size),
+                .cursor => self.openDropdown(.cursor),
+                .opacity => self.openDropdown(.opacity),
+                .blink => {
+                    self.blink = !self.blink;
+                    self.setValue("cursor-style-blink", if (self.blink) "true" else "false");
+                    _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+                },
+                .open => self.openConfigFile(),
+                .close => self.destroy(),
+                .none => {},
+            }
+            return 0;
+        },
+
+        winapi.WM_KEYDOWN => {
+            if (@as(u8, @truncate(wparam)) == winapi.VK_ESCAPE) self.destroy();
             return 0;
         },
 
@@ -516,34 +688,6 @@ pub fn wndProc(
         },
 
         else => return winapi.DefWindowProcW(hwnd, msg, wparam, lparam),
-    }
-}
-
-fn onCommand(self: *SettingsWindow, id: usize, code: u16) void {
-    switch (id) {
-        id_theme => if (code == winapi.CBN_SELCHANGE) {
-            if (comboValue(self.theme_combo, self.themes)) |v| self.setValue("theme", v);
-        },
-        id_font_size => if (code == winapi.CBN_SELCHANGE) {
-            if (comboValue(self.font_size_combo, &font_sizes)) |v| self.setValue("font-size", v);
-        },
-        id_cursor => if (code == winapi.CBN_SELCHANGE) {
-            if (comboValue(self.cursor_combo, &cursor_styles)) |v| self.setValue("cursor-style", v);
-        },
-        id_opacity => if (code == winapi.CBN_SELCHANGE) {
-            if (comboValue(self.opacity_combo, &opacities)) |v| self.setValue("background-opacity", v);
-        },
-        id_blink => if (code == winapi.BN_CLICKED) {
-            const checked = winapi.SendMessageW(self.blink_check, winapi.BM_GETCHECK, 0, 0) == 1;
-            self.setValue("cursor-style-blink", if (checked) "true" else "false");
-        },
-        id_open_config => if (code == winapi.BN_CLICKED) {
-            self.openConfigFile();
-        },
-        id_close => if (code == winapi.BN_CLICKED) {
-            self.destroy();
-        },
-        else => {},
     }
 }
 
@@ -563,3 +707,222 @@ fn openConfigFile(self: *SettingsWindow) void {
         winapi.SW_SHOWDEFAULT,
     );
 }
+
+fn lparamX(lparam: winapi.LPARAM) i32 {
+    return @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lparam))))));
+}
+fn lparamY(lparam: winapi.LPARAM) i32 {
+    return @as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lparam)) >> 16))));
+}
+
+// =====================================================================
+// Dropdown popup: a borderless dark/light list shown below a pill.
+
+pub const DropdownPopup = struct {
+    pub const class_name = std.unicode.utf8ToUtf16LeStringLiteral("ghostty-dropdown");
+    const max_visible: usize = 10;
+
+    owner: *SettingsWindow,
+    field: Field,
+    hwnd: winapi.HWND,
+    items: []const []const u8,
+    selected: usize,
+    scroll: usize = 0,
+
+    fn create(owner: *SettingsWindow, field: Field, x: i32, y: i32, w: i32) !*DropdownPopup {
+        const alloc = owner.app.core_app.alloc;
+        const items = owner.fieldItems(field);
+        const self = try alloc.create(DropdownPopup);
+        errdefer alloc.destroy(self);
+
+        const hwnd = winapi.CreateWindowExW(
+            winapi.WS_EX_TOOLWINDOW,
+            DropdownPopup.class_name,
+            std.unicode.utf8ToUtf16LeStringLiteral(""),
+            winapi.WS_POPUP,
+            x,
+            y,
+            w,
+            1,
+            owner.hwnd,
+            null,
+            owner.app.hinstance,
+            null,
+        ) orelse return error.CreateWindowFailed;
+        errdefer _ = winapi.DestroyWindow(hwnd);
+
+        self.* = .{
+            .owner = owner,
+            .field = field,
+            .hwnd = hwnd,
+            .items = items,
+            .selected = owner.fieldIndex(field) orelse 0,
+        };
+        _ = winapi.SetWindowLongPtrW(hwnd, winapi.GWLP_USERDATA, @bitCast(@intFromPtr(self)));
+
+        // Keep the current selection visible.
+        const vis = self.visibleRows();
+        if (self.selected >= vis) self.scroll = self.selected - vis + 1;
+
+        const h = @as(i32, @intCast(vis)) * owner.window.scale(34);
+        _ = winapi.SetWindowPos(hwnd, null, x, y, w, h, winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE);
+        _ = winapi.ShowWindow(hwnd, winapi.SW_SHOW);
+        _ = winapi.SetFocus(hwnd);
+        return self;
+    }
+
+    fn destroy(self: *DropdownPopup) void {
+        const alloc = self.owner.app.core_app.alloc;
+        self.owner.dropdown = null;
+        _ = winapi.SetWindowLongPtrW(self.hwnd, winapi.GWLP_USERDATA, 0);
+        _ = winapi.DestroyWindow(self.hwnd);
+        alloc.destroy(self);
+    }
+
+    fn visibleRows(self: *const DropdownPopup) usize {
+        return @min(self.items.len, max_visible);
+    }
+
+    fn rowH(self: *const DropdownPopup) i32 {
+        return self.owner.window.scale(34);
+    }
+
+    fn rowAt(self: *const DropdownPopup, y: i32) ?usize {
+        if (y < 0) return null;
+        const row = self.scroll + @as(usize, @intCast(@divTrunc(y, self.rowH())));
+        if (row >= self.items.len) return null;
+        return row;
+    }
+
+    fn commit(self: *DropdownPopup) void {
+        const owner = self.owner;
+        const field = self.field;
+        const idx = self.selected;
+        self.destroy(); // clears owner.dropdown
+        owner.onDropdownResult(field, idx);
+        _ = winapi.SetFocus(owner.hwnd);
+    }
+
+    fn paint(self: *DropdownPopup, hdc: winapi.HDC) void {
+        const win = self.owner.window;
+        const p = Palette.current();
+        var client: winapi.RECT = undefined;
+        _ = winapi.GetClientRect(self.hwnd, &client);
+        fillRect(hdc, client, p.card);
+        _ = winapi.SetBkMode(hdc, winapi.TRANSPARENT_BK);
+        const old_font = if (self.owner.font) |f| winapi.SelectObject(hdc, f) else null;
+        defer if (old_font) |o| {
+            _ = winapi.SelectObject(hdc, o);
+        };
+
+        const rh = self.rowH();
+        const end = @min(self.scroll + self.visibleRows(), self.items.len);
+        for (self.items[self.scroll..end], self.scroll..) |item, row| {
+            const top = @as(i32, @intCast(row - self.scroll)) * rh;
+            if (row == self.selected) {
+                fillRect(hdc, .{ .left = 0, .top = top, .right = client.right, .bottom = top + rh }, p.sel);
+            }
+            var tr: winapi.RECT = .{
+                .left = win.scale(12),
+                .top = top,
+                .right = client.right - win.scale(8),
+                .bottom = top + rh,
+            };
+            drawText(hdc, item, &tr, p.fg, winapi.DT_LEFT | winapi.DT_VCENTER | winapi.DT_SINGLELINE | winapi.DT_END_ELLIPSIS);
+        }
+
+        if (winapi.CreateSolidBrush(p.border)) |b| {
+            defer _ = winapi.DeleteObject(b);
+            _ = winapi.FrameRect(hdc, &client, b);
+        }
+    }
+
+    fn moveSel(self: *DropdownPopup, delta: i32) void {
+        if (self.items.len == 0) return;
+        const max: i32 = @intCast(self.items.len - 1);
+        self.selected = @intCast(std.math.clamp(@as(i32, @intCast(self.selected)) + delta, 0, max));
+        const vis = self.visibleRows();
+        if (self.selected < self.scroll) self.scroll = self.selected;
+        if (self.selected >= self.scroll + vis) self.scroll = self.selected - vis + 1;
+        _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+    }
+
+    pub fn wndProc(
+        hwnd: winapi.HWND,
+        msg: winapi.UINT,
+        wparam: winapi.WPARAM,
+        lparam: winapi.LPARAM,
+    ) callconv(.winapi) winapi.LRESULT {
+        const ptr = winapi.GetWindowLongPtrW(hwnd, winapi.GWLP_USERDATA);
+        if (ptr == 0) return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+        const self: *DropdownPopup = @ptrFromInt(@as(usize, @bitCast(ptr)));
+
+        switch (msg) {
+            winapi.WM_ERASEBKGND => return 1,
+
+            winapi.WM_PAINT => {
+                var ps: winapi.PAINTSTRUCT = undefined;
+                if (winapi.BeginPaint(hwnd, &ps)) |hdc| {
+                    self.paint(hdc);
+                    _ = winapi.EndPaint(hwnd, &ps);
+                }
+                return 0;
+            },
+
+            winapi.WM_MOUSEMOVE => {
+                if (self.rowAt(lparamY(lparam))) |row| {
+                    if (row != self.selected) {
+                        self.selected = row;
+                        _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+                    }
+                }
+                return 0;
+            },
+
+            winapi.WM_LBUTTONDOWN => {
+                if (self.rowAt(lparamY(lparam))) |row| {
+                    self.selected = row;
+                    self.commit();
+                }
+                return 0;
+            },
+
+            winapi.WM_MOUSEWHEEL => {
+                const delta: i16 = @bitCast(@as(u16, @truncate(wparam >> 16)));
+                const step: i32 = if (delta > 0) -3 else 3;
+                const count = self.items.len;
+                const vis = self.visibleRows();
+                if (count > vis) {
+                    const max_scroll: i32 = @intCast(count - vis);
+                    self.scroll = @intCast(std.math.clamp(@as(i32, @intCast(self.scroll)) + step, 0, max_scroll));
+                    _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+                }
+                return 0;
+            },
+
+            winapi.WM_KEYDOWN => {
+                switch (@as(u8, @truncate(wparam))) {
+                    winapi.VK_ESCAPE => {
+                        const owner = self.owner;
+                        self.destroy();
+                        _ = winapi.SetFocus(owner.hwnd);
+                    },
+                    winapi.VK_RETURN => self.commit(),
+                    winapi.VK_UP => self.moveSel(-1),
+                    winapi.VK_DOWN => self.moveSel(1),
+                    else => {},
+                }
+                return 0;
+            },
+
+            winapi.WM_KILLFOCUS => {
+                const owner = self.owner;
+                self.destroy();
+                _ = owner;
+                return 0;
+            },
+
+            else => return winapi.DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
+};

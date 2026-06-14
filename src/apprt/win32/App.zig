@@ -160,6 +160,16 @@ pub fn init(
     };
     if (winapi.RegisterClassExW(&settings_class) == 0) return error.RegisterClassFailed;
 
+    // The settings window's dropdown-list popup class.
+    const dropdown_class: winapi.WNDCLASSEXW = .{
+        .style = winapi.CS_HREDRAW | winapi.CS_VREDRAW | winapi.CS_DROPSHADOW,
+        .lpfnWndProc = SettingsWindow.DropdownPopup.wndProc,
+        .hInstance = hinstance,
+        .hbrBackground = null,
+        .lpszClassName = SettingsWindow.DropdownPopup.class_name,
+    };
+    if (winapi.RegisterClassExW(&dropdown_class) == 0) return error.RegisterClassFailed;
+
     // Probe flip-model capability now that the host class exists.
     const flip_capable = !std.process.hasEnvVarConstant("GHOSTTY_NO_FLIP") and
         probeFlipCapable(hinstance);

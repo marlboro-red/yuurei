@@ -378,7 +378,9 @@ pub const WS_EX_NOREDIRECTIONBITMAP: DWORD = 0x00200000;
 // Custom scrollbar (Scrollbar.zig)
 pub extern "gdi32" fn RoundRect(HDC, i32, i32, i32, i32, i32, i32) callconv(.winapi) BOOL;
 pub extern "gdi32" fn CreatePen(i32, i32, u32) callconv(.winapi) ?*anyopaque;
+pub extern "gdi32" fn Polyline(HDC, [*]const POINT, i32) callconv(.winapi) BOOL;
 pub const PS_NULL: i32 = 5;
+pub const PS_SOLID: i32 = 0;
 pub const WM_MOUSELEAVE: UINT = 0x02A3;
 pub const TRACKMOUSEEVENT = extern struct {
     cbSize: DWORD = @sizeOf(TRACKMOUSEEVENT),
