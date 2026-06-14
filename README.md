@@ -76,7 +76,9 @@ Working today, verified live on Windows 11:
   allowlist; terminal output is untrusted)
 - **File drag-and-drop** — dropped files paste their paths, quoted
   when the shell would split them
-- **Background opacity** via window-level alpha with the runtime toggle
+- **Background opacity** via window-level alpha with the runtime toggle,
+  plus **`background-blur`** that frosts the desktop behind a translucent
+  window (DWM acrylic; whole-window today)
 - **Quick terminal** with system-wide global hotkeys (`global:` keybinds via
   `RegisterHotKey`)
 - **PowerShell-first** default shell (pwsh → powershell → cmd) and **pwsh
@@ -85,9 +87,10 @@ Working today, verified live on Windows 11:
 - Stability: 45+ minute scroll soaks at stable memory; vsync and
   hidden-window present fixes after a real GPU-driver incident
 
-Honest remaining work: packaging/code signing/winget, per-pixel
-transparency/blur (opacity is whole-window today), auto-update, Mica,
-ARM64. See the Phase 3/4 checklists in
+Honest remaining work: packaging/code signing/winget, crisp per-pixel
+transparency/blur (opacity and `background-blur` are whole-window/frosted
+today; crisp text-over-blur needs the DirectComposition path),
+auto-update, Mica, ARM64. See the Phase 3/4 checklists in
 [`WINDOWS_PORT_PLAN.md`](WINDOWS_PORT_PLAN.md) for the live list.
 
 ## Installing

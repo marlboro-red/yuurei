@@ -611,7 +611,20 @@ signing, no winget/Scoop, no installer — by choice. Landed:
   then triggers a normal reload so edits apply live. Verified
   end-to-end on Windows 11. Possible follow-ups: dark-themed controls
   (owner-draw), Tab/Esc dialog navigation, font-family enumeration,
-  tighter sizing at high DPI.
+  tighter sizing at high DPI. **Restyled custom-drawn (2026-06-14):** the
+  initial version used raw Win32 controls (an archaic Win95 dialog); now
+  custom-drawn to match the command palette — theme-aware body, dark
+  caption, rounded pill dropdowns opening a styled scrollable list
+  popup, custom checkbox, rounded buttons.
+- [x] **Frosted background blur (2026-06-14)** — the *safe* half of the
+  acrylic ask. `background-blur` frosts the desktop behind a translucent
+  window via the DWM accent policy (SetWindowCompositionAttribute +
+  ACCENT_ENABLE_ACRYLICBLURBEHIND). Pure compositor effect — no
+  GL/D3D/DComp interop — so it cannot reproduce the GPU hang the
+  per-pixel path caused (see Phase 5). Whole-window (text frosts too);
+  pairs with background-opacity < 1. Verified on Windows 11, no hang.
+  The crisp text-over-blur variant (DComp per-pixel, parked) remains the
+  follow-up, to be attempted carefully if the frosted look isn't enough.
 
 Still open if user pain demands: crash reporting (Sentry supports
 Windows minidumps; upstream already integrates sentry).
