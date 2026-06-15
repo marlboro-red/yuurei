@@ -6528,6 +6528,27 @@ pub const Keybinds = struct {
                 .paste_from_clipboard,
                 .{ .performable = true },
             );
+
+            // On Windows, also follow the Windows Terminal convention:
+            // ctrl+c copies when there is a selection and ctrl+v pastes.
+            // copy_to_clipboard is performable, so with no selection
+            // ctrl+c falls through to the interrupt (SIGINT). ctrl+v is
+            // marked performable for symmetry, but on Windows paste is
+            // always considered performable, so ctrl+v always consumes.
+            if (builtin.target.os.tag == .windows) {
+                try self.set.putFlags(
+                    alloc,
+                    .{ .key = .{ .unicode = 'c' }, .mods = .{ .ctrl = true } },
+                    .{ .copy_to_clipboard = .mixed },
+                    .{ .performable = true },
+                );
+                try self.set.putFlags(
+                    alloc,
+                    .{ .key = .{ .unicode = 'v' }, .mods = .{ .ctrl = true } },
+                    .paste_from_clipboard,
+                    .{ .performable = true },
+                );
+            }
         }
 
         // Increase font size mapping for keyboards with dedicated plus keys (like german)
@@ -6923,6 +6944,15 @@ pub const Keybinds = struct {
             .{ .key = .{ .physical = .enter }, .mods = inputpkg.ctrlOrSuper(.{}) },
             .{ .toggle_fullscreen = {} },
         );
+
+        // F11 is the conventional fullscreen key on Windows.
+        if (builtin.target.os.tag == .windows) {
+            try self.set.put(
+                alloc,
+                .{ .key = .{ .physical = .f11 } },
+                .{ .toggle_fullscreen = {} },
+            );
+        }
 
         // Toggle zoom a split
         try self.set.put(
