@@ -825,6 +825,14 @@ fn setupPwsh(
     }
     const quoted = try std.mem.replaceOwned(u8, alloc, script, "'", "''");
 
+    // Bypass the execution policy for this process only. Removing the
+    // Mark-of-the-Web above covers the common RemoteSigned case, but it
+    // silently fails when our install dir is read-only and does nothing
+    // under AllSigned. A process-scoped bypass is robust against both and
+    // never persists; it only loses to a Group-Policy-enforced policy,
+    // where nothing short of a signature would work anyway.
+    try args.append(alloc, "-ExecutionPolicy");
+    try args.append(alloc, "Bypass");
     try args.append(alloc, "-NoExit");
     try args.append(alloc, "-Command");
     try args.append(alloc, try std.fmt.allocPrintSentinel(
