@@ -119,6 +119,7 @@ pub const SW_SHOWDEFAULT: i32 = 10;
 
 // PeekMessage
 pub const PM_REMOVE: UINT = 0x0001;
+pub const PM_NOREMOVE: UINT = 0x0000;
 
 // GetWindowLongPtr offsets
 pub const GWLP_USERDATA: i32 = -21;
@@ -267,6 +268,7 @@ pub const VK_DELETE: u8 = 0x2E;
 pub const VK_LWIN: u8 = 0x5B;
 pub const VK_RWIN: u8 = 0x5C;
 pub const VK_APPS: u8 = 0x5D;
+pub const VK_PROCESSKEY: u8 = 0xE5;
 pub const VK_NUMPAD0: u8 = 0x60;
 pub const VK_MULTIPLY: u8 = 0x6A;
 pub const VK_ADD: u8 = 0x6B;

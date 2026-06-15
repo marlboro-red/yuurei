@@ -2209,6 +2209,24 @@ fn keyEvent(
         .unshifted_codepoint = unshifted,
     };
 
+    // TranslateMessage has already queued the layout-cooked WM_CHAR(s)
+    // for character-producing keys behind this keydown. When that text is
+    // printable, defer to charEvent so the core sees a single event WITH
+    // text (and with Shift/AltGr marked consumed). Encoding the text-less
+    // keydown here would, under the Kitty keyboard protocol, emit a CSI-u
+    // "shift+key" sequence and consume the keydown -- swallowing the
+    // WM_CHAR -- so shifted text (capitals, symbols) never reaches apps
+    // that enable the protocol (e.g. the Copilot TUI). Control chars
+    // (ctrl+key) are left to the encoder via the unshifted codepoint, so
+    // we only defer when a printable char is waiting.
+    if ((action == .press or action == .repeat) and
+        vk != winapi.VK_PROCESSKEY and
+        self.printableCharQueued())
+    {
+        self.pending_key_event = key_event;
+        return;
+    }
+
     const effect = tab.core_surface.keyCallback(key_event) catch |err| {
         log.err("error in key callback err={}", .{err});
         return;
@@ -2222,6 +2240,24 @@ fn keyEvent(
     if (effect == .ignored and (action == .press or action == .repeat)) {
         self.pending_key_event = key_event;
     }
+}
+
+/// Whether a printable WM_CHAR is sitting in the queue directly behind
+/// the keydown we're handling (TranslateMessage posts it before this
+/// dispatch). A UTF-16 surrogate lead counts as printable; control chars
+/// (< 0x20 and DEL) do not, so ctrl-combinations keep encoding from the
+/// keydown rather than deferring to text.
+fn printableCharQueued(self: *Window) bool {
+    var msg: winapi.MSG = undefined;
+    if (winapi.PeekMessageW(
+        &msg,
+        self.hwnd,
+        winapi.WM_CHAR,
+        winapi.WM_CHAR,
+        winapi.PM_NOREMOVE,
+    ) == 0) return false;
+    const unit: u16 = @truncate(msg.wParam);
+    return unit >= 0x20 and unit != 0x7F;
 }
 
 fn charEvent(self: *Window, unit: u16) void {
@@ -2254,6 +2290,21 @@ fn charEvent(self: *Window, unit: u16) void {
         return;
     };
     key_event.utf8 = self.utf8_buf[0..len];
+
+    // Record that Shift was folded into the produced text when it
+    // actually changed the character (';' -> ':', 'a' -> 'A'). The core
+    // negates consumed_mods to get the effective mods; without this the
+    // Kitty keyboard protocol still sees Shift pressed, skips the
+    // plain-text fast path, and encodes a CSI-u "shift+key" sequence
+    // instead of the literal character. Apps that enable the protocol
+    // (modern vim/neovim, the Copilot TUI) then never see the capital or
+    // symbol. Legacy mode is unaffected, which is why the bare shell is
+    // fine. consumed_mods is meaningless when utf8 is empty, so we only
+    // set it here where we have text.
+    if (key_event.mods.shift and codepoint != key_event.unshifted_codepoint) {
+        key_event.consumed_mods.shift = true;
+    }
+
     if (key_event.unshifted_codepoint == 0 and
         codepoint < 0x80 and !key_event.mods.shift)
     {
