@@ -11,8 +11,10 @@
 #       . "$env:GHOSTTY_RESOURCES_DIR\shell-integration\pwsh\ghostty.ps1"
 #   }
 
-# Don't double-install.
-if ($global:__GhosttyIntegrationDone) { return }
+# Don't double-install. Test-Path (rather than reading the variable
+# directly) keeps this working under Set-StrictMode, which errors on any
+# reference to an as-yet-unset variable.
+if (Test-Path variable:global:__GhosttyIntegrationDone) { return }
 $global:__GhosttyIntegrationDone = $true
 
 $global:__GhosttyFeatures = @{}
@@ -48,8 +50,14 @@ function global:PSConsoleHostReadLine {
 $global:__GhosttyOrigPrompt = $function:prompt
 function global:prompt {
     # Capture these first: anything we run below would clobber them.
+    # $LASTEXITCODE is unset until the first external command runs, so
+    # guard the read for Set-StrictMode sessions.
     $lastSuccess = $?
-    $lastExit = $global:LASTEXITCODE
+    $lastExit = if (Test-Path variable:global:LASTEXITCODE) {
+        $global:LASTEXITCODE
+    } else {
+        $null
+    }
 
     $e = [char]27
     $bel = [char]7
