@@ -852,13 +852,15 @@ test "pwsh" {
     const alloc = arena.allocator();
 
     const command = (try setupPwsh(alloc, .{ .shell = "pwsh.exe" }, "C:/res")).?;
-    try testing.expectEqual(4, command.direct.len);
+    try testing.expectEqual(6, command.direct.len);
     try testing.expectEqualStrings("pwsh.exe", command.direct[0]);
-    try testing.expectEqualStrings("-NoExit", command.direct[1]);
-    try testing.expectEqualStrings("-Command", command.direct[2]);
+    try testing.expectEqualStrings("-ExecutionPolicy", command.direct[1]);
+    try testing.expectEqualStrings("Bypass", command.direct[2]);
+    try testing.expectEqualStrings("-NoExit", command.direct[3]);
+    try testing.expectEqualStrings("-Command", command.direct[4]);
     try testing.expectEqualStrings(
         ". 'C:/res/shell-integration/pwsh/ghostty.ps1'",
-        command.direct[3],
+        command.direct[5],
     );
 
     // Flags are preserved before our injection.
@@ -867,7 +869,7 @@ test "pwsh" {
         .{ .shell = "pwsh -NoLogo" },
         "C:/res",
     )).?;
-    try testing.expectEqual(5, flags.direct.len);
+    try testing.expectEqual(7, flags.direct.len);
     try testing.expectEqualStrings("-NoLogo", flags.direct[1]);
 
     // Startup-semantic flags disable integration.
