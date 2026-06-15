@@ -580,6 +580,18 @@ pub fn performAction(
             .surface => |surface| surface.rt_surface.window.toggleOpacity(),
         },
 
+        // We only do borderless fullscreen on Windows; the Fullscreen
+        // mode value (native vs. macOS variants) doesn't apply here.
+        .toggle_fullscreen => switch (target) {
+            .app => return false,
+            .surface => |surface| surface.rt_surface.window.toggleFullscreen(),
+        },
+
+        .toggle_maximize => switch (target) {
+            .app => return false,
+            .surface => |surface| surface.rt_surface.window.toggleMaximize(),
+        },
+
         .move_tab => switch (target) {
             .app => return false,
             .surface => |surface| surface.rt_surface.window.moveTab(

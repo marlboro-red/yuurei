@@ -393,6 +393,30 @@ pub extern "user32" fn KillTimer(?HWND, usize) callconv(.winapi) BOOL;
 pub extern "user32" fn AdjustWindowRectExForDpi(*RECT, DWORD, BOOL, DWORD, UINT) callconv(.winapi) BOOL;
 pub extern "user32" fn SetWindowPos(HWND, ?HWND, i32, i32, i32, i32, UINT) callconv(.winapi) BOOL;
 pub extern "user32" fn ValidateRect(?HWND, ?*const RECT) callconv(.winapi) BOOL;
+
+// Borderless fullscreen (toggle_fullscreen): monitor geometry, window
+// placement, and the window-style get/set used to drop the frame.
+pub const GWL_STYLE: i32 = -16;
+pub const MONITOR_DEFAULTTONEAREST: DWORD = 0x00000002;
+pub const HMONITOR = HANDLE;
+pub const MONITORINFO = extern struct {
+    cbSize: DWORD,
+    rcMonitor: RECT,
+    rcWork: RECT,
+    dwFlags: DWORD,
+};
+pub const WINDOWPLACEMENT = extern struct {
+    length: UINT,
+    flags: UINT,
+    showCmd: UINT,
+    ptMinPosition: POINT,
+    ptMaxPosition: POINT,
+    rcNormalPosition: RECT,
+};
+pub extern "user32" fn MonitorFromWindow(HWND, DWORD) callconv(.winapi) HMONITOR;
+pub extern "user32" fn GetMonitorInfoW(HMONITOR, *MONITORINFO) callconv(.winapi) BOOL;
+pub extern "user32" fn GetWindowPlacement(HWND, *WINDOWPLACEMENT) callconv(.winapi) BOOL;
+pub extern "user32" fn SetWindowPlacement(HWND, *const WINDOWPLACEMENT) callconv(.winapi) BOOL;
 pub extern "user32" fn OpenClipboard(?HWND) callconv(.winapi) BOOL;
 pub extern "user32" fn CloseClipboard() callconv(.winapi) BOOL;
 pub extern "user32" fn EmptyClipboard() callconv(.winapi) BOOL;

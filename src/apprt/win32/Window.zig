@@ -118,6 +118,13 @@ search: ?*SearchBar = null,
 /// toggle_background_opacity on windows that start transparent.
 transparent: bool = false,
 
+/// Borderless-fullscreen state. While true the title strip is hidden
+/// (titlebarHeight returns 0) and the window fills the monitor; the
+/// saved placement/style restore the exact prior windowed geometry.
+fullscreen: bool = false,
+saved_placement: winapi.WINDOWPLACEMENT = undefined,
+saved_style: isize = 0,
+
 /// The key event from the last WM_KEYDOWN that the core did not
 /// consume; WM_CHAR completes it with the layout-cooked text.
 pending_key_event: ?input.KeyEvent = null,
@@ -969,7 +976,79 @@ pub fn scale(self: *const Window, logical: i32) i32 {
 
 /// The title strip height in physical pixels.
 pub fn titlebarHeight(self: *const Window) i32 {
+    // Fullscreen hides the strip so the terminal owns the whole monitor.
+    if (self.fullscreen) return 0;
     return self.scale(titlebar_height_logical);
+}
+
+/// Toggle borderless fullscreen on the window's current monitor.
+pub fn toggleFullscreen(self: *Window) void {
+    // The quick terminal is a docked, topmost tool window, not a normal
+    // top-level window; fullscreen would wreck its dropdown geometry.
+    if (self.quick) return;
+
+    if (!self.fullscreen) {
+        // Remember exactly where we were so exit restores it.
+        self.saved_placement.length = @sizeOf(winapi.WINDOWPLACEMENT);
+        _ = winapi.GetWindowPlacement(self.hwnd, &self.saved_placement);
+        self.saved_style = winapi.GetWindowLongPtrW(self.hwnd, winapi.GWL_STYLE);
+
+        const mon = winapi.MonitorFromWindow(
+            self.hwnd,
+            winapi.MONITOR_DEFAULTTONEAREST,
+        );
+        var mi: winapi.MONITORINFO = undefined;
+        mi.cbSize = @sizeOf(winapi.MONITORINFO);
+        if (winapi.GetMonitorInfoW(mon, &mi) == 0) return;
+
+        // Strip the caption/border bits and fill the monitor. Setting
+        // fullscreen before SetWindowPos makes the relayout it triggers
+        // (via titlebarHeight) drop the strip.
+        _ = winapi.SetWindowLongPtrW(
+            self.hwnd,
+            winapi.GWL_STYLE,
+            self.saved_style & ~@as(isize, winapi.WS_OVERLAPPEDWINDOW),
+        );
+        self.fullscreen = true;
+        _ = winapi.SetWindowPos(
+            self.hwnd,
+            null,
+            mi.rcMonitor.left,
+            mi.rcMonitor.top,
+            mi.rcMonitor.right - mi.rcMonitor.left,
+            mi.rcMonitor.bottom - mi.rcMonitor.top,
+            winapi.SWP_NOZORDER | winapi.SWP_FRAMECHANGED,
+        );
+    } else {
+        self.fullscreen = false;
+        _ = winapi.SetWindowLongPtrW(
+            self.hwnd,
+            winapi.GWL_STYLE,
+            self.saved_style,
+        );
+        _ = winapi.SetWindowPlacement(self.hwnd, &self.saved_placement);
+        _ = winapi.SetWindowPos(
+            self.hwnd,
+            null,
+            0,
+            0,
+            0,
+            0,
+            winapi.SWP_NOMOVE | winapi.SWP_NOSIZE |
+                winapi.SWP_NOZORDER | winapi.SWP_FRAMECHANGED,
+        );
+    }
+    self.layoutActiveTab();
+}
+
+/// Toggle the maximized/restored state (the toggle_maximize action;
+/// mirrors the caption maximize button).
+pub fn toggleMaximize(self: *Window) void {
+    // Maximize is meaningless for the docked quick terminal, and toggling
+    // it while fullscreen would desync the saved placement/style, so
+    // ignore it in those modes.
+    if (self.quick or self.fullscreen) return;
+    self.captionButtonClick(.maximize);
 }
 
 /// Invalidate only the strip. Hover changes repaint constantly while
@@ -1567,8 +1646,11 @@ pub fn wndProc(
             params.rgrc[0].top = original_top;
 
             // When maximized the window extends past the monitor edge
-            // by the frame size; inset so the strip stays visible.
-            if (winapi.IsZoomed(hwnd) != 0) {
+            // by the frame size; inset so the strip stays visible. In
+            // fullscreen we fill the monitor deliberately and the strip
+            // is hidden, so skip the inset (the window may still carry
+            // the maximized flag if fullscreen was entered while zoomed).
+            if (!self.fullscreen and winapi.IsZoomed(hwnd) != 0) {
                 const dpi = winapi.GetDpiForWindow(hwnd);
                 params.rgrc[0].top += winapi.GetSystemMetricsForDpi(
                     winapi.SM_CYSIZEFRAME,
@@ -1589,7 +1671,8 @@ pub fn wndProc(
             _ = winapi.ScreenToClient(hwnd, &pt);
 
             // Top resize border (the standard one left with the caption).
-            if (winapi.IsZoomed(hwnd) == 0) {
+            // Skip it in fullscreen: there is no border to grab.
+            if (!self.fullscreen and winapi.IsZoomed(hwnd) == 0) {
                 const dpi = winapi.GetDpiForWindow(hwnd);
                 const frame_y = winapi.GetSystemMetricsForDpi(
                     winapi.SM_CYSIZEFRAME,
