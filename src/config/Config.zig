@@ -6938,18 +6938,19 @@ pub const Keybinds = struct {
             );
         }
 
-        // Toggle fullscreen
-        try self.set.put(
-            alloc,
-            .{ .key = .{ .physical = .enter }, .mods = inputpkg.ctrlOrSuper(.{}) },
-            .{ .toggle_fullscreen = {} },
-        );
-
-        // F11 is the conventional fullscreen key on Windows.
+        // Toggle fullscreen. On Windows F11 is the conventional key and
+        // Ctrl+Enter is left free so terminal apps (e.g. LLM CLIs that
+        // use Ctrl+Enter for a newline) receive it instead.
         if (builtin.target.os.tag == .windows) {
             try self.set.put(
                 alloc,
                 .{ .key = .{ .physical = .f11 } },
+                .{ .toggle_fullscreen = {} },
+            );
+        } else {
+            try self.set.put(
+                alloc,
+                .{ .key = .{ .physical = .enter }, .mods = inputpkg.ctrlOrSuper(.{}) },
                 .{ .toggle_fullscreen = {} },
             );
         }
