@@ -392,6 +392,7 @@ pub extern "user32" fn SetTimer(?HWND, usize, UINT, ?*anyopaque) callconv(.winap
 pub extern "user32" fn KillTimer(?HWND, usize) callconv(.winapi) BOOL;
 pub extern "user32" fn AdjustWindowRectExForDpi(*RECT, DWORD, BOOL, DWORD, UINT) callconv(.winapi) BOOL;
 pub extern "user32" fn SetWindowPos(HWND, ?HWND, i32, i32, i32, i32, UINT) callconv(.winapi) BOOL;
+pub extern "user32" fn SetParent(HWND, ?HWND) callconv(.winapi) ?HWND;
 pub extern "user32" fn ValidateRect(?HWND, ?*const RECT) callconv(.winapi) BOOL;
 
 // Borderless fullscreen (toggle_fullscreen): monitor geometry, window
