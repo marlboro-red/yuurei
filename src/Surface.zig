@@ -1637,19 +1637,26 @@ fn mouseRefreshLinks(
         self.renderer_state.mouse.point = pos_vp;
         self.mouse.over_link = true;
         self.renderer_state.terminal.screens.active.dirty.hyperlink_hover = true;
+
+        // The link underlines on plain hover (its highlight is `.hover`),
+        // but activation is gated on Ctrl/Cmd: only with the mods held do
+        // we switch to the hand cursor and surface the preview, and only
+        // then does a click open it (see mouseButtonCallback). This keeps
+        // a stray click from opening a URL and keeps the text under a link
+        // selectable. keyCallback re-runs this on a mods change, so
+        // pressing Ctrl while hovering updates the cursor without a move.
+        const activate = self.mouse.mods.equal(input.ctrlOrSuper(.{}));
         _ = try self.rt_app.performAction(
             .{ .surface = self },
             .mouse_shape,
-            .pointer,
+            if (activate) .pointer else self.io.terminal.mouse_shape,
         );
 
-        if (preview) {
-            _ = try self.rt_app.performAction(
-                .{ .surface = self },
-                .mouse_over_link,
-                link,
-            );
-        }
+        _ = try self.rt_app.performAction(
+            .{ .surface = self },
+            .mouse_over_link,
+            if (activate and preview) link else .{ .url = "" },
+        );
 
         try self.queueRender();
         return;
@@ -3873,8 +3880,14 @@ pub fn mouseButtonCallback(
 
         // Handle link clicking. We want to do this before we do mouse
         // reporting or any other mouse handling because a successfully
-        // clicked link will swallow the event.
-        if (self.mouse.over_link and !self.mouse.selection_gesture.left_click_dragged) {
+        // clicked link will swallow the event. Opening is gated on
+        // Ctrl/Cmd: links underline on plain hover for discoverability,
+        // but a plain click selects rather than opens, so the hover
+        // affordance never costs an accidental navigation.
+        if (self.mouse.over_link and
+            self.mouse.mods.equal(input.ctrlOrSuper(.{})) and
+            !self.mouse.selection_gesture.left_click_dragged)
+        {
             // We are holding the renderer lock, but this should just be
             // a cached value.
             const pos = release_pos orelse try self.rt_surface.getCursorPos();
@@ -4324,9 +4337,15 @@ fn linkAtPin(
     const line = screen.selectLine(.{
         .pin = mouse_pin,
         .whitespace = null,
-        // Respect semantic prompt boundaries so link/path matching doesn't
-        // merge shell prompt content with the text beside it.
-        .semantic_prompt_boundary = true,
+        // Match across the whole visual line, ignoring semantic prompt
+        // state. The renderer highlights links by matching the regex over
+        // the full rendered string, and the hover underline only appears
+        // when this detection agrees with it (it sets the renderer mouse
+        // point). Restricting to a single semantic region splits the line
+        // under shells that emit OSC 133 command marks (pwsh does; the
+        // nushell integration does not), so a URL bounded by those marks
+        // failed to match here and never underlined.
+        .semantic_prompt_boundary = false,
     }) orelse return null;
 
     var strmap: terminal.StringMap = undefined;
