@@ -187,6 +187,11 @@ const caption_button_width_logical: i32 = 46;
 pub const scrollbar_width_logical: i32 = 12;
 const tab_width_logical: i32 = 190;
 const new_tab_width_logical: i32 = 36;
+/// Default window size in logical (96-dpi) pixels, scaled to the
+/// monitor DPI at creation so the window isn't tiny on high-DPI
+/// displays (window-width/height config overrides via initial_size).
+const default_window_width_logical: i32 = 800;
+const default_window_height_logical: i32 = 600;
 const modal_tick_timer_id: usize = 1;
 const resize_repaint_timer_id: usize = 2;
 /// How many deferred repaint ticks fire after a resize. ConPTY reflows
@@ -320,9 +325,24 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
     self.applyBlur();
 
     // Startup geometry from config, for a normal (non-quick, non-
-    // tear-off) window: an explicit position, then maximized or the
-    // default placement.
+    // tear-off) window: a DPI-scaled default size, an explicit
+    // position, then maximized or the default placement.
     if (!opts.no_initial_tab and !opts.quick) {
+        // The window was created at a fixed 800x600 physical size, which
+        // is tiny on a high-DPI monitor. Scale the default to the
+        // window's DPI so it opens at a comfortable size (unless the
+        // config maximizes or goes fullscreen, which override it).
+        if (!app.config.maximize and app.config.fullscreen == .false) {
+            _ = winapi.SetWindowPos(
+                hwnd,
+                null,
+                0,
+                0,
+                self.scale(default_window_width_logical),
+                self.scale(default_window_height_logical),
+                winapi.SWP_NOMOVE | winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
+            );
+        }
         if (app.config.@"window-position-x") |px| {
             _ = winapi.SetWindowPos(
                 hwnd,
