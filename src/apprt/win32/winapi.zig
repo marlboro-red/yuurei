@@ -446,6 +446,7 @@ pub extern "kernel32" fn GlobalAlloc(UINT, usize) callconv(.winapi) ?HANDLE;
 pub extern "kernel32" fn GlobalLock(HANDLE) callconv(.winapi) ?*anyopaque;
 pub extern "kernel32" fn GlobalUnlock(HANDLE) callconv(.winapi) BOOL;
 pub extern "kernel32" fn GlobalFree(HANDLE) callconv(.winapi) ?HANDLE;
+pub extern "kernel32" fn GlobalSize(HANDLE) callconv(.winapi) usize;
 
 /// Read CF_UNICODETEXT into `buf` as UTF-16 units (no trailing NUL),
 /// dropping control characters (< 0x20) so a pasted needle/filter/title
@@ -457,10 +458,15 @@ pub fn clipboardTextUtf16(hwnd: HWND, buf: []u16) usize {
     const handle = GetClipboardData(CF_UNICODETEXT) orelse return 0;
     const ptr = GlobalLock(handle) orelse return 0;
     defer _ = GlobalUnlock(handle);
-    const src: [*:0]const u16 = @ptrCast(@alignCast(ptr));
+    const src: [*]const u16 = @ptrCast(@alignCast(ptr));
+    // Clipboard data is cross-process input: don't trust the NUL
+    // terminator. Bound the scan by the allocation size (in u16 units)
+    // as well as the NUL, so a malformed unterminated buffer can't
+    // drive an out-of-bounds read.
+    const max_units = GlobalSize(handle) / @sizeOf(u16);
     var n: usize = 0;
     var i: usize = 0;
-    while (src[i] != 0 and n < buf.len) : (i += 1) {
+    while (i < max_units and src[i] != 0 and n < buf.len) : (i += 1) {
         const u = src[i];
         if (u < 0x20 or u == 0x7F) continue;
         buf[n] = u;

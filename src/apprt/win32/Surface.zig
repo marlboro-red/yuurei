@@ -183,8 +183,10 @@ pub fn init(self: *Self, app: *App, window: *Window) !void {
     // The scrollbar is a sibling of the host (the host is disabled, so
     // it can't parent interactive children). Created hidden like the
     // host; setVisible and layoutActiveTab manage it. Failure is
-    // cosmetic-only.
+    // cosmetic-only. It holds a GWLP_USERDATA pointer back to us, so it
+    // must be torn down if a later init step fails and frees us.
     self.scrollbar = Scrollbar.create(app.core_app.alloc, self) catch null;
+    errdefer if (self.scrollbar) |sb| sb.destroy(app.core_app.alloc);
 
     // Add ourselves to the list of surfaces on the app.
     try app.core_app.addSurface(self);
@@ -295,13 +297,18 @@ pub fn getTitle(self: *Self) ?[:0]const u8 {
 
 pub fn setTitle(self: *Self, slice: [:0]const u8) !void {
     const alloc = self.core_surface.alloc;
+    // Allocate the new title before freeing the old one, so an
+    // allocation failure leaves title_text valid rather than dangling.
+    const dup = try alloc.dupeZ(u8, slice);
     if (self.title_text) |t| alloc.free(t);
-    self.title_text = try alloc.dupeZ(u8, slice);
+    self.title_text = dup;
 
     // The strip repaints the tab label; the OS title follows the
-    // active tab.
+    // active tab. Invalidate only the strip, not the whole window —
+    // apps that update the title frequently would otherwise force a
+    // terminal-area repaint each time.
     if (self.window.activeSurface() == self) self.window.syncTitle();
-    _ = winapi.InvalidateRect(self.window.hwnd, null, winapi.FALSE);
+    self.window.invalidateStrip();
 }
 
 pub fn getContentScale(self: *const Self) !apprt.ContentScale {
@@ -370,10 +377,16 @@ pub fn clipboardRequest(
         const ptr = winapi.GlobalLock(handle) orelse break :text "";
         defer _ = winapi.GlobalUnlock(handle);
 
-        const wide: [*:0]const u16 = @ptrCast(@alignCast(ptr));
+        // Clipboard data is cross-process input; bound the length by the
+        // allocation size (in u16 units) rather than trusting the NUL
+        // terminator, then stop at the first NUL within that bound.
+        const wide: [*]const u16 = @ptrCast(@alignCast(ptr));
+        const max_units = winapi.GlobalSize(handle) / @sizeOf(u16);
+        var len: usize = 0;
+        while (len < max_units and wide[len] != 0) len += 1;
         const converted = std.unicode.utf16LeToUtf8AllocZ(
             alloc,
-            std.mem.span(wide),
+            wide[0..len],
         ) catch break :text "";
         owned = converted;
         break :text converted;

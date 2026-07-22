@@ -457,6 +457,10 @@ pub fn run(self: *App) !void {
                 if (winapi.IsWindowVisible(window.hwnd) != 0) break :only_quick;
             }
             for (self.windows.items) |window| window.should_close = true;
+            // Post a wakeup so the next loop iteration's GetMessageW
+            // returns and the sweep above actually runs; otherwise the
+            // hidden window lingers until some unrelated message.
+            self.wakeup();
             continue;
         }
 

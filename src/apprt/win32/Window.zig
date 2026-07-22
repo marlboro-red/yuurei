@@ -1218,7 +1218,7 @@ pub fn gotoTab(self: *Window, target: apprt.action.GotoTab) void {
 /// The std UTF conversions do not bounds-check their destination, so
 /// every fixed-buffer caller must cap its input first (a UTF-16
 /// conversion never needs more units than the UTF-8 byte count).
-fn utf8Capped(s: []const u8, max: usize) []const u8 {
+pub fn utf8Capped(s: []const u8, max: usize) []const u8 {
     if (s.len <= max) return s;
     // Back off while the first EXCLUDED byte is a UTF-8 continuation
     // byte, i.e. the cut lands inside a multi-byte sequence. Testing
@@ -1371,7 +1371,7 @@ pub fn toggleMaximize(self: *Window) void {
 /// Invalidate only the strip. Hover changes repaint constantly while
 /// the mouse crosses the strip; invalidating the whole window made
 /// every one of those also refresh the terminal renderer.
-fn invalidateStrip(self: *const Window) void {
+pub fn invalidateStrip(self: *const Window) void {
     var rect: winapi.RECT = .{
         .left = 0,
         .top = 0,

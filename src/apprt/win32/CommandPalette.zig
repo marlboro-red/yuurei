@@ -376,7 +376,9 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             _ = winapi.SetTextColor(hdc, fg);
             const n = std.unicode.utf8ToUtf16Le(
                 buf[0 .. buf.len - 1],
-                cmd.title,
+                // Config entry titles are unbounded; cap before the
+                // fixed-buffer conversion (no destination bounds check).
+                Window.utf8Capped(cmd.title, buf.len - 1),
             ) catch 0;
             if (n > 0) {
                 buf[n] = 0;
@@ -403,7 +405,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             _ = winapi.SetTextColor(hdc, fg_dim);
             const n = std.unicode.utf8ToUtf16Le(
                 buf[0 .. buf.len - 1],
-                cmd.description,
+                Window.utf8Capped(cmd.description, buf.len - 1),
             ) catch 0;
             if (n > 0) {
                 buf[n] = 0;
