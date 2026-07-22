@@ -77,6 +77,12 @@ tab_drag: ?usize = null,
 tab_drag_origin: winapi.POINT = .{ .x = 0, .y = 0 },
 tab_drag_engaged: bool = false,
 
+/// Horizontal scroll offset (px) of the tab strip, for when the tabs
+/// plus the new-tab button overflow the strip width. Clamped to
+/// [0, maxTabScroll]; the wheel over the strip and tab activation
+/// adjust it. Zero whenever everything fits.
+tab_scroll: i32 = 0,
+
 /// In-strip tab rename: when active, the tab `rename_tab` shows an
 /// editable text field backed by `rename_buf` (UTF-16, like the search
 /// bar's needle). Keys are captured by the window proc while active.
@@ -862,6 +868,7 @@ pub fn activateTab(self: *Window, idx: usize) void {
 
     const tab = &self.tabs.items[new_idx];
     tab.focused.core_surface.focusCallback(true) catch {};
+    self.scrollTabIntoView(new_idx);
     self.layoutActiveTab();
     self.syncTitle();
 
@@ -1417,22 +1424,44 @@ fn captionButtonRect(self: *const Window, button: CaptionButton) winapi.RECT {
     };
 }
 
-/// Width of one tab, shrinking when they no longer fit.
+/// Width of one tab, shrinking when they no longer fit. Below a floor
+/// the tabs stop shrinking and the strip scrolls instead (tabScroll).
 fn tabWidth(self: *const Window) i32 {
-    const avail = self.clientWidth() -
-        3 * self.scale(caption_button_width_logical) -
-        self.scale(new_tab_width_logical);
+    const avail = self.tabsRegionRight() - self.scale(new_tab_width_logical);
     const n: i32 = @intCast(@max(1, self.tabs.items.len));
     return @max(self.scale(60), @min(self.scale(tab_width_logical), @divTrunc(avail, n)));
+}
+
+/// Right edge of the region tabs and the new-tab button live in: the
+/// client width minus the three caption buttons. Tabs never render
+/// past this into the caption buttons.
+fn tabsRegionRight(self: *const Window) i32 {
+    return self.clientWidth() - 3 * self.scale(caption_button_width_logical);
+}
+
+/// Total width of all tabs plus the new-tab button, unscrolled.
+fn tabsContentWidth(self: *const Window) i32 {
+    const n: i32 = @intCast(self.tabs.items.len);
+    return n * self.tabWidth() + self.scale(new_tab_width_logical);
+}
+
+/// Maximum horizontal scroll: how far the content overflows the region.
+fn maxTabScroll(self: *const Window) i32 {
+    return @max(0, self.tabsContentWidth() - self.tabsRegionRight());
+}
+
+/// Clamp tab_scroll into range (content shrank, window widened, etc.).
+fn clampTabScroll(self: *Window) void {
+    self.tab_scroll = std.math.clamp(self.tab_scroll, 0, self.maxTabScroll());
 }
 
 fn tabRect(self: *const Window, idx: usize) winapi.RECT {
     const w = self.tabWidth();
     const i: i32 = @intCast(idx);
     return .{
-        .left = i * w,
+        .left = i * w - self.tab_scroll,
         .top = 0,
-        .right = (i + 1) * w,
+        .right = (i + 1) * w - self.tab_scroll,
         .bottom = self.titlebarHeight(),
     };
 }
@@ -1455,11 +1484,28 @@ fn newTabRect(self: *const Window) winapi.RECT {
     const w = self.tabWidth();
     const n: i32 = @intCast(self.tabs.items.len);
     return .{
-        .left = n * w,
+        .left = n * w - self.tab_scroll,
         .top = 0,
-        .right = n * w + self.scale(new_tab_width_logical),
+        .right = n * w + self.scale(new_tab_width_logical) - self.tab_scroll,
         .bottom = self.titlebarHeight(),
     };
+}
+
+/// Adjust tab_scroll so tab `idx` is fully visible in the strip region
+/// (called on activation so switching to an off-screen tab reveals it).
+fn scrollTabIntoView(self: *Window, idx: usize) void {
+    self.clampTabScroll();
+    const w = self.tabWidth();
+    const i: i32 = @intCast(idx);
+    const left = i * w;
+    const right = (i + 1) * w;
+    const region = self.tabsRegionRight();
+    if (left - self.tab_scroll < 0) {
+        self.tab_scroll = left;
+    } else if (right - self.tab_scroll > region) {
+        self.tab_scroll = right - region;
+    }
+    self.clampTabScroll();
 }
 
 fn inRect(x: i32, y: i32, r: winapi.RECT) bool {
@@ -1497,6 +1543,8 @@ fn syncTabTooltips(self: *Window) void {
         hasher.update(std.mem.asBytes(&n));
         const w = self.tabWidth();
         hasher.update(std.mem.asBytes(&w));
+        // Tooltip tool rects follow the scrolled tab positions.
+        hasher.update(std.mem.asBytes(&self.tab_scroll));
         for (self.tabs.items) |*tab| {
             hasher.update(tab.title());
             hasher.update(&.{0});
@@ -1662,6 +1710,13 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
     const text_font = fonts.text;
     const glyph_font = fonts.glyph;
 
+    // Clip the tabs and new-tab button to the region left of the
+    // caption buttons, so an overflowed/scrolled strip can't paint over
+    // them. Restored before the caption buttons are drawn.
+    self.clampTabScroll();
+    const clip_saved = winapi.SaveDC(hdc);
+    _ = winapi.IntersectClipRect(hdc, 0, 0, self.tabsRegionRight(), height);
+
     // Tabs
     for (self.tabs.items, 0..) |*tab, i| {
         var rect = self.tabRect(i);
@@ -1795,6 +1850,9 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
             winapi.DT_CENTER | winapi.DT_VCENTER | winapi.DT_SINGLELINE,
         );
     }
+
+    // Drop the tab clip before the caption buttons.
+    if (clip_saved != 0) _ = winapi.RestoreDC(hdc, clip_saved);
 
     // Caption buttons
     if (glyph_font) |f| {
@@ -2406,9 +2464,22 @@ pub fn wndProc(
                 .y = lparamY(lparam),
             };
             _ = winapi.ScreenToClient(hwnd, &pt);
+            const delta: i16 = @bitCast(@as(u16, @truncate(wparam >> 16)));
+
+            // Wheel over the strip scrolls the tab strip when it
+            // overflows (up/left reveals earlier tabs).
+            if (pt.y >= 0 and pt.y < self.titlebarHeight() and
+                self.maxTabScroll() > 0)
+            {
+                const step = @divTrunc(self.tabWidth(), 2);
+                self.tab_scroll += if (delta > 0) -step else step;
+                self.clampTabScroll();
+                self.invalidateStrip();
+                return 0;
+            }
+
             const surface = self.surfaceAt(pt.x, pt.y) orelse
                 self.activeSurface() orelse return 0;
-            const delta: i16 = @bitCast(@as(u16, @truncate(wparam >> 16)));
             const ticks: f64 = @as(f64, @floatFromInt(delta)) / 120.0;
 
             // Ctrl + vertical wheel adjusts the font size, matching

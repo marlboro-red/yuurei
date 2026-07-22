@@ -666,6 +666,9 @@ pub extern "user32" fn InvalidateRect(?HWND, ?*const RECT, BOOL) callconv(.winap
 pub extern "user32" fn GetSystemMetricsForDpi(i32, UINT) callconv(.winapi) i32;
 pub extern "user32" fn IsZoomed(HWND) callconv(.winapi) BOOL;
 pub extern "gdi32" fn CreateSolidBrush(u32) callconv(.winapi) ?HBRUSH;
+pub extern "gdi32" fn SaveDC(HDC) callconv(.winapi) i32;
+pub extern "gdi32" fn RestoreDC(HDC, i32) callconv(.winapi) BOOL;
+pub extern "gdi32" fn IntersectClipRect(HDC, i32, i32, i32, i32) callconv(.winapi) i32;
 pub extern "gdi32" fn DeleteObject(?*anyopaque) callconv(.winapi) BOOL;
 pub extern "gdi32" fn SetBkMode(HDC, i32) callconv(.winapi) i32;
 pub extern "gdi32" fn SetTextColor(HDC, u32) callconv(.winapi) u32;
