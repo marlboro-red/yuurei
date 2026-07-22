@@ -92,6 +92,12 @@ minimized: bool = false,
 /// Inside an interactive move/size modal loop (WM_ENTERSIZEMOVE).
 in_size_move: bool = false,
 
+/// Remaining deferred post-resize repaint ticks (see WM_TIMER). The
+/// terminal grid resizes synchronously, but the shell's reflowed
+/// prompt arrives over the next few frames via ConPTY; these ticks
+/// keep refreshing until it has been drawn.
+resize_repaint_left: u8 = 0,
+
 /// Cached strip fonts, recreated when the DPI changes. The strip
 /// repaints on every hover change; re-creating fonts each paint was
 /// measurable GDI churn.
@@ -165,9 +171,18 @@ const caption_button_width_logical: i32 = 46;
 const tab_width_logical: i32 = 190;
 const new_tab_width_logical: i32 = 36;
 const modal_tick_timer_id: usize = 1;
+const resize_repaint_timer_id: usize = 2;
+/// How many deferred repaint ticks fire after a resize. ConPTY reflows
+/// asynchronously, so the prompt the shell repaints lands a few frames
+/// after our grid resize; a single immediate render would miss it.
+const resize_repaint_ticks: u8 = 6;
 
 pub const CreateOptions = struct {
     quick: bool = false,
+    /// Create the window with no tabs and leave it hidden. Used by
+    /// tab tear-off, which moves an existing tab in and then shows the
+    /// window at the cursor.
+    no_initial_tab: bool = false,
 };
 
 /// Create a window with one tab, show it, and return it.
@@ -237,7 +252,7 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
         null,
     );
 
-    _ = try self.newTab();
+    if (!opts.no_initial_tab) _ = try self.newTab();
     errdefer self.closeAllTabs();
 
     // Files dropped on the window paste their (quoted) paths.
@@ -253,7 +268,9 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
     // via the DWM accent policy. Pure compositor effect — no GL interop.
     self.applyBlur();
 
-    _ = winapi.ShowWindow(hwnd, winapi.SW_SHOWDEFAULT);
+    // A tear-off window stays hidden until tearOffTab has moved a tab
+    // in and positioned it at the cursor.
+    if (!opts.no_initial_tab) _ = winapi.ShowWindow(hwnd, winapi.SW_SHOWDEFAULT);
 
     // Report the OS theme so window-theme=auto and light/dark
     // conditional config work; also sets the DWM dark caption.
@@ -340,6 +357,78 @@ pub fn moveTab(self: *Window, amount: isize) void {
     self.tabs.insertAssumeCapacity(target, tab);
     self.active_tab = target;
     self.invalidateStrip();
+}
+
+/// Detach tab `idx` into a fresh top-level window at the cursor,
+/// leaving the rest of this window's tabs behind. Called when a tab
+/// drag is released outside the strip; a no-op for the only tab (there
+/// would be nothing to leave behind). The tab keeps its surfaces, split
+/// tree, and GL contexts intact — only the host windows are reparented.
+fn tearOffTab(self: *Window, idx: usize) !void {
+    if (self.tabs.items.len <= 1 or idx >= self.tabs.items.len) return;
+    const app = self.app;
+    const alloc = app.core_app.alloc;
+
+    // Everything that can fail happens before the tab is moved, so a
+    // failure leaves this window untouched and frees the empty window.
+    const window = try Window.create(alloc, app, .{ .no_initial_tab = true });
+    errdefer window.destroy();
+    try window.tabs.ensureTotalCapacity(alloc, 1);
+    try app.windows.append(alloc, window);
+
+    // The point of no return: hand the tab to the new window and
+    // reparent its surfaces. No fallible step may follow.
+    const tab = self.tabs.orderedRemove(idx);
+    window.tabs.appendAssumeCapacity(tab);
+    var it = window.tabs.items[0].tree.iterator();
+    while (it.next()) |entry| {
+        const surface = entry.view;
+
+        // A search bar pinned to a surface in this tab belongs to the
+        // source window; close it rather than leave it targeting a
+        // surface that now lives elsewhere. (destroy clears self.search.)
+        if (self.search) |search| {
+            if (search.surface == surface) search.destroy();
+        }
+
+        surface.window = window;
+        _ = winapi.SetParent(surface.host, window.hwnd);
+        if (surface.scrollbar) |sb| _ = winapi.SetParent(sb.hwnd, window.hwnd);
+    }
+
+    // The source keeps a valid active tab.
+    self.activateTab(@min(idx, self.tabs.items.len - 1));
+
+    // Size the new window like the source and drop it at the cursor so
+    // the torn-off tab appears under the pointer, then reveal it.
+    var wr: winapi.RECT = undefined;
+    _ = winapi.GetWindowRect(self.hwnd, &wr);
+    var cur: winapi.POINT = undefined;
+    _ = winapi.GetCursorPos(&cur);
+    const w = wr.right - wr.left;
+    const h = wr.bottom - wr.top;
+
+    // Keep the title strip reachable on the drop monitor. Virtual-screen
+    // coordinates can be negative (monitors above/left of the primary),
+    // so clamp against that monitor's work area, not 0.
+    var y = cur.y - window.titlebarHeight();
+    const mon = winapi.MonitorFromPoint(cur, winapi.MONITOR_DEFAULTTONEAREST);
+    var mi: winapi.MONITORINFO = undefined;
+    mi.cbSize = @sizeOf(winapi.MONITORINFO);
+    if (winapi.GetMonitorInfoW(mon, &mi) != 0) y = @max(mi.rcWork.top, y);
+
+    _ = winapi.SetWindowPos(
+        window.hwnd,
+        null,
+        cur.x - @divTrunc(w, 2),
+        y,
+        w,
+        h,
+        winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
+    );
+    _ = winapi.ShowWindow(window.hwnd, winapi.SW_SHOW);
+    window.activateTab(0);
+    _ = winapi.SetForegroundWindow(window.hwnd);
 }
 
 /// Re-apply window-level transparency and blur from the current config.
@@ -703,6 +792,28 @@ pub fn layoutActiveTab(self: *Window) void {
     // Repaint the parent so regions the hosts vacated (divider drags,
     // collapses) get the background fill instead of stale frames.
     _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+}
+
+/// Queue a render on every surface of the active tab. Used after a
+/// resize: an idle (unfocused, output-less) surface presents no frame
+/// on its own, so newly exposed regions would keep stale pixels.
+fn refreshActiveTab(self: *Window) void {
+    const tab = self.activeTab() orelse return;
+    var it = tab.tree.iterator();
+    while (it.next()) |entry| {
+        entry.view.core_surface.refreshCallback() catch |err| {
+            log.err("error refreshing surface after resize err={}", .{err});
+        };
+    }
+}
+
+/// Arm the deferred post-resize repaint. The grid is resized
+/// synchronously by layoutActiveTab, but the shell repaints its prompt
+/// only after ConPTY reflows, which lands a few frames later; keep
+/// refreshing for a short window so that repaint is not missed.
+fn scheduleResizeRepaint(self: *Window) void {
+    self.resize_repaint_left = resize_repaint_ticks;
+    _ = winapi.SetTimer(self.hwnd, resize_repaint_timer_id, 32, null);
 }
 
 /// The split divider at the given parent-client point, if any. The
@@ -1835,6 +1946,7 @@ pub fn wndProc(
             self.layoutActiveTab();
             if (self.search) |search| search.layout();
             _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+            self.scheduleResizeRepaint();
             return 0;
         },
 
@@ -1996,6 +2108,7 @@ pub fn wndProc(
             // Final exact layout for whatever the throttle skipped.
             self.layoutActiveTab();
             _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+            self.scheduleResizeRepaint();
             return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
 
@@ -2004,6 +2117,13 @@ pub fn wndProc(
                 self.app.core_app.tick(self.app) catch |err| {
                     log.err("error ticking app from modal loop err={}", .{err});
                 };
+                return 0;
+            }
+            if (wparam == resize_repaint_timer_id) {
+                self.refreshActiveTab();
+                if (self.resize_repaint_left > 0) self.resize_repaint_left -= 1;
+                if (self.resize_repaint_left == 0)
+                    _ = winapi.KillTimer(hwnd, resize_repaint_timer_id);
                 return 0;
             }
             return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -2166,11 +2286,23 @@ pub fn wndProc(
             // Button presses dismiss any showing tab tooltip.
             self.relayToTooltip(msg, wparam, lparam);
 
-            // A tab drag in progress ends on release wherever it is.
-            if (self.tab_drag != null and msg == winapi.WM_LBUTTONUP) {
-                self.tab_drag = null;
-                _ = winapi.ReleaseCapture();
-                return 0;
+            // A tab drag in progress ends on release. Dropping outside
+            // the strip tears the tab off into its own window (like
+            // other terminals); dropping within it just commits the
+            // reorder already applied live by WM_MOUSEMOVE.
+            if (self.tab_drag) |idx| {
+                if (msg == winapi.WM_LBUTTONUP) {
+                    self.tab_drag = null;
+                    _ = winapi.ReleaseCapture();
+                    const ux = lparamX(lparam);
+                    const uy = lparamY(lparam);
+                    const outside = uy < 0 or uy >= self.titlebarHeight() or
+                        ux < 0 or ux >= self.clientWidth();
+                    if (outside) self.tearOffTab(idx) catch |err| {
+                        log.err("error tearing off tab err={}", .{err});
+                    };
+                    return 0;
+                }
             }
 
             // Clicks in the strip operate tabs/buttons, never the

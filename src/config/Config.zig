@@ -3889,11 +3889,14 @@ pub fn default(alloc_gpa: Allocator) Allocator.Error!Config {
     // Add our default command palette entries
     try result.@"command-palette-entry".init(alloc);
 
-    // Add our default link for URL detection
+    // Add our default link for URL detection. Highlight on plain hover
+    // so URLs underline as the pointer passes over them; activation stays
+    // gated on Ctrl/Cmd in the surface (Ctrl+click opens, a plain click
+    // selects), so the hover affordance never costs an accidental open.
     try result.link.links.append(alloc, .{
         .regex = url.regex,
         .action = .{ .open = {} },
-        .highlight = .{ .hover_mods = inputpkg.ctrlOrSuper(.{}) },
+        .highlight = .{ .hover = {} },
     });
 
     return result;
