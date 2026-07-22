@@ -92,9 +92,11 @@ fn thumbRect(self: *const Scrollbar) ?winapi.RECT {
     const w = client.right - client.left;
 
     const min_thumb: f64 = @floatFromInt(self.surface.window.scale(24));
-    const thumb_h = @max(min_thumb, h * @as(f64, @floatFromInt(self.len)) /
-        @as(f64, @floatFromInt(self.total)));
-    const range = h - thumb_h;
+    // Clamp to the column height so a very short window can't make the
+    // thumb taller than the track and drive a negative travel range.
+    const thumb_h = @min(h, @max(min_thumb, h * @as(f64, @floatFromInt(self.len)) /
+        @as(f64, @floatFromInt(self.total))));
+    const range = @max(0.0, h - thumb_h);
     const denom: f64 = @floatFromInt(self.total - self.len);
     const y = range * @as(f64, @floatFromInt(self.offset)) / @max(1.0, denom);
 
@@ -117,8 +119,8 @@ fn scrollToThumbY(self: *Scrollbar, y: i32) void {
     const h: f64 = @floatFromInt(@max(1, client.bottom - client.top));
 
     const min_thumb: f64 = @floatFromInt(self.surface.window.scale(24));
-    const thumb_h = @max(min_thumb, h * @as(f64, @floatFromInt(self.len)) /
-        @as(f64, @floatFromInt(self.total)));
+    const thumb_h = @min(h, @max(min_thumb, h * @as(f64, @floatFromInt(self.len)) /
+        @as(f64, @floatFromInt(self.total))));
     const range = @max(1.0, h - thumb_h);
 
     const frac = std.math.clamp(@as(f64, @floatFromInt(y)) / range, 0.0, 1.0);
@@ -259,6 +261,16 @@ pub fn wndProc(
             if (self.drag_grab != null) {
                 self.drag_grab = null;
                 _ = winapi.ReleaseCapture();
+                _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+            }
+            return 0;
+        },
+
+        // Capture stolen (e.g. a modal opening mid-drag): drop the drag
+        // so it doesn't stick and keep scrolling on hover.
+        winapi.WM_CAPTURECHANGED => {
+            if (self.drag_grab != null) {
+                self.drag_grab = null;
                 _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
             }
             return 0;
