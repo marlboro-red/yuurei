@@ -69,6 +69,11 @@ flip_capable: bool = false,
 /// app-wide, not per-window, to avoid unbalanced hide/show calls.
 cursor_hidden: bool = false,
 
+/// The shell taskbar-list object for OSC 9;4 progress, created lazily
+/// on the first progress report. null until then (or if COM/creation
+/// failed).
+taskbar: ?*winapi.ITaskbarList3 = null,
+
 /// Flips to true to quit on the next event loop tick.
 quit: bool = false,
 
@@ -84,6 +89,10 @@ pub fn init(
     const module = std.os.windows.kernel32.GetModuleHandleW(null) orelse
         return error.GetModuleHandleFailed;
     const hinstance: winapi.HINSTANCE = @ptrCast(module);
+
+    // Initialize COM (STA) for the shell taskbar-progress interface.
+    // S_FALSE means it was already initialized on this thread — fine.
+    _ = winapi.CoInitializeEx(null, winapi.COINIT_APARTMENTTHREADED);
 
     // Registers the common-control classes (tooltips for the strip).
     winapi.InitCommonControls();
@@ -233,11 +242,13 @@ pub fn terminate(self: *App) void {
         _ = winapi.Shell_NotifyIconW(winapi.NIM_DELETE, &nid);
         _ = winapi.DestroyWindow(hwnd);
     }
+    if (self.taskbar) |tb| _ = tb.vtable.Release(tb);
     self.unregisterGlobalHotkeys();
     self.hotkey_actions.deinit(self.core_app.alloc);
     while (self.windows.pop()) |window| window.destroy();
     self.windows.deinit(self.core_app.alloc);
     self.config.deinit();
+    winapi.CoUninitialize();
 }
 
 /// Register every `global:`-flagged keybind as a Win32 system hotkey.
@@ -846,6 +857,28 @@ pub fn performAction(
             }
         },
 
+        // OSC 9;4 progress → the taskbar button (winget, Write-Progress,
+        // installers). Best-effort: if the taskbar object is unavailable
+        // we still accept the action rather than log every update.
+        .progress_report => switch (target) {
+            .app => return false,
+            .surface => |surface| {
+                if (self.taskbarList()) |tb| {
+                    const hwnd = surface.rt_surface.window.hwnd;
+                    const flag: winapi.DWORD = switch (value.state) {
+                        .remove => winapi.TBPF_NOPROGRESS,
+                        .set => winapi.TBPF_NORMAL,
+                        .@"error" => winapi.TBPF_ERROR,
+                        .indeterminate => winapi.TBPF_INDETERMINATE,
+                        .pause => winapi.TBPF_PAUSED,
+                    };
+                    _ = tb.vtable.SetProgressState(tb, hwnd, flag);
+                    if (value.progress) |p|
+                        _ = tb.vtable.SetProgressValue(tb, hwnd, @min(p, 100), 100);
+                }
+            },
+        },
+
         // The pwd is tracked by the core (terminal.getPwd, used for
         // working-directory inheritance); the apprt has nothing to do
         // with the notification, so accept it silently rather than log
@@ -866,6 +899,27 @@ pub fn performAction(
 /// Whether the WGL DX-interop extension is available, probed with a
 /// throwaway hidden window and GL context. Drivers expose the same
 /// extension set process-wide, so one probe decides for all surfaces.
+/// The shell taskbar-list object, created and HrInit'd on first use.
+/// null if COM creation or init fails (progress is then a no-op).
+fn taskbarList(self: *App) ?*winapi.ITaskbarList3 {
+    if (self.taskbar) |tb| return tb;
+    var ptr: ?*anyopaque = null;
+    if (winapi.CoCreateInstance(
+        &winapi.CLSID_TaskbarList,
+        null,
+        winapi.CLSCTX_INPROC_SERVER,
+        &winapi.IID_ITaskbarList3,
+        &ptr,
+    ) < 0) return null;
+    const tb: *winapi.ITaskbarList3 = @ptrCast(@alignCast(ptr orelse return null));
+    if (tb.vtable.HrInit(tb) < 0) {
+        _ = tb.vtable.Release(tb);
+        return null;
+    }
+    self.taskbar = tb;
+    return tb;
+}
+
 /// Cycle foreground focus to the previous/next top-level window.
 fn gotoWindow(self: *App, mode: apprt.action.GotoWindow, current: *Window) void {
     const n = self.windows.items.len;

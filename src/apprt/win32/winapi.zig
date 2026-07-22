@@ -23,6 +23,7 @@ pub const LPARAM = windows.LPARAM;
 pub const LRESULT = windows.LRESULT;
 pub const BOOL = windows.BOOL;
 pub const DWORD = windows.DWORD;
+pub const HRESULT = windows.HRESULT;
 pub const UINT = windows.UINT;
 pub const ATOM = windows.ATOM;
 pub const RECT = windows.RECT;
@@ -568,6 +569,60 @@ pub const GUID = extern struct {
     Data2: u16,
     Data3: u16,
     Data4: [8]u8,
+};
+
+// COM, for the taskbar progress interface (OSC 9;4).
+pub const COINIT_APARTMENTTHREADED: DWORD = 0x2;
+pub const CLSCTX_INPROC_SERVER: DWORD = 0x1;
+pub extern "ole32" fn CoInitializeEx(?*anyopaque, DWORD) callconv(.winapi) HRESULT;
+pub extern "ole32" fn CoUninitialize() callconv(.winapi) void;
+pub extern "ole32" fn CoCreateInstance(
+    *const GUID,
+    ?*anyopaque,
+    DWORD,
+    *const GUID,
+    *?*anyopaque,
+) callconv(.winapi) HRESULT;
+
+pub const CLSID_TaskbarList: GUID = .{
+    .Data1 = 0x56fdf344,
+    .Data2 = 0xfd6d,
+    .Data3 = 0x11d0,
+    .Data4 = .{ 0x95, 0x8a, 0x00, 0x60, 0x97, 0xc9, 0xa0, 0x90 },
+};
+pub const IID_ITaskbarList3: GUID = .{
+    .Data1 = 0xea1afb91,
+    .Data2 = 0x9e28,
+    .Data3 = 0x4b86,
+    .Data4 = .{ 0x90, 0xe9, 0x9e, 0x9f, 0x8a, 0x5e, 0xef, 0xaf },
+};
+
+/// Taskbar progress state flags (SetProgressState).
+pub const TBPF_NOPROGRESS: DWORD = 0x0;
+pub const TBPF_INDETERMINATE: DWORD = 0x1;
+pub const TBPF_NORMAL: DWORD = 0x2;
+pub const TBPF_ERROR: DWORD = 0x4;
+pub const TBPF_PAUSED: DWORD = 0x8;
+
+/// ITaskbarList3, typed only through SetProgressState (slot 10). The
+/// leading slots — IUnknown (3), ITaskbarList (5: HrInit, AddTab,
+/// DeleteTab, ActivateTab, SetActiveAlt), ITaskbarList2 (1:
+/// MarkFullscreenWindow), then SetProgressValue — are present so the
+/// two we call land at the right vtable offset.
+pub const ITaskbarList3 = extern struct {
+    vtable: *const extern struct {
+        QueryInterface: *const fn (*ITaskbarList3, *const GUID, *?*anyopaque) callconv(.winapi) HRESULT,
+        AddRef: *const fn (*ITaskbarList3) callconv(.winapi) u32,
+        Release: *const fn (*ITaskbarList3) callconv(.winapi) u32,
+        HrInit: *const fn (*ITaskbarList3) callconv(.winapi) HRESULT,
+        AddTab: *const fn (*ITaskbarList3, HWND) callconv(.winapi) HRESULT,
+        DeleteTab: *const fn (*ITaskbarList3, HWND) callconv(.winapi) HRESULT,
+        ActivateTab: *const fn (*ITaskbarList3, HWND) callconv(.winapi) HRESULT,
+        SetActiveAlt: *const fn (*ITaskbarList3, HWND) callconv(.winapi) HRESULT,
+        MarkFullscreenWindow: *const fn (*ITaskbarList3, HWND, BOOL) callconv(.winapi) HRESULT,
+        SetProgressValue: *const fn (*ITaskbarList3, HWND, u64, u64) callconv(.winapi) HRESULT,
+        SetProgressState: *const fn (*ITaskbarList3, HWND, DWORD) callconv(.winapi) HRESULT,
+    },
 };
 pub const NIM_ADD: DWORD = 0;
 pub const NIM_MODIFY: DWORD = 1;
