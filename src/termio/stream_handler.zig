@@ -1242,6 +1242,19 @@ pub const StreamHandler = struct {
             log.warn("OSC 7 (windows) uri has no path: {s}", .{url});
             return;
         };
+
+        // OSC 7 comes from whatever writes to the terminal (a cat'd
+        // file, an SSH session), so like the POSIX branch above, only
+        // trust hostnames that refer to this machine.
+        const host = after[0..slash];
+        if (host.len > 0) {
+            const host_valid = internal_os.hostname.isLocal(host) catch false;
+            if (!host_valid) {
+                log.warn("OSC 7 host ({s}) must be local", .{host});
+                return;
+            }
+        }
+
         const raw = after[slash + 1 ..]; // path without its leading '/'
         if (raw.len == 0) return;
 
@@ -1274,6 +1287,24 @@ pub const StreamHandler = struct {
             }
         }
         const path = buf[0..n];
+
+        // Accept only drive-absolute paths. In particular a path that
+        // decodes to a \\server\share UNC must never become the pwd:
+        // host validation can't help (the UNC server name comes from
+        // the path, not the URI host), and inheriting such a pwd into
+        // a new tab makes CreateProcessW open an outbound SMB (NTLM
+        // authentication) connection to an attacker-named host.
+        if (!(path.len >= 3 and std.ascii.isAlphabetic(path[0]) and
+            path[1] == ':' and path[2] == '\\'))
+        {
+            // debug, not warn: a shell legitimately sitting in a UNC cwd
+            // (e.g. \\wsl$\...) would otherwise log every prompt.
+            log.debug(
+                "OSC 7 (windows) pwd must be a drive-absolute path, got: {s}",
+                .{path},
+            );
+            return;
+        }
 
         log.debug("terminal pwd (windows): {s}", .{path});
         try self.terminal.setPwd(path);
