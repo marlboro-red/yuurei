@@ -369,6 +369,10 @@ fn indexOf(values: []const []const u8, current: []const u8) ?usize {
 }
 
 fn configValue(text: []const u8, key: []const u8) ?[]const u8 {
+    // Return the LAST active occurrence, since that's the one the scalar
+    // parser treats as effective (and the one setValue edits). Returning
+    // the first would display a value that isn't active.
+    var result: ?[]const u8 = null;
     var it = std.mem.splitScalar(u8, text, '\n');
     while (it.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t\r");
@@ -376,9 +380,9 @@ fn configValue(text: []const u8, key: []const u8) ?[]const u8 {
         const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
         const k = std.mem.trim(u8, line[0..eq], " \t");
         if (!std.mem.eql(u8, k, key)) continue;
-        return std.mem.trim(u8, line[eq + 1 ..], " \t");
+        result = std.mem.trim(u8, line[eq + 1 ..], " \t");
     }
-    return null;
+    return result;
 }
 
 /// Rewrite `key = value` in the config file (the LAST active occurrence,
@@ -463,7 +467,12 @@ fn setValue(self: *SettingsWindow, key: []const u8, value: []const u8) void {
     // Atomic write: a same-directory temp file, then rename over the
     // destination. renameAbsolute replaces the target atomically, so a
     // failure before the rename leaves the original config intact.
-    const tmp = std.fmt.allocPrint(alloc, "{s}.tmp", .{path}) catch return;
+    // Include the thread id (system-wide unique) in the temp name so
+    // concurrent instances don't contend for one deterministic ".tmp".
+    const tmp = std.fmt.allocPrint(alloc, "{s}.{d}.tmp", .{
+        path,
+        std.os.windows.kernel32.GetCurrentThreadId(),
+    }) catch return;
     defer alloc.free(tmp);
     {
         const file = std.fs.createFileAbsolute(tmp, .{ .truncate = true }) catch |err| {
@@ -476,7 +485,13 @@ fn setValue(self: *SettingsWindow, key: []const u8, value: []const u8) void {
             std.fs.deleteFileAbsolute(tmp) catch {};
             return;
         };
-        file.sync() catch {};
+        // Flush before the rename publishes the file; a failed flush must
+        // abort so a half-written config isn't made live.
+        file.sync() catch |err| {
+            log.warn("settings: flush config failed err={}", .{err});
+            std.fs.deleteFileAbsolute(tmp) catch {};
+            return;
+        };
     }
     std.fs.renameAbsolute(tmp, path) catch |err| {
         log.warn("settings: replace config failed err={}", .{err});
