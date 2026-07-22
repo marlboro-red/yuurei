@@ -208,30 +208,20 @@ pub const CreateOptions = struct {
 };
 
 /// The docked geometry for a quick terminal on the primary monitor,
-/// honoring quick-terminal-position and -size. Defaults match the old
-/// hardcoded dock: full width, ~40% height, top.
+/// honoring quick-terminal-position and -size. Delegates the size to
+/// the shared QuickTerminalSize.calculate so the primary/secondary
+/// axis and per-position defaults match the other apprts.
 fn quickTerminalGeometry(app: *App) struct { x: i32, y: i32, w: i32, h: i32 } {
     const pos = app.config.@"quick-terminal-position";
-    const size = app.config.@"quick-terminal-size";
     const sw: i32 = @max(1, winapi.GetSystemMetrics(winapi.SM_CXSCREEN));
     const sh: i32 = @max(1, winapi.GetSystemMetrics(winapi.SM_CYSCREEN));
 
-    // "primary" is the dimension along the dock axis; "secondary" is
-    // the cross axis (full by default).
-    const horizontal = pos == .left or pos == .right;
-    const primary_parent: u32 = @intCast(if (horizontal) sw else sh);
-    const secondary_parent: u32 = @intCast(if (horizontal) sh else sw);
-    const primary_px: i32 = @intCast(if (size.primary) |s|
-        s.toPixels(primary_parent)
-    else
-        @as(u32, @intFromFloat(0.4 * @as(f32, @floatFromInt(primary_parent)))));
-    const secondary_px: i32 = @intCast(if (size.secondary) |s|
-        s.toPixels(secondary_parent)
-    else
-        secondary_parent);
-
-    const w: i32 = if (horizontal) primary_px else secondary_px;
-    const h: i32 = if (horizontal) secondary_px else primary_px;
+    const dims = app.config.@"quick-terminal-size".calculate(pos, .{
+        .width = @intCast(sw),
+        .height = @intCast(sh),
+    });
+    const w: i32 = @intCast(dims.width);
+    const h: i32 = @intCast(dims.height);
     const x: i32, const y: i32 = switch (pos) {
         .top => .{ @divTrunc(sw - w, 2), 0 },
         .bottom => .{ @divTrunc(sw - w, 2), sh - h },
@@ -343,16 +333,20 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
                 winapi.SWP_NOMOVE | winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
             );
         }
+        // Position is honored only when BOTH coordinates are set, per
+        // the documented behavior.
         if (app.config.@"window-position-x") |px| {
-            _ = winapi.SetWindowPos(
-                hwnd,
-                null,
-                px,
-                app.config.@"window-position-y" orelse px,
-                0,
-                0,
-                winapi.SWP_NOZORDER | winapi.SWP_NOSIZE | winapi.SWP_NOACTIVATE,
-            );
+            if (app.config.@"window-position-y") |py| {
+                _ = winapi.SetWindowPos(
+                    hwnd,
+                    null,
+                    px,
+                    py,
+                    0,
+                    0,
+                    winapi.SWP_NOZORDER | winapi.SWP_NOSIZE | winapi.SWP_NOACTIVATE,
+                );
+            }
         }
         const show: i32 = if (app.config.maximize)
             winapi.SW_MAXIMIZE
@@ -969,20 +963,23 @@ pub fn activateTab(self: *Window, idx: usize) void {
     self.layoutActiveTab();
     self.syncTitle();
 
-    // The search bar is pinned to one surface: hide it while its tab
-    // isn't active so it doesn't float over (and appear to query) an
-    // unrelated tab, and reveal it when its surface is active again.
-    if (self.search) |search| {
-        const in_tab = handleOf(&self.tabs.items[new_idx].tree, search.surface) != null;
-        if (in_tab) {
-            search.layout();
-            _ = winapi.ShowWindow(search.hwnd, winapi.SW_SHOWNA);
-        } else {
-            _ = winapi.ShowWindow(search.hwnd, winapi.SW_HIDE);
-        }
-    }
+    self.syncSearchVisibility();
 
     _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+}
+
+/// The search bar is pinned to one surface: show it only while that
+/// surface is the active one, and hide it otherwise (a different split
+/// focused, or a different tab), so it never floats over — and appears
+/// to query — an unrelated split/tab.
+fn syncSearchVisibility(self: *Window) void {
+    const search = self.search orelse return;
+    if (self.activeSurface() == search.surface) {
+        search.layout();
+        _ = winapi.ShowWindow(search.hwnd, winapi.SW_SHOWNA);
+    } else {
+        _ = winapi.ShowWindow(search.hwnd, winapi.SW_HIDE);
+    }
 }
 
 pub fn activeTab(self: *Window) ?*Tab {
@@ -1006,6 +1003,9 @@ pub fn focusSurface(self: *Window, surface: *Surface) void {
     tab.focused = surface;
     surface.core_surface.focusCallback(true) catch {};
     self.syncTitle();
+    // A search bar bound to the previously focused split must not stay
+    // visible over the newly focused one.
+    self.syncSearchVisibility();
 }
 
 /// Position every GL host of the active tab according to the split

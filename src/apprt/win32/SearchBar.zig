@@ -239,7 +239,19 @@ fn ensureFont(self: *SearchBar) void {
     if (self.font_dpi == dpi and self.font != null) return;
     if (self.font) |f| _ = winapi.DeleteObject(f);
     self.font = winapi.CreateFontW(
-        -self.window.scale(12), 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 5, 0,
+        -self.window.scale(12),
+        0,
+        0,
+        0,
+        400,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        0,
         std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI"),
     );
     self.font_dpi = dpi;
