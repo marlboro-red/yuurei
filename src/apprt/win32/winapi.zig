@@ -766,6 +766,10 @@ pub fn setSwapInterval(interval: i32) bool {
 }
 
 pub extern "user32" fn IsWindowVisible(HWND) callconv(.winapi) BOOL;
+pub extern "user32" fn IsIconic(HWND) callconv(.winapi) BOOL;
+pub extern "user32" fn ShowCursor(BOOL) callconv(.winapi) i32;
+pub const HWND_TOPMOST: HWND = @ptrFromInt(@as(usize, @bitCast(@as(isize, -1))));
+pub const HWND_NOTOPMOST: HWND = @ptrFromInt(@as(usize, @bitCast(@as(isize, -2))));
 pub extern "user32" fn MessageBeep(UINT) callconv(.winapi) BOOL;
 pub extern "user32" fn GetForegroundWindow() callconv(.winapi) ?HWND;
 pub extern "user32" fn SetForegroundWindow(HWND) callconv(.winapi) BOOL;

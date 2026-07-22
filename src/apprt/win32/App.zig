@@ -64,6 +64,11 @@ tray_hwnd: ?winapi.HWND = null,
 /// path decided before the renderer ever runs.
 flip_capable: bool = false,
 
+/// Whether the mouse cursor is currently hidden (mouse-hide-while-typing).
+/// ShowCursor keeps a process-global counter, so this must be tracked
+/// app-wide, not per-window, to avoid unbalanced hide/show calls.
+cursor_hidden: bool = false,
+
 /// Flips to true to quit on the next event loop tick.
 quit: bool = false,
 
@@ -512,7 +517,57 @@ pub fn performAction(
         .close_tab => switch (target) {
             .app => return false,
             .surface => |surface| {
-                surface.rt_surface.window.closeTabContaining(surface.rt_surface);
+                surface.rt_surface.window.closeTabs(value, surface.rt_surface);
+            },
+        },
+
+        .close_all_windows => {
+            for (self.windows.items) |window| window.should_close = true;
+            self.wakeup();
+        },
+
+        .goto_window => switch (target) {
+            .app => return false,
+            .surface => |surface| self.gotoWindow(value, surface.rt_surface.window),
+        },
+
+        .present_terminal => switch (target) {
+            .app => return false,
+            .surface => |surface| {
+                const hwnd = surface.rt_surface.window.hwnd;
+                if (winapi.IsIconic(hwnd) != 0)
+                    _ = winapi.ShowWindow(hwnd, winapi.SW_RESTORE);
+                _ = winapi.SetForegroundWindow(hwnd);
+            },
+        },
+
+        .toggle_visibility => switch (target) {
+            .app => return false,
+            .surface => |surface| {
+                const hwnd = surface.rt_surface.window.hwnd;
+                _ = winapi.ShowWindow(hwnd, if (winapi.IsIconic(hwnd) != 0)
+                    winapi.SW_RESTORE
+                else
+                    winapi.SW_MINIMIZE);
+            },
+        },
+
+        .float_window => switch (target) {
+            .app => return false,
+            .surface => |surface| surface.rt_surface.window.setFloat(value),
+        },
+
+        .mouse_visibility => switch (target) {
+            .app => return false,
+            .surface => {
+                const hide = value == .hidden;
+                if (hide and !self.cursor_hidden) {
+                    _ = winapi.ShowCursor(winapi.FALSE);
+                    self.cursor_hidden = true;
+                } else if (!hide and self.cursor_hidden) {
+                    _ = winapi.ShowCursor(winapi.TRUE);
+                    self.cursor_hidden = false;
+                }
             },
         },
 
@@ -745,13 +800,16 @@ pub fn performAction(
         .ring_bell => switch (target) {
             .app => return false,
             .surface => |surface| {
+                const features = self.config.@"bell-features";
                 const hwnd = surface.rt_surface.window.hwnd;
-                // Beep only when we're in the background; flash either
-                // way so the bell is visible on the taskbar.
-                if (winapi.GetForegroundWindow() != hwnd) {
-                    _ = winapi.MessageBeep(0);
-                }
-                winapi.flashWindow(hwnd);
+                const foreground = winapi.GetForegroundWindow() == hwnd;
+                // System audio bell only when configured (Ghostty's
+                // default has no audio bell).
+                if (features.system) _ = winapi.MessageBeep(0);
+                // Taskbar attention only when configured AND the window
+                // is in the background — flashing your own focused
+                // window's taskbar button is pure noise.
+                if (features.attention and !foreground) winapi.flashWindow(hwnd);
             },
         },
 
@@ -791,6 +849,23 @@ pub fn performAction(
 /// Whether the WGL DX-interop extension is available, probed with a
 /// throwaway hidden window and GL context. Drivers expose the same
 /// extension set process-wide, so one probe decides for all surfaces.
+/// Cycle foreground focus to the previous/next top-level window.
+fn gotoWindow(self: *App, mode: apprt.action.GotoWindow, current: *Window) void {
+    const n = self.windows.items.len;
+    if (n < 2) return;
+    var idx: usize = 0;
+    for (self.windows.items, 0..) |w, i| {
+        if (w == current) idx = i;
+    }
+    const target = switch (mode) {
+        .next => (idx + 1) % n,
+        .previous => (idx + n - 1) % n,
+    };
+    const w = self.windows.items[target];
+    if (winapi.IsIconic(w.hwnd) != 0) _ = winapi.ShowWindow(w.hwnd, winapi.SW_RESTORE);
+    _ = winapi.SetForegroundWindow(w.hwnd);
+}
+
 fn probeFlipCapable(hinstance: winapi.HINSTANCE) bool {
     const hwnd = winapi.CreateWindowExW(
         0,

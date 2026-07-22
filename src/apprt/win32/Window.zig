@@ -716,11 +716,46 @@ fn renameChar(self: *Window, ch: u16) bool {
 
 /// Flag every surface in the tab containing the given surface for
 /// close (the close_tab action).
-pub fn closeTabContaining(self: *Window, surface: *Surface) void {
+/// Close tabs relative to the one containing `surface`, per the
+/// keybind's CloseTabMode: just this tab, all others, or all to the
+/// right. Previously every mode closed only the current tab.
+pub fn closeTabs(
+    self: *Window,
+    mode: apprt.action.CloseTabMode,
+    surface: *Surface,
+) void {
     const idx = self.tabOf(surface) orelse return;
-    var it = self.tabs.items[idx].tree.iterator();
-    while (it.next()) |entry| entry.view.should_close = true;
+    for (self.tabs.items, 0..) |*tab, i| {
+        const close = switch (mode) {
+            .this => i == idx,
+            .other => i != idx,
+            .right => i > idx,
+        };
+        if (!close) continue;
+        var it = tab.tree.iterator();
+        while (it.next()) |entry| entry.view.should_close = true;
+    }
     self.app.wakeup();
+}
+
+/// Set or toggle always-on-top (float_window keybind).
+pub fn setFloat(self: *Window, mode: apprt.action.FloatWindow) void {
+    const exstyle = winapi.GetWindowLongPtrW(self.hwnd, winapi.GWL_EXSTYLE);
+    const is_topmost = (exstyle & @as(isize, winapi.WS_EX_TOPMOST)) != 0;
+    const want = switch (mode) {
+        .on => true,
+        .off => false,
+        .toggle => !is_topmost,
+    };
+    _ = winapi.SetWindowPos(
+        self.hwnd,
+        if (want) winapi.HWND_TOPMOST else winapi.HWND_NOTOPMOST,
+        0,
+        0,
+        0,
+        0,
+        winapi.SWP_NOMOVE | winapi.SWP_NOSIZE | winapi.SWP_NOACTIVATE,
+    );
 }
 
 /// The tab index containing the given surface, if any.
