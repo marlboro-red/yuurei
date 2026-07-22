@@ -35,6 +35,11 @@ needle: std.ArrayList(u16) = .empty,
 total: ?usize = null,
 selected: ?usize = null,
 
+/// Cached font, recreated on DPI change. The bar repaints on every
+/// keystroke; re-creating it each paint is measurable GDI churn.
+font: ?*anyopaque = null,
+font_dpi: u32 = 0,
+
 const width_logical: i32 = 360;
 const height_logical: i32 = 40;
 
@@ -84,6 +89,7 @@ pub fn destroy(self: *SearchBar) void {
     const alloc = self.window.app.core_app.alloc;
     const window = self.window;
     window.search = null;
+    if (self.font) |f| _ = winapi.DeleteObject(f);
     _ = winapi.SetWindowLongPtrW(self.hwnd, winapi.GWLP_USERDATA, 0);
     _ = winapi.DestroyWindow(self.hwnd);
     self.needle.deinit(alloc);
@@ -185,6 +191,18 @@ fn bindingAction(self: *SearchBar, action: input.Binding.Action) void {
 // ---------------------------------------------------------------------
 // Painting
 
+/// (Re)create the cached font for the current DPI.
+fn ensureFont(self: *SearchBar) void {
+    const dpi = winapi.GetDpiForWindow(self.hwnd);
+    if (self.font_dpi == dpi and self.font != null) return;
+    if (self.font) |f| _ = winapi.DeleteObject(f);
+    self.font = winapi.CreateFontW(
+        -self.window.scale(12), 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 5, 0,
+        std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI"),
+    );
+    self.font_dpi = dpi;
+}
+
 fn paint(self: *SearchBar, hdc: winapi.HDC) void {
     const window = self.window;
     var client: winapi.RECT = undefined;
@@ -202,25 +220,8 @@ fn paint(self: *SearchBar, hdc: winapi.HDC) void {
 
     _ = winapi.SetBkMode(hdc, winapi.TRANSPARENT_BK);
 
-    const font = winapi.CreateFontW(
-        -window.scale(12),
-        0,
-        0,
-        0,
-        400,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        5, // CLEARTYPE_QUALITY
-        0,
-        std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI"),
-    );
-    defer if (font) |f| {
-        _ = winapi.DeleteObject(f);
-    };
+    self.ensureFont();
+    const font = self.font;
 
     const margin = window.scale(10);
 

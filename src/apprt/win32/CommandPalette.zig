@@ -35,6 +35,12 @@ selected: usize = 0,
 /// Index into matches of the first visible row.
 scroll: usize = 0,
 
+/// Cached fonts, recreated on DPI change. The palette repaints on every
+/// keystroke; re-creating fonts each paint is measurable GDI churn.
+font_title: ?*anyopaque = null,
+font_desc: ?*anyopaque = null,
+font_dpi: u32 = 0,
+
 /// Logical (96-dpi) metrics, scaled by the parent window DPI.
 const width_logical: i32 = 560;
 const input_height_logical: i32 = 40;
@@ -85,6 +91,8 @@ pub fn create(alloc: Allocator, window: *Window) !*CommandPalette {
 pub fn destroy(self: *CommandPalette) void {
     const alloc = self.window.app.core_app.alloc;
     self.window.palette = null;
+    if (self.font_title) |f| _ = winapi.DeleteObject(f);
+    if (self.font_desc) |f| _ = winapi.DeleteObject(f);
     _ = winapi.SetWindowLongPtrW(self.hwnd, winapi.GWLP_USERDATA, 0);
     _ = winapi.DestroyWindow(self.hwnd);
     self.filter.deinit(alloc);
@@ -214,6 +222,18 @@ fn rowAt(self: *const CommandPalette, y: i32) ?usize {
 // ---------------------------------------------------------------------
 // Painting
 
+/// (Re)create the cached title/description fonts for the current DPI.
+fn ensureFonts(self: *CommandPalette) void {
+    const dpi = winapi.GetDpiForWindow(self.hwnd);
+    if (self.font_dpi == dpi and self.font_title != null) return;
+    if (self.font_title) |f| _ = winapi.DeleteObject(f);
+    if (self.font_desc) |f| _ = winapi.DeleteObject(f);
+    const face = std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI");
+    self.font_title = winapi.CreateFontW(-self.window.scale(13), 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 5, 0, face);
+    self.font_desc = winapi.CreateFontW(-self.window.scale(10), 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 5, 0, face);
+    self.font_dpi = dpi;
+}
+
 fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
     const window = self.window;
     var client: winapi.RECT = undefined;
@@ -232,44 +252,9 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
 
     _ = winapi.SetBkMode(hdc, winapi.TRANSPARENT_BK);
 
-    const title_font = winapi.CreateFontW(
-        -window.scale(13),
-        0,
-        0,
-        0,
-        400,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        5, // CLEARTYPE_QUALITY
-        0,
-        std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI"),
-    );
-    defer if (title_font) |f| {
-        _ = winapi.DeleteObject(f);
-    };
-    const desc_font = winapi.CreateFontW(
-        -window.scale(10),
-        0,
-        0,
-        0,
-        400,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        5,
-        0,
-        std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI"),
-    );
-    defer if (desc_font) |f| {
-        _ = winapi.DeleteObject(f);
-    };
+    self.ensureFonts();
+    const title_font = self.font_title;
+    const desc_font = self.font_desc;
 
     const margin = window.scale(12);
     const input_h = window.scale(input_height_logical);
