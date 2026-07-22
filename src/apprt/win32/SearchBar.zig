@@ -40,7 +40,13 @@ selected: ?usize = null,
 font: ?*anyopaque = null,
 font_dpi: u32 = 0,
 
-const width_logical: i32 = 360;
+/// Which button (if any) the pointer is over, for hover highlight.
+hover_button: ?Button = null,
+
+const Button = enum { prev, next, close };
+const button_w_logical: i32 = 28;
+
+const width_logical: i32 = 420;
 const height_logical: i32 = 40;
 
 /// Hard cap on needle length in UTF-16 units. updateSearch converts
@@ -188,6 +194,42 @@ fn bindingAction(self: *SearchBar, action: input.Binding.Action) void {
     };
 }
 
+/// The rect of a button (prev/next/close), right-aligned in the bar:
+/// [prev][next][close] left-to-right, close at the far right.
+fn buttonRect(self: *const SearchBar, which: Button) winapi.RECT {
+    var client: winapi.RECT = undefined;
+    _ = winapi.GetClientRect(self.hwnd, &client);
+    const bw = self.window.scale(button_w_logical);
+    const index: i32 = switch (which) {
+        .close => 1,
+        .next => 2,
+        .prev => 3,
+    };
+    const right = client.right - self.window.scale(4) - (index - 1) * bw;
+    return .{ .left = right - bw, .top = 0, .right = right, .bottom = client.bottom };
+}
+
+/// Left edge of the button cluster (where the count/needle must stop).
+fn buttonsLeft(self: *const SearchBar) i32 {
+    return self.buttonRect(.prev).left;
+}
+
+fn buttonAt(self: *const SearchBar, x: i32, y: i32) ?Button {
+    inline for (.{ .prev, .next, .close }) |b| {
+        const r = self.buttonRect(b);
+        if (x >= r.left and x < r.right and y >= r.top and y < r.bottom) return b;
+    }
+    return null;
+}
+
+fn clickButton(self: *SearchBar, which: Button) void {
+    switch (which) {
+        .prev => self.bindingAction(.{ .navigate_search = .previous }),
+        .next => self.bindingAction(.{ .navigate_search = .next }),
+        .close => self.bindingAction(.end_search),
+    }
+}
+
 // ---------------------------------------------------------------------
 // Painting
 
@@ -252,7 +294,7 @@ fn paint(self: *SearchBar, hdc: winapi.HDC) void {
                 var rect: winapi.RECT = .{
                     .left = margin,
                     .top = 0,
-                    .right = client.right - margin,
+                    .right = self.buttonsLeft() - window.scale(6),
                     .bottom = client.bottom,
                 };
                 _ = winapi.DrawTextW(
@@ -273,7 +315,7 @@ fn paint(self: *SearchBar, hdc: winapi.HDC) void {
         var text_rect: winapi.RECT = .{
             .left = margin,
             .top = 0,
-            .right = client.right - margin - count_w,
+            .right = self.buttonsLeft() - window.scale(6) - count_w,
             .bottom = client.bottom,
         };
         if (self.needle.items.len > 0) {
@@ -311,6 +353,38 @@ fn paint(self: *SearchBar, hdc: winapi.HDC) void {
                 @intCast(placeholder.len),
                 &text_rect,
                 winapi.DT_LEFT | winapi.DT_VCENTER | winapi.DT_SINGLELINE,
+            );
+        }
+    }
+
+    // Prev / next / close buttons (right-aligned). Glyphs render in the
+    // text font (Segoe UI): up/down arrows and a multiplication sign.
+    if (font) |f| {
+        const old = winapi.SelectObject(hdc, f);
+        defer if (old) |o| {
+            _ = winapi.SelectObject(hdc, o);
+        };
+        const hover_bg: u32 = if (light) 0x00E0E0E0 else 0x00333333;
+        for ([_]Button{ .prev, .next, .close }) |bkind| {
+            var r = self.buttonRect(bkind);
+            if (self.hover_button == bkind) {
+                if (winapi.CreateSolidBrush(hover_bg)) |b| {
+                    defer _ = winapi.DeleteObject(b);
+                    _ = winapi.FillRect(hdc, &r, b);
+                }
+            }
+            _ = winapi.SetTextColor(hdc, fg_dim);
+            var glyph: [2:0]u16 = switch (bkind) {
+                .prev => .{ 0x2191, 0 }, // ↑
+                .next => .{ 0x2193, 0 }, // ↓
+                .close => .{ 0x2715, 0 }, // ✕
+            };
+            _ = winapi.DrawTextW(
+                hdc,
+                &glyph,
+                1,
+                &r,
+                winapi.DT_CENTER | winapi.DT_VCENTER | winapi.DT_SINGLELINE,
             );
         }
     }
@@ -362,6 +436,39 @@ pub fn wndProc(
                 // Ctrl+V pastes clipboard text into the needle.
                 'V' => if (winapi.GetKeyState(winapi.VK_CONTROL) < 0) self.paste(),
                 else => {},
+            }
+            return 0;
+        },
+
+        winapi.WM_LBUTTONUP => {
+            const lp: usize = @bitCast(lparam);
+            const x: i32 = @as(i16, @bitCast(@as(u16, @truncate(lp))));
+            const y: i32 = @as(i16, @bitCast(@as(u16, @truncate(lp >> 16))));
+            if (self.buttonAt(x, y)) |b| self.clickButton(b);
+            return 0;
+        },
+
+        winapi.WM_MOUSEMOVE => {
+            const lp: usize = @bitCast(lparam);
+            const x: i32 = @as(i16, @bitCast(@as(u16, @truncate(lp))));
+            const y: i32 = @as(i16, @bitCast(@as(u16, @truncate(lp >> 16))));
+            const b = self.buttonAt(x, y);
+            if (b != self.hover_button) {
+                self.hover_button = b;
+                _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+                var tme: winapi.TRACKMOUSEEVENT = .{
+                    .dwFlags = winapi.TME_LEAVE,
+                    .hwndTrack = hwnd,
+                };
+                _ = winapi.TrackMouseEvent(&tme);
+            }
+            return 0;
+        },
+
+        winapi.WM_MOUSELEAVE => {
+            if (self.hover_button != null) {
+                self.hover_button = null;
+                _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
             }
             return 0;
         },
