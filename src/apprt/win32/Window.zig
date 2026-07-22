@@ -601,16 +601,29 @@ pub fn removeSurface(self: *Window, surface: *Surface) void {
     self.syncTitle();
 }
 
-/// Right-click context menu for tab `idx`: Rename / Close.
-fn showTabMenu(self: *Window, idx: usize) void {
-    if (idx >= self.tabs.items.len) return;
+/// Strip context menu. With a tab index: tab actions (rename/close)
+/// plus the general actions; on the empty strip / new-tab button: just
+/// the general actions. This is the fork's main discovery surface for
+/// users who don't know the keybinds — a lightweight substitute for a
+/// menu bar (macOS/GTK expose these elsewhere).
+fn showStripMenu(self: *Window, idx: ?usize) void {
+    if (idx) |i| if (i >= self.tabs.items.len) return;
     const menu = winapi.CreatePopupMenu() orelse return;
     defer _ = winapi.DestroyMenu(menu);
-    _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 1, std.unicode.utf8ToUtf16LeStringLiteral("Rename\u{2026}"));
-    _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 2, std.unicode.utf8ToUtf16LeStringLiteral("Close Tab"));
-    if (self.tabs.items.len > 1) {
-        _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 3, std.unicode.utf8ToUtf16LeStringLiteral("Close Other Tabs"));
+    const S = std.unicode.utf8ToUtf16LeStringLiteral;
+    if (idx != null) {
+        _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 1, S("Rename\u{2026}"));
+        _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 2, S("Close Tab"));
+        if (self.tabs.items.len > 1)
+            _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 3, S("Close Other Tabs"));
+        _ = winapi.AppendMenuW(menu, winapi.MF_SEPARATOR, 0, null);
     }
+    _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 10, S("New Tab"));
+    _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 11, S("New Split Right"));
+    _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 12, S("New Split Down"));
+    _ = winapi.AppendMenuW(menu, winapi.MF_SEPARATOR, 0, null);
+    _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 13, S("Command Palette\u{2026}"));
+    _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 14, S("Settings\u{2026}"));
 
     var pt: winapi.POINT = .{ .x = 0, .y = 0 };
     _ = winapi.GetCursorPos(&pt);
@@ -627,9 +640,17 @@ fn showTabMenu(self: *Window, idx: usize) void {
         // Defer rename until the menu's modal loop has fully exited and
         // focus has settled, else the new EDIT gets an immediate
         // WM_KILLFOCUS and commits empty.
-        1 => _ = winapi.PostMessageW(self.hwnd, winapi.WM_APP_RENAME, idx, 0),
-        2 => self.closeTabsFrom(.this, idx),
-        3 => self.closeTabsFrom(.other, idx),
+        1 => if (idx) |i| {
+            _ = winapi.PostMessageW(self.hwnd, winapi.WM_APP_RENAME, i, 0);
+        },
+        2 => if (idx) |i| self.closeTabsFrom(.this, i),
+        3 => if (idx) |i| self.closeTabsFrom(.other, i),
+        10 => _ = self.newTab() catch |err| log.err("menu new tab err={}", .{err}),
+        11 => _ = self.newSplit(.right) catch |err| log.err("menu split err={}", .{err}),
+        12 => _ = self.newSplit(.down) catch |err| log.err("menu split err={}", .{err}),
+        13 => self.togglePalette() catch |err| log.err("menu palette err={}", .{err}),
+        14 => _ = self.app.performAction(.app, .open_config, {}) catch |err|
+            log.err("menu settings err={}", .{err}),
         else => {},
     }
 }
@@ -2581,7 +2602,7 @@ pub fn wndProc(
                 }
                 const n = self.tabs.items.len;
                 const target: usize = @intCast(std.math.clamp(
-                    @divTrunc(@as(i32, x), @max(1, self.tabWidth())),
+                    @divTrunc(@as(i32, x) + self.tab_scroll, @max(1, self.tabWidth())),
                     0,
                     @as(i32, @intCast(n - 1)),
                 ));
@@ -2732,7 +2753,10 @@ pub fn wndProc(
                 // Right-click a tab for its context menu (Rename / Close).
                 if (msg == winapi.WM_RBUTTONUP) {
                     switch (self.hitTestStrip(lparamX(lparam), cy)) {
-                        .tab => |i| self.showTabMenu(i),
+                        .tab => |i| self.showStripMenu(i),
+                        // Right-click on the empty strip or the new-tab
+                        // button shows the general menu.
+                        .none, .new_tab => self.showStripMenu(null),
                         else => {},
                     }
                 }

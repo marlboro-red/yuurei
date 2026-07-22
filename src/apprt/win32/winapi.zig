@@ -386,6 +386,7 @@ pub extern "user32" fn GetWindowLongPtrW(HWND, i32) callconv(.winapi) isize;
 
 // Popup menu (tab right-click context menu).
 pub const MF_STRING: UINT = 0x0000;
+pub const MF_SEPARATOR: UINT = 0x0800;
 pub const TPM_RIGHTBUTTON: UINT = 0x0002;
 pub const TPM_RETURNCMD: UINT = 0x0100;
 pub extern "user32" fn CreatePopupMenu() callconv(.winapi) ?HMENU;
