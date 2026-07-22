@@ -2553,9 +2553,9 @@ fn keyEvent(
     if (action == .press) perf.keyPress();
 
     // TODO: windows: AltGr discrimination (lParam bit 24 + scancode)
-    // so AltGr chords report clean mods. The text path is already
-    // correct: charEvent marks ctrl+alt consumed when the layout
-    // produced a printable character.
+    // so AltGr chords report clean mods on the text-less keydown. The
+    // text path is already correct: charEvent clears ctrl+alt when the
+    // layout produced a printable character.
     const mods = currentMods();
 
     // Keybind triggers match on the unshifted codepoint; derive it from
@@ -2673,16 +2673,19 @@ fn charEvent(self: *Window, unit: u16) void {
         key_event.consumed_mods.shift = true;
     }
 
-    // AltGr arrives as Ctrl+Alt on Windows. A printable char with both
-    // held means the layout folded them into the character (plain
-    // Ctrl+key or Alt+key never cooks a printable WM_CHAR), so mark
-    // them consumed too — otherwise the encoder sees text plus
-    // unconsumed ctrl+alt and emits a control sequence instead of the
-    // literal glyph ('@', '{', '~', ... on German/Nordic/French/Polish
-    // layouts).
-    if (key_event.mods.ctrl and key_event.mods.alt) {
-        key_event.consumed_mods.ctrl = true;
-        key_event.consumed_mods.alt = true;
+    // AltGr. Windows synthesizes left-ctrl + right-alt for it, but when the
+    // layout turns that chord into literal text (AltGr+e -> €, AltGr+q -> @
+    // on German, etc.) neither modifier is semantically active. Clear them
+    // so the encoder emits the text instead of a ctrl/alt sequence: the
+    // legacy ctrlSeq/CSI-u paths read the raw mods (key_encode.zig ctrlSeq
+    // uses all_mods, and the CSI-u block tests event.mods.ctrl), so unlike
+    // Shift above marking them consumed would not be enough. A real
+    // ctrl+alt chord essentially never produces a printable character (it
+    // yields a control code or nothing), so requiring printable text
+    // avoids false positives.
+    if (codepoint >= 0x20 and key_event.mods.ctrl and key_event.mods.alt) {
+        key_event.mods.ctrl = false;
+        key_event.mods.alt = false;
     }
 
     if (key_event.unshifted_codepoint == 0 and
