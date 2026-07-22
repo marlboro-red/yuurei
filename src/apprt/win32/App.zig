@@ -74,6 +74,10 @@ cursor_hidden: bool = false,
 /// failed).
 taskbar: ?*winapi.ITaskbarList3 = null,
 
+/// Whether our CoInitializeEx succeeded (S_OK/S_FALSE); only then may
+/// terminate() call CoUninitialize (a failed init must not be balanced).
+com_initialized: bool = false,
+
 /// Flips to true to quit on the next event loop tick.
 quit: bool = false,
 
@@ -91,8 +95,13 @@ pub fn init(
     const hinstance: winapi.HINSTANCE = @ptrCast(module);
 
     // Initialize COM (STA) for the shell taskbar-progress interface.
-    // S_FALSE means it was already initialized on this thread — fine.
-    _ = winapi.CoInitializeEx(null, winapi.COINIT_APARTMENTTHREADED);
+    // S_OK and S_FALSE (already initialized) both require a matching
+    // CoUninitialize; a failure such as RPC_E_CHANGED_MODE must NOT be
+    // balanced, so only uninit if this succeeded.
+    const com_initialized = winapi.CoInitializeEx(
+        null,
+        winapi.COINIT_APARTMENTTHREADED,
+    ) >= 0;
 
     // Registers the common-control classes (tooltips for the strip).
     winapi.InitCommonControls();
@@ -227,6 +236,7 @@ pub fn init(
         .hinstance = hinstance,
         .thread_id = std.os.windows.kernel32.GetCurrentThreadId(),
         .flip_capable = flip_capable,
+        .com_initialized = com_initialized,
     };
 
     // Make sure the loop processes the queued message immediately.
@@ -248,7 +258,7 @@ pub fn terminate(self: *App) void {
     while (self.windows.pop()) |window| window.destroy();
     self.windows.deinit(self.core_app.alloc);
     self.config.deinit();
-    winapi.CoUninitialize();
+    if (self.com_initialized) winapi.CoUninitialize();
 }
 
 /// Register every `global:`-flagged keybind as a Win32 system hotkey.
@@ -502,6 +512,7 @@ pub fn performAction(
 ) !bool {
     switch (action) {
         .quit => {
+            if (!self.confirmQuit()) return true;
             self.quit = true;
             self.wakeup();
         },
@@ -537,6 +548,7 @@ pub fn performAction(
         },
 
         .close_all_windows => {
+            if (!self.confirmQuit()) return true;
             for (self.windows.items) |window| window.should_close = true;
             self.wakeup();
         },
@@ -863,18 +875,26 @@ pub fn performAction(
         .progress_report => switch (target) {
             .app => return false,
             .surface => |surface| {
-                if (self.taskbarList()) |tb| {
-                    const hwnd = surface.rt_surface.window.hwnd;
-                    const flag: winapi.DWORD = switch (value.state) {
-                        .remove => winapi.TBPF_NOPROGRESS,
-                        .set => winapi.TBPF_NORMAL,
-                        .@"error" => winapi.TBPF_ERROR,
-                        .indeterminate => winapi.TBPF_INDETERMINATE,
-                        .pause => winapi.TBPF_PAUSED,
-                    };
-                    _ = tb.vtable.SetProgressState(tb, hwnd, flag);
-                    if (value.progress) |p|
-                        _ = tb.vtable.SetProgressValue(tb, hwnd, @min(p, 100), 100);
+                const window = surface.rt_surface.window;
+                // Honor progress-style (progress can be disabled), and
+                // ignore reports from a surface that isn't the window's
+                // active one, so a background split/tab can't clobber
+                // the single taskbar button's progress.
+                if (self.config.@"progress-style" and
+                    window.activeSurface() == surface.rt_surface)
+                {
+                    if (self.taskbarList()) |tb| {
+                        const flag: winapi.DWORD = switch (value.state) {
+                            .remove => winapi.TBPF_NOPROGRESS,
+                            .set => winapi.TBPF_NORMAL,
+                            .@"error" => winapi.TBPF_ERROR,
+                            .indeterminate => winapi.TBPF_INDETERMINATE,
+                            .pause => winapi.TBPF_PAUSED,
+                        };
+                        _ = tb.vtable.SetProgressState(tb, window.hwnd, flag);
+                        if (value.progress) |p|
+                            _ = tb.vtable.SetProgressValue(tb, window.hwnd, @min(p, 100), 100);
+                    }
                 }
             },
         },
@@ -899,6 +919,34 @@ pub fn performAction(
 /// Whether the WGL DX-interop extension is available, probed with a
 /// throwaway hidden window and GL context. Drivers expose the same
 /// extension set process-wide, so one probe decides for all surfaces.
+/// Ask once (parented to the active window) if any surface across all
+/// windows has a running process. Returns true to proceed with a
+/// quit / close-all, false if the user cancelled.
+fn confirmQuit(self: *App) bool {
+    var needs = false;
+    outer: for (self.windows.items) |window| {
+        for (window.tabs.items) |*tab| {
+            var it = tab.tree.iterator();
+            while (it.next()) |entry| {
+                if (entry.view.core_surface.needsConfirmQuit()) {
+                    needs = true;
+                    break :outer;
+                }
+            }
+        }
+    }
+    if (!needs) return true;
+    const parent: ?winapi.HWND = if (self.activeWindow()) |w| w.hwnd else null;
+    return winapi.MessageBoxW(
+        parent,
+        std.unicode.utf8ToUtf16LeStringLiteral(
+            "Processes are still running. Quit anyway?",
+        ),
+        std.unicode.utf8ToUtf16LeStringLiteral("Ghostty"),
+        winapi.MB_YESNO | winapi.MB_ICONWARNING | winapi.MB_DEFBUTTON2,
+    ) == winapi.IDYES;
+}
+
 /// The shell taskbar-list object, created and HrInit'd on first use.
 /// null if COM creation or init fails (progress is then a no-op).
 fn taskbarList(self: *App) ?*winapi.ITaskbarList3 {
