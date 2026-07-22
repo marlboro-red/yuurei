@@ -171,11 +171,6 @@ pub fn init(
     };
     if (winapi.RegisterClassExW(&dropdown_class) == 0) return error.RegisterClassFailed;
 
-    // Probe flip-model capability now that the host class exists.
-    const flip_capable = !std.process.hasEnvVarConstant("GHOSTTY_NO_FLIP") and
-        probeFlipCapable(hinstance);
-    log.info("flip-model capable={}", .{flip_capable});
-
     // Load our configuration
     var config = try Config.load(core_app.alloc);
     errdefer config.deinit();
@@ -196,6 +191,17 @@ pub fn init(
             _ = core_app.mailbox.push(.{ .quit = {} }, .{ .forever = {} });
         }
     }
+
+    // Probe flip-model capability only when the config opts in. The
+    // probe spins up a throwaway WGL context (tens of ms on some
+    // drivers), and the default SwapBuffers path never needs it, so the
+    // common launch shouldn't pay for it. Consequence: enabling
+    // windows-flip-model at runtime needs a restart to take effect
+    // (the config doc already notes it only affects new terminals).
+    const flip_capable = config.@"windows-flip-model" and
+        !std.process.hasEnvVarConstant("GHOSTTY_NO_FLIP") and
+        probeFlipCapable(hinstance);
+    log.info("flip-model capable={}", .{flip_capable});
 
     // Queue a single new window that starts on launch.
     // Note: above we may send a quit so this may never happen.
