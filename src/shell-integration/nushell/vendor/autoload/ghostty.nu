@@ -67,7 +67,9 @@ if 'GHOSTTY_SHELL_INTEGRATION_XDG_DIR' in $env {
 if ($env.GHOSTTY_NU_PROMPT_HOOKED? | default '') != $"($nu.pid)" {
   $env.GHOSTTY_NU_PROMPT_HOOKED = $"($nu.pid)"
   $env.config.hooks.pre_prompt = ($env.config.hooks.pre_prompt | append {||
-    let p = ($env.PWD | str replace --all '\' '/')
+    # Percent-encode '%' first (the receiver percent-decodes), then
+    # normalize separators, so a literal % in a path isn't corrupted.
+    let p = ($env.PWD | str replace --all '%' '%25' | str replace --all '\' '/')
     let host = ($env.COMPUTERNAME? | default 'localhost')
     print -rn $"\u{1b}]7;file://($host)/($p)\u{7}"
   })

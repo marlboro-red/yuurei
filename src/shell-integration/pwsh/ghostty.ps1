@@ -86,7 +86,10 @@ function global:prompt {
 
     $loc = $ExecutionContext.SessionState.Path.CurrentLocation
     if ($loc.Provider.Name -eq "FileSystem") {
-        $path = $loc.ProviderPath -replace '\\', '/'
+        # Percent-encode '%' first (the receiver percent-decodes the
+        # path, so a literal % in a real directory like C:\a%41b would
+        # otherwise decode to C:\aAb). Then normalize separators.
+        $path = $loc.ProviderPath -replace '%', '%25' -replace '\\', '/'
         if ($path -notmatch '^/') { $path = "/$path" }
         $out += "$e]7;file://$([System.Environment]::MachineName)$path$bel"
     }
