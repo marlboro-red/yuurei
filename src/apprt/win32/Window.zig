@@ -952,7 +952,9 @@ pub fn syncTitle(self: *Window) void {
     self.invalidateStrip();
 }
 
-/// Read the OS theme: forward to all tabs and set the DWM caption.
+/// Resolve the effective theme (config, falling back to the OS):
+/// forward to all tabs and set the DWM caption. Called on OS theme
+/// changes and on config reload, since `window-theme` can force either.
 pub fn notifyColorScheme(self: *Window) void {
     const light = self.isLight();
 
@@ -987,8 +989,11 @@ pub fn scale(self: *const Window, logical: i32) i32 {
 
 /// Resolve whether the window chrome should render light, honoring the
 /// `window-theme` config: dark/light force the value, auto/system/ghostty
-/// defer to the OS app theme.
-fn isLight(self: *const Window) bool {
+/// defer to the OS app theme. (`ghostty` upstream means "match the
+/// terminal background"; the OS theme is a fallback until that's
+/// implemented.) Also used by the other chrome windows (palette,
+/// search bar, settings) so a forced theme applies consistently.
+pub fn isLight(self: *const Window) bool {
     return switch (self.app.config.@"window-theme") {
         .dark => false,
         .light => true,
