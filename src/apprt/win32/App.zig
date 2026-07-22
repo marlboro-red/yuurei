@@ -676,6 +676,13 @@ pub fn performAction(
             .surface => |surface| {
                 const rt_surface = surface.rt_surface;
                 const window = rt_surface.window;
+                // Reuse the bar only if it's already bound to THIS
+                // surface; a bar left open on another split/tab would
+                // otherwise update the wrong surface. Rebind by tearing
+                // it down and opening a fresh one.
+                if (window.search) |search| {
+                    if (search.surface != rt_surface) search.destroy();
+                }
                 if (window.search) |search| {
                     if (value.needle.len > 0) search.setNeedle(value.needle);
                     search.focus();
@@ -692,7 +699,10 @@ pub fn performAction(
         .end_search => switch (target) {
             .app => return false,
             .surface => |surface| {
-                if (surface.rt_surface.window.search) |search| search.destroy();
+                if (surface.rt_surface.window.search) |search| {
+                    // Only the bound surface may close its bar.
+                    if (search.surface == surface.rt_surface) search.destroy();
+                }
             },
         },
 
@@ -700,7 +710,9 @@ pub fn performAction(
             .app => return false,
             .surface => |surface| {
                 if (surface.rt_surface.window.search) |search| {
-                    search.setTotal(value.total);
+                    // Ignore counts from a surface the bar isn't bound to.
+                    if (search.surface == surface.rt_surface)
+                        search.setTotal(value.total);
                 }
             },
         },
@@ -709,7 +721,8 @@ pub fn performAction(
             .app => return false,
             .surface => |surface| {
                 if (surface.rt_surface.window.search) |search| {
-                    search.setSelected(value.selected);
+                    if (search.surface == surface.rt_surface)
+                        search.setSelected(value.selected);
                 }
             },
         },

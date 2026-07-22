@@ -864,6 +864,20 @@ pub fn activateTab(self: *Window, idx: usize) void {
     tab.focused.core_surface.focusCallback(true) catch {};
     self.layoutActiveTab();
     self.syncTitle();
+
+    // The search bar is pinned to one surface: hide it while its tab
+    // isn't active so it doesn't float over (and appear to query) an
+    // unrelated tab, and reveal it when its surface is active again.
+    if (self.search) |search| {
+        const in_tab = handleOf(&self.tabs.items[new_idx].tree, search.surface) != null;
+        if (in_tab) {
+            search.layout();
+            _ = winapi.ShowWindow(search.hwnd, winapi.SW_SHOWNA);
+        } else {
+            _ = winapi.ShowWindow(search.hwnd, winapi.SW_HIDE);
+        }
+    }
+
     _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
 }
 

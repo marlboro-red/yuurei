@@ -588,6 +588,7 @@ pub const LWA_ALPHA: DWORD = 0x00000002;
 pub extern "user32" fn SetLayeredWindowAttributes(HWND, u32, u8, DWORD) callconv(.winapi) BOOL;
 pub const SW_HIDE: i32 = 0;
 pub const SW_SHOW: i32 = 5;
+pub const SW_SHOWNA: i32 = 8;
 pub const SM_CXSCREEN: i32 = 0;
 pub const SM_CYSCREEN: i32 = 1;
 pub extern "user32" fn GetSystemMetrics(i32) callconv(.winapi) i32;
