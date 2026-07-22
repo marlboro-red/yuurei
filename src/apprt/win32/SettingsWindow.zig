@@ -381,8 +381,11 @@ fn configValue(text: []const u8, key: []const u8) ?[]const u8 {
     return null;
 }
 
-/// Rewrite `key = value` in the config file (first active occurrence,
-/// else appended), preserving every other line, then reload.
+/// Rewrite `key = value` in the config file (the LAST active occurrence,
+/// which is the one the scalar parser treats as effective; else
+/// appended), preserving every other line, then reload. The write is
+/// atomic: a same-directory temp file is written and renamed over the
+/// destination, so a crash or I/O error can't leave a truncated config.
 fn setValue(self: *SettingsWindow, key: []const u8, value: []const u8) void {
     const alloc = self.app.core_app.alloc;
     const path = configpkg.edit.openPath(alloc) catch |err| {
@@ -410,33 +413,45 @@ fn setValue(self: *SettingsWindow, key: []const u8, value: []const u8) void {
     };
     defer if (text.len > 0) alloc.free(text);
 
+    // Pass 1: find the LAST active (non-comment) occurrence of the key.
+    // The scalar config parser lets the last one win, so replacing an
+    // earlier one would silently do nothing.
+    const isMatch = struct {
+        fn f(raw: []const u8, k: []const u8) bool {
+            const line = std.mem.trim(u8, raw, " \t\r");
+            if (line.len == 0 or line[0] == '#') return false;
+            const eq = std.mem.indexOfScalar(u8, line, '=') orelse return false;
+            return std.mem.eql(u8, std.mem.trim(u8, line[0..eq], " \t"), k);
+        }
+    }.f;
+
+    var last_match: ?usize = null;
+    {
+        var idx: usize = 0;
+        var it = std.mem.splitScalar(u8, text, '\n');
+        while (it.next()) |raw| : (idx += 1) {
+            if (isMatch(raw, key)) last_match = idx;
+        }
+    }
+
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
 
-    var replaced = false;
     var first = true;
+    var idx: usize = 0;
     var it = std.mem.splitScalar(u8, text, '\n');
-    while (it.next()) |raw| {
+    while (it.next()) |raw| : (idx += 1) {
         if (!first) out.append(alloc, '\n') catch return;
         first = false;
-        if (!replaced) {
-            const line = std.mem.trim(u8, raw, " \t\r");
-            if (line.len > 0 and line[0] != '#') {
-                if (std.mem.indexOfScalar(u8, line, '=')) |eq| {
-                    const k = std.mem.trim(u8, line[0..eq], " \t");
-                    if (std.mem.eql(u8, k, key)) {
-                        out.appendSlice(alloc, key) catch return;
-                        out.appendSlice(alloc, " = ") catch return;
-                        out.appendSlice(alloc, value) catch return;
-                        replaced = true;
-                        continue;
-                    }
-                }
-            }
+        if (last_match != null and idx == last_match.?) {
+            out.appendSlice(alloc, key) catch return;
+            out.appendSlice(alloc, " = ") catch return;
+            out.appendSlice(alloc, value) catch return;
+        } else {
+            out.appendSlice(alloc, raw) catch return;
         }
-        out.appendSlice(alloc, raw) catch return;
     }
-    if (!replaced) {
+    if (last_match == null) {
         if (out.items.len > 0 and out.items[out.items.len - 1] != '\n')
             out.append(alloc, '\n') catch return;
         out.appendSlice(alloc, key) catch return;
@@ -445,13 +460,27 @@ fn setValue(self: *SettingsWindow, key: []const u8, value: []const u8) void {
         out.append(alloc, '\n') catch return;
     }
 
-    const file = std.fs.createFileAbsolute(path, .{ .truncate = true }) catch |err| {
-        log.warn("settings: open config for write failed err={}", .{err});
-        return;
-    };
-    defer file.close();
-    file.writeAll(out.items) catch |err| {
-        log.warn("settings: write config failed err={}", .{err});
+    // Atomic write: a same-directory temp file, then rename over the
+    // destination. renameAbsolute replaces the target atomically, so a
+    // failure before the rename leaves the original config intact.
+    const tmp = std.fmt.allocPrint(alloc, "{s}.tmp", .{path}) catch return;
+    defer alloc.free(tmp);
+    {
+        const file = std.fs.createFileAbsolute(tmp, .{ .truncate = true }) catch |err| {
+            log.warn("settings: open temp config for write failed err={}", .{err});
+            return;
+        };
+        defer file.close();
+        file.writeAll(out.items) catch |err| {
+            log.warn("settings: write config failed err={}", .{err});
+            std.fs.deleteFileAbsolute(tmp) catch {};
+            return;
+        };
+        file.sync() catch {};
+    }
+    std.fs.renameAbsolute(tmp, path) catch |err| {
+        log.warn("settings: replace config failed err={}", .{err});
+        std.fs.deleteFileAbsolute(tmp) catch {};
         return;
     };
 
