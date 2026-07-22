@@ -179,6 +179,25 @@ pub fn build(b: *std.Build) !void {
             exe.install();
             resources.install();
             if (i18n) |v| v.install();
+
+            // Ship the vendored ConPTY runtime next to the exe on
+            // Windows. Ghostty loads conpty.dll/OpenConsole.exe from the
+            // executable's directory; without them it silently falls back
+            // to the system ConPTY, whose reflow/scroll behavior differs
+            // enough that reedline-based shells (e.g. Nushell) visibly
+            // misrender — content scrolls up as you type. The release
+            // package copies these, but plain `zig build` dev runs (from
+            // zig-out/bin) need them just as much.
+            if (config.target.result.os.tag == .windows) {
+                b.getInstallStep().dependOn(&b.addInstallBinFile(
+                    b.path("vendor/conpty/conpty.dll"),
+                    "conpty.dll",
+                ).step);
+                b.getInstallStep().dependOn(&b.addInstallBinFile(
+                    b.path("vendor/conpty/OpenConsole.exe"),
+                    "OpenConsole.exe",
+                ).step);
+            }
         }
     } else if (!config.emit_lib_vt) {
         // The macOS Ghostty Library
