@@ -140,6 +140,41 @@ fn paste(self: *CommandPalette) void {
     self.refilter();
 }
 
+/// Fuzzy subsequence score of `needle` within `haystack` (ASCII
+/// case-insensitive). null if not a subsequence at all. Higher is
+/// better: bonuses for consecutive matches and matches at word starts,
+/// so "nt" ranks "New Tab" above an incidental "n...t..." match.
+fn fuzzyScore(needle: []const u8, haystack: []const u8) ?i32 {
+    if (needle.len == 0) return 0;
+    var score: i32 = 0;
+    var ni: usize = 0;
+    var prev_match = false;
+    var prev_char: u8 = ' ';
+    for (haystack) |hc| {
+        if (ni >= needle.len) break;
+        if (std.ascii.toLower(needle[ni]) == std.ascii.toLower(hc)) {
+            score += 1;
+            if (prev_match) score += 3;
+            if (prev_char == ' ' or prev_char == '-' or
+                prev_char == '_' or prev_char == ':') score += 6;
+            ni += 1;
+            prev_match = true;
+        } else prev_match = false;
+        prev_char = hc;
+    }
+    if (ni < needle.len) return null;
+    // Slight preference for tighter (shorter) matches.
+    return score - @as(i32, @intCast(@min(haystack.len / 4, 16)));
+}
+
+const Scored = struct { i: usize, score: i32 };
+
+fn scoreLessThan(_: void, a: Scored, b: Scored) bool {
+    // Higher score first; stable by original index on ties.
+    if (a.score != b.score) return a.score > b.score;
+    return a.i < b.i;
+}
+
 fn refilter(self: *CommandPalette) void {
     const alloc = self.window.app.core_app.alloc;
     self.matches.clearRetainingCapacity();
@@ -148,14 +183,25 @@ fn refilter(self: *CommandPalette) void {
     const len = std.unicode.utf16LeToUtf8(&buf, self.filter.items) catch 0;
     const needle = buf[0..len];
 
+    var scored: std.ArrayList(Scored) = .empty;
+    defer scored.deinit(alloc);
+
     for (self.commands(), 0..) |cmd, i| {
-        if (needle.len == 0 or
-            std.ascii.indexOfIgnoreCase(cmd.title, needle) != null or
-            std.ascii.indexOfIgnoreCase(cmd.description, needle) != null)
-        {
-            self.matches.append(alloc, i) catch return;
+        if (needle.len == 0) {
+            scored.append(alloc, .{ .i = i, .score = 0 }) catch return;
+            continue;
         }
+        // Best of title (preferred) and description (penalized).
+        var best: ?i32 = fuzzyScore(needle, cmd.title);
+        if (fuzzyScore(needle, cmd.description)) |d| {
+            const dp = d - 8;
+            if (best == null or dp > best.?) best = dp;
+        }
+        if (best) |s| scored.append(alloc, .{ .i = i, .score = s }) catch return;
     }
+
+    if (needle.len > 0) std.mem.sort(Scored, scored.items, {}, scoreLessThan);
+    for (scored.items) |s| self.matches.append(alloc, s.i) catch return;
 
     self.selected = 0;
     self.scroll = 0;
