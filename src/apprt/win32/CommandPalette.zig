@@ -120,6 +120,18 @@ fn commands(self: *const CommandPalette) []const input.Command {
 
 /// Recompute matches for the current filter (case-insensitive substring
 /// of the title or description) and fit the popup to them.
+/// Paste clipboard text into the filter at the cap, then re-filter.
+fn paste(self: *CommandPalette) void {
+    const alloc = self.window.app.core_app.alloc;
+    var buf: [filter_max_units]u16 = undefined;
+    const room = filter_max_units -| self.filter.items.len;
+    if (room == 0) return;
+    const n = winapi.clipboardTextUtf16(self.hwnd, buf[0..@min(room, buf.len)]);
+    if (n == 0) return;
+    self.filter.appendSlice(alloc, buf[0..n]) catch return;
+    self.refilter();
+}
+
 fn refilter(self: *CommandPalette) void {
     const alloc = self.window.app.core_app.alloc;
     self.matches.clearRetainingCapacity();
@@ -456,6 +468,8 @@ pub fn wndProc(
                 winapi.VK_NEXT => self.moveSelection(
                     @as(i32, @intCast(max_visible_rows)),
                 ),
+                // Ctrl+V pastes clipboard text into the filter.
+                'V' => if (winapi.GetKeyState(winapi.VK_CONTROL) < 0) self.paste(),
                 else => {},
             }
             return 0;

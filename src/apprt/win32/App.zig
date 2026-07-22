@@ -606,7 +606,7 @@ pub fn performAction(
         .close_window => switch (target) {
             .app => return false,
             .surface => |surface| {
-                surface.rt_surface.window.should_close = true;
+                surface.rt_surface.window.requestCloseWindow();
             },
         },
 

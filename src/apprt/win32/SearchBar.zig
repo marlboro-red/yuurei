@@ -152,6 +152,18 @@ pub fn layout(self: *SearchBar) void {
     );
 }
 
+/// Paste clipboard text into the needle at the cap, then re-search.
+fn paste(self: *SearchBar) void {
+    const alloc = self.window.app.core_app.alloc;
+    var buf: [needle_max_units]u16 = undefined;
+    const room = needle_max_units -| self.needle.items.len;
+    if (room == 0) return;
+    const n = winapi.clipboardTextUtf16(self.hwnd, buf[0..@min(room, buf.len)]);
+    if (n == 0) return;
+    self.needle.appendSlice(alloc, buf[0..n]) catch return;
+    self.updateSearch();
+}
+
 /// Push the current needle to the core search.
 fn updateSearch(self: *SearchBar) void {
     var buf: [1024]u8 = undefined;
@@ -346,6 +358,8 @@ pub fn wndProc(
                 }),
                 winapi.VK_UP => self.bindingAction(.{ .navigate_search = .previous }),
                 winapi.VK_DOWN => self.bindingAction(.{ .navigate_search = .next }),
+                // Ctrl+V pastes clipboard text into the needle.
+                'V' => if (winapi.GetKeyState(winapi.VK_CONTROL) < 0) self.paste(),
                 else => {},
             }
             return 0;

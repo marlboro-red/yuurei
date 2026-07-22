@@ -622,19 +622,8 @@ fn showTabMenu(self: *Window, idx: usize) void {
         // focus has settled, else the new EDIT gets an immediate
         // WM_KILLFOCUS and commits empty.
         1 => _ = winapi.PostMessageW(self.hwnd, winapi.WM_APP_RENAME, idx, 0),
-        2 => {
-            var it = self.tabs.items[idx].tree.iterator();
-            while (it.next()) |entry| entry.view.should_close = true;
-            self.app.wakeup();
-        },
-        3 => {
-            for (self.tabs.items, 0..) |*tab, i| {
-                if (i == idx) continue;
-                var it = tab.tree.iterator();
-                while (it.next()) |entry| entry.view.should_close = true;
-            }
-            self.app.wakeup();
-        },
+        2 => self.closeTabsFrom(.this, idx),
+        3 => self.closeTabsFrom(.other, idx),
         else => {},
     }
 }
@@ -714,8 +703,47 @@ fn renameChar(self: *Window, ch: u16) bool {
     return true;
 }
 
-/// Flag every surface in the tab containing the given surface for
-/// close (the close_tab action).
+/// Paste clipboard text into the active rename field.
+fn renamePaste(self: *Window) void {
+    if (!self.rename_active) return;
+    const alloc = self.app.core_app.alloc;
+    // First edit replaces the pre-filled title (select-all behavior).
+    if (self.rename_fresh) {
+        self.rename_buf.clearRetainingCapacity();
+        self.rename_fresh = false;
+    }
+    var buf: [512]u16 = undefined;
+    const room = 511 -| self.rename_buf.items.len;
+    if (room == 0) return;
+    const n = winapi.clipboardTextUtf16(self.hwnd, buf[0..@min(room, buf.len)]);
+    if (n == 0) return;
+    self.rename_buf.appendSlice(alloc, buf[0..n]) catch {};
+    self.invalidateStrip();
+}
+
+/// Whether the tab at `idx` should be closed under a CloseTabMode
+/// relative to the active/target tab index.
+fn tabInCloseMode(mode: apprt.action.CloseTabMode, i: usize, idx: usize) bool {
+    return switch (mode) {
+        .this => i == idx,
+        .other => i != idx,
+        .right => i > idx,
+    };
+}
+
+/// Modal yes/no shown before closing surfaces with a running process
+/// (confirm-close-surface). Returns true to proceed.
+fn confirmClose(self: *Window) bool {
+    return winapi.MessageBoxW(
+        self.hwnd,
+        std.unicode.utf8ToUtf16LeStringLiteral(
+            "A process is still running. Close anyway?",
+        ),
+        std.unicode.utf8ToUtf16LeStringLiteral("Ghostty"),
+        winapi.MB_YESNO | winapi.MB_ICONWARNING | winapi.MB_DEFBUTTON2,
+    ) == winapi.IDYES;
+}
+
 /// Close tabs relative to the one containing `surface`, per the
 /// keybind's CloseTabMode: just this tab, all others, or all to the
 /// right. Previously every mode closed only the current tab.
@@ -725,16 +753,58 @@ pub fn closeTabs(
     surface: *Surface,
 ) void {
     const idx = self.tabOf(surface) orelse return;
+    self.closeTabsFrom(mode, idx);
+}
+
+/// Close tabs relative to tab `idx` per the mode, asking first if any
+/// affected surface has a running process (confirm-close-surface). All
+/// mouse/menu/keybind tab-close paths funnel through here so they share
+/// the confirmation the surface-close keybind already had.
+pub fn closeTabsFrom(
+    self: *Window,
+    mode: apprt.action.CloseTabMode,
+    idx: usize,
+) void {
+    if (idx >= self.tabs.items.len) return;
+
+    var needs = false;
     for (self.tabs.items, 0..) |*tab, i| {
-        const close = switch (mode) {
-            .this => i == idx,
-            .other => i != idx,
-            .right => i > idx,
-        };
-        if (!close) continue;
+        if (!tabInCloseMode(mode, i, idx)) continue;
+        var it = tab.tree.iterator();
+        while (it.next()) |entry| {
+            if (entry.view.core_surface.needsConfirmQuit()) {
+                needs = true;
+                break;
+            }
+        }
+        if (needs) break;
+    }
+    if (needs and !self.confirmClose()) return;
+
+    for (self.tabs.items, 0..) |*tab, i| {
+        if (!tabInCloseMode(mode, i, idx)) continue;
         var it = tab.tree.iterator();
         while (it.next()) |entry| entry.view.should_close = true;
     }
+    self.app.wakeup();
+}
+
+/// Flag the whole window for close, asking first if any surface has a
+/// running process. Used by the caption ✕, WM_CLOSE / Alt+F4, and the
+/// close_window keybind.
+pub fn requestCloseWindow(self: *Window) void {
+    var needs = false;
+    outer: for (self.tabs.items) |*tab| {
+        var it = tab.tree.iterator();
+        while (it.next()) |entry| {
+            if (entry.view.core_surface.needsConfirmQuit()) {
+                needs = true;
+                break :outer;
+            }
+        }
+    }
+    if (needs and !self.confirmClose()) return;
+    self.should_close = true;
     self.app.wakeup();
 }
 
@@ -1775,7 +1845,7 @@ fn captionButtonClick(self: *Window, button: CaptionButton) void {
             else
                 winapi.SW_MAXIMIZE,
         ),
-        .close => self.should_close = true,
+        .close => self.requestCloseWindow(),
     }
 }
 
@@ -1877,7 +1947,7 @@ pub fn wndProc(
 
     switch (msg) {
         winapi.WM_CLOSE => {
-            self.should_close = true;
+            self.requestCloseWindow();
             return 0;
         },
 
@@ -2294,6 +2364,11 @@ pub fn wndProc(
                         self.commitRename(false);
                         return 0;
                     },
+                    'V' => {
+                        if (winapi.GetKeyState(winapi.VK_CONTROL) < 0)
+                            self.renamePaste();
+                        return 0;
+                    },
                     else => return 0,
                 }
             }
@@ -2563,12 +2638,7 @@ pub fn wndProc(
                         // Activation happened on the press.
                         .tab => {},
                         // Closing a tab closes every split in it.
-                        .tab_close => |i| {
-                            var it = self.tabs.items[i].tree.iterator();
-                            while (it.next()) |entry| {
-                                entry.view.should_close = true;
-                            }
-                        },
+                        .tab_close => |i| self.closeTabsFrom(.this, i),
                         .new_tab => _ = self.newTab() catch |err| {
                             log.err("error creating tab err={}", .{err});
                         },
@@ -2584,12 +2654,7 @@ pub fn wndProc(
                 // Middle-click a tab closes it (closes every split in it).
                 if (msg == winapi.WM_MBUTTONUP) {
                     switch (self.hitTestStrip(lparamX(lparam), cy)) {
-                        .tab => |i| {
-                            var it = self.tabs.items[i].tree.iterator();
-                            while (it.next()) |entry| {
-                                entry.view.should_close = true;
-                            }
-                        },
+                        .tab => |i| self.closeTabsFrom(.this, i),
                         else => {},
                     }
                 }

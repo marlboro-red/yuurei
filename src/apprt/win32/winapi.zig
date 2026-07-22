@@ -447,6 +447,28 @@ pub extern "kernel32" fn GlobalLock(HANDLE) callconv(.winapi) ?*anyopaque;
 pub extern "kernel32" fn GlobalUnlock(HANDLE) callconv(.winapi) BOOL;
 pub extern "kernel32" fn GlobalFree(HANDLE) callconv(.winapi) ?HANDLE;
 
+/// Read CF_UNICODETEXT into `buf` as UTF-16 units (no trailing NUL),
+/// dropping control characters (< 0x20) so a pasted needle/filter/title
+/// stays single-line. Returns the number of units written; 0 on
+/// empty/failure. Truncates to `buf`.
+pub fn clipboardTextUtf16(hwnd: HWND, buf: []u16) usize {
+    if (OpenClipboard(hwnd) == 0) return 0;
+    defer _ = CloseClipboard();
+    const handle = GetClipboardData(CF_UNICODETEXT) orelse return 0;
+    const ptr = GlobalLock(handle) orelse return 0;
+    defer _ = GlobalUnlock(handle);
+    const src: [*:0]const u16 = @ptrCast(@alignCast(ptr));
+    var n: usize = 0;
+    var i: usize = 0;
+    while (src[i] != 0 and n < buf.len) : (i += 1) {
+        const u = src[i];
+        if (u < 0x20 or u == 0x7F) continue;
+        buf[n] = u;
+        n += 1;
+    }
+    return n;
+}
+
 // Global hotkeys
 pub const WM_HOTKEY: UINT = 0x0312;
 pub const MOD_ALT: UINT = 0x0001;
