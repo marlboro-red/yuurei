@@ -70,6 +70,13 @@ divider_drag: ?DividerHit = null,
 /// Index of the tab being drag-reordered, if any.
 tab_drag: ?usize = null,
 
+/// Press point (parent-client px) of a pending tab drag, and whether
+/// the pointer has since moved past the system drag threshold. Below
+/// it, a press+release is a plain click: the tab doesn't reorder and
+/// (critically) doesn't tear off on a small cursor slip.
+tab_drag_origin: winapi.POINT = .{ .x = 0, .y = 0 },
+tab_drag_engaged: bool = false,
+
 /// In-strip tab rename: when active, the tab `rename_tab` shows an
 /// editable text field backed by `rename_buf` (UTF-16, like the search
 /// bar's needle). Keys are captured by the window proc while active.
@@ -1972,7 +1979,14 @@ pub fn wndProc(
                         .right = client.right,
                         .bottom = client.bottom,
                     };
-                    if (winapi.CreateSolidBrush(0x00101010)) |brush| {
+                    // Use the configured terminal background so split
+                    // gaps blend in, matching the scrollbar track,
+                    // instead of a hardcoded near-black scar on light
+                    // or non-black themes.
+                    const bg = self.app.config.background;
+                    const fill: u32 = @as(u32, bg.b) << 16 |
+                        @as(u32, bg.g) << 8 | bg.r;
+                    if (winapi.CreateSolidBrush(fill)) |brush| {
                         defer _ = winapi.DeleteObject(brush);
                         _ = winapi.FillRect(hdc, &area, brush);
                     }
@@ -2260,7 +2274,7 @@ pub fn wndProc(
             return 0;
         },
 
-        winapi.WM_MOUSEWHEEL => {
+        winapi.WM_MOUSEWHEEL, winapi.WM_MOUSEHWHEEL => {
             // Wheel scrolls the surface under the cursor (lparam here
             // is in screen coordinates).
             var pt: winapi.POINT = .{
@@ -2271,11 +2285,63 @@ pub fn wndProc(
             const surface = self.surfaceAt(pt.x, pt.y) orelse
                 self.activeSurface() orelse return 0;
             const delta: i16 = @bitCast(@as(u16, @truncate(wparam >> 16)));
-            const yoff: f64 = @as(f64, @floatFromInt(delta)) / 120.0;
-            surface.core_surface.scrollCallback(0, yoff * 3, .{}) catch |err| {
-                log.err("error in scroll callback err={}", .{err});
-            };
+            const ticks: f64 = @as(f64, @floatFromInt(delta)) / 120.0;
+
+            // Ctrl + vertical wheel adjusts the font size, matching
+            // Windows Terminal and editors. Ghostty binds zoom to the
+            // keyboard by default; this is a win32 convenience.
+            if (msg == winapi.WM_MOUSEWHEEL and
+                winapi.GetKeyState(winapi.VK_CONTROL) < 0)
+            {
+                const action: input.Binding.Action = if (ticks > 0)
+                    .{ .increase_font_size = 1 }
+                else
+                    .{ .decrease_font_size = 1 };
+                _ = surface.core_surface.performBindingAction(action) catch |err| {
+                    log.err("error adjusting font size err={}", .{err});
+                };
+                return 0;
+            }
+
+            // Honor the system per-notch scroll amount instead of a
+            // hardcoded 3 (default is 3, so feel is unchanged unless the
+            // user customized it).
+            const units = wheelScrollUnits(msg == winapi.WM_MOUSEHWHEEL);
+            if (msg == winapi.WM_MOUSEHWHEEL) {
+                surface.core_surface.scrollCallback(ticks * units, 0, .{}) catch |err| {
+                    log.err("error in scroll callback err={}", .{err});
+                };
+            } else {
+                surface.core_surface.scrollCallback(0, ticks * units, .{}) catch |err| {
+                    log.err("error in scroll callback err={}", .{err});
+                };
+            }
             return 0;
+        },
+
+        // Mouse back/forward buttons go straight to the surface (never
+        // the strip); apps in mouse-reporting mode can act on them.
+        winapi.WM_XBUTTONDOWN, winapi.WM_XBUTTONUP => {
+            const which = (wparam >> 16) & 0xFFFF;
+            const button: input.MouseButton = switch (which) {
+                1 => .four,
+                2 => .five,
+                else => return 1,
+            };
+            const cy = lparamY(lparam);
+            if (cy >= 0 and cy < self.titlebarHeight()) return 1;
+            const surface = self.surfaceAt(lparamX(lparam), cy) orelse
+                self.activeSurface() orelse return 1;
+            const state: input.MouseButtonState =
+                if (msg == winapi.WM_XBUTTONDOWN) .press else .release;
+            _ = surface.core_surface.mouseButtonCallback(
+                state,
+                button,
+                currentMods(),
+            ) catch |err| {
+                log.err("error in mouse button callback err={}", .{err});
+            };
+            return 1;
         },
 
         winapi.WM_MOUSEMOVE => {
@@ -2306,6 +2372,18 @@ pub fn wndProc(
             // Live tab drag: reorder when the cursor crosses into
             // another tab's slot.
             if (self.tab_drag) |from| {
+                // Don't treat a press as a drag until the pointer has
+                // moved past the system drag threshold; otherwise a
+                // click with a small slip reorders or tears off.
+                if (!self.tab_drag_engaged) {
+                    const dpi = winapi.GetDpiForWindow(self.hwnd);
+                    const cx = winapi.GetSystemMetricsForDpi(winapi.SM_CXDRAG, dpi);
+                    const cy2 = winapi.GetSystemMetricsForDpi(winapi.SM_CYDRAG, dpi);
+                    if (@abs(@as(i32, x) - self.tab_drag_origin.x) < cx and
+                        @abs(@as(i32, y) - self.tab_drag_origin.y) < cy2)
+                        return 0;
+                    self.tab_drag_engaged = true;
+                }
                 const n = self.tabs.items.len;
                 const target: usize = @intCast(std.math.clamp(
                     @divTrunc(@as(i32, x), @max(1, self.tabWidth())),
@@ -2351,6 +2429,7 @@ pub fn wndProc(
         // would normally end it will land elsewhere.
         winapi.WM_CAPTURECHANGED => {
             self.tab_drag = null;
+            self.tab_drag_engaged = false;
             self.divider_drag = null;
             return 0;
         },
@@ -2378,15 +2457,22 @@ pub fn wndProc(
             // reorder already applied live by WM_MOUSEMOVE.
             if (self.tab_drag) |idx| {
                 if (msg == winapi.WM_LBUTTONUP) {
+                    const engaged = self.tab_drag_engaged;
                     self.tab_drag = null;
+                    self.tab_drag_engaged = false;
                     _ = winapi.ReleaseCapture();
-                    const ux = lparamX(lparam);
-                    const uy = lparamY(lparam);
-                    const outside = uy < 0 or uy >= self.titlebarHeight() or
-                        ux < 0 or ux >= self.clientWidth();
-                    if (outside) self.tearOffTab(idx) catch |err| {
-                        log.err("error tearing off tab err={}", .{err});
-                    };
+                    // Only tear off if a real drag happened; a plain
+                    // click that never crossed the threshold just
+                    // released capture above.
+                    if (engaged) {
+                        const ux = lparamX(lparam);
+                        const uy = lparamY(lparam);
+                        const outside = uy < 0 or uy >= self.titlebarHeight() or
+                            ux < 0 or ux >= self.clientWidth();
+                        if (outside) self.tearOffTab(idx) catch |err| {
+                            log.err("error tearing off tab err={}", .{err});
+                        };
+                    }
                     return 0;
                 }
             }
@@ -2427,6 +2513,8 @@ pub fn wndProc(
                         .tab => |i| {
                             self.activateTab(i);
                             self.tab_drag = i;
+                            self.tab_drag_origin = .{ .x = lparamX(lparam), .y = cy };
+                            self.tab_drag_engaged = false;
                             _ = winapi.SetCapture(hwnd);
                         },
                         else => {},
@@ -2697,6 +2785,21 @@ fn charEvent(self: *Window, unit: u16) void {
     _ = tab.core_surface.keyCallback(key_event) catch |err| {
         log.err("error in key callback err={}", .{err});
     };
+}
+
+/// The system "lines/characters per wheel notch" setting, as a scroll
+/// multiplier applied to wheel ticks. Defaults to 3 (the Windows
+/// default), so behavior is unchanged unless the user customized it.
+/// A page-scroll setting falls back to a larger fixed step.
+fn wheelScrollUnits(horizontal: bool) f64 {
+    const param: winapi.UINT = if (horizontal)
+        winapi.SPI_GETWHEELSCROLLCHARS
+    else
+        winapi.SPI_GETWHEELSCROLLLINES;
+    var value: winapi.UINT = 3;
+    _ = winapi.SystemParametersInfoW(param, 0, &value, 0);
+    if (value == winapi.WHEEL_PAGESCROLL) return 20;
+    return @floatFromInt(value);
 }
 
 fn currentMods() input.Mods {
