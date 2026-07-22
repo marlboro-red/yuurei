@@ -482,7 +482,24 @@ pub fn drawFrameEnd(self: *OpenGL) void {
                         ctx.BindFramebuffer.?(gl.c.GL_FRAMEBUFFER, 0);
 
                         p.unlock();
-                        p.present(self.vsync);
+                        if (!p.present(self.vsync)) {
+                            // Device removed/reset (GPU TDR, driver
+                            // update): the swapchain is dead. Rebuild
+                            // the presenter on a fresh device; if that
+                            // fails, fall back to SwapBuffers rather
+                            // than freezing on a dead swapchain.
+                            log.warn("device lost; rebuilding presenter", .{});
+                            deinitPresenter(surface);
+                            if (!initPresenter(surface)) {
+                                log.warn(
+                                    "presenter rebuild failed; using SwapBuffers",
+                                    .{},
+                                );
+                            }
+                            // The new backbuffer holds no frame yet.
+                            surface.core_surface.refreshCallback() catch {};
+                            break :present;
+                        }
 
                         if (perf.keyToPresent()) |ns| {
                             log.info("perf: key-to-present {d} us", .{ns / 1000});

@@ -350,6 +350,8 @@ pub const IDXGISwapChain2 = extern struct {
     },
 };
 
+const DXGI_ERROR_DEVICE_REMOVED: u32 = 0x887A0005;
+const DXGI_ERROR_DEVICE_RESET: u32 = 0x887A0007;
 const DXGI_FORMAT_B8G8R8A8_UNORM: u32 = 87;
 const DXGI_USAGE_RENDER_TARGET_OUTPUT: u32 = 0x20;
 const DXGI_SCALING_STRETCH: u32 = 0;
@@ -550,6 +552,9 @@ pub const Presenter = struct {
                 waitable = sc2.vtable.GetFrameLatencyWaitableObject(sc2);
             }
         }
+        errdefer if (waitable) |w| {
+            _ = winapi.CloseHandle(w);
+        };
 
         // Bind the swapchain to the host window through a DComp
         // visual; this is the form DWM promotes to hardware overlays.
@@ -676,23 +681,38 @@ pub const Presenter = struct {
         _ = self.interop.unlock(self.interop_device, 1, &[_]windows.HANDLE{obj});
     }
 
-    pub fn present(self: *Presenter, vsync: bool) void {
+    /// Present the frame. Returns false when the device was removed or
+    /// reset (GPU TDR, driver update): the presenter is dead and the
+    /// caller must tear it down and rebuild on a fresh device — every
+    /// later call would fail the same way, freezing the window.
+    pub fn present(self: *Presenter, vsync: bool) bool {
         // Copy the intermediate texture into the current backbuffer
         // (flip-model buffers rotate, so this is fetched per frame).
-        const tex = self.texture orelse return;
+        const tex = self.texture orelse return true;
         var buf: ?*anyopaque = null;
-        if (!ok(self.swapchain.vtable.GetBuffer(
+        const get_hr = self.swapchain.vtable.GetBuffer(
             self.swapchain,
             0,
             &IID_ID3D11Texture2D,
             &buf,
-        ))) return;
+        );
+        if (!ok(get_hr)) return !deviceLost(get_hr);
         defer releaseAny(buf.?);
         self.context.vtable.CopyResource(self.context, buf.?, tex);
 
         const interval: u32 = if (vsync) 1 else 0;
         const hr = self.swapchain.vtable.Present(self.swapchain, interval, 0);
-        if (!ok(hr)) log.warn("Present failed hr={x}", .{hr});
+        if (!ok(hr)) {
+            log.warn("Present failed hr={x}", .{hr});
+            if (deviceLost(hr)) return false;
+        }
+        return true;
+    }
+
+    fn deviceLost(hr: anytype) bool {
+        const code: u32 = @bitCast(@as(i32, @intCast(hr)));
+        return code == DXGI_ERROR_DEVICE_REMOVED or
+            code == DXGI_ERROR_DEVICE_RESET;
     }
 
     /// Resize the swapchain. The backbuffer must be re-acquired (and

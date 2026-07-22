@@ -369,7 +369,7 @@ fn drainMailbox(self: *Thread) !void {
                         self.flags.cursor_blink_visible,
                     ) catch |err|
                         log.warn("error rendering on visibility regain err={}", .{err});
-                    self.drawFrame(false);
+                    self.drawFrame(false, true);
                 }
 
                 // Notify the renderer so it can update any state.
@@ -498,13 +498,20 @@ fn changeConfig(self: *Thread, config: *const DerivedConfig) !void {
 
 /// Trigger a draw. This will not update frame data or anything, it will
 /// just trigger a draw/paint.
-fn drawFrame(self: *Thread, now: bool) void {
+fn drawFrame(self: *Thread, now: bool, waited: bool) void {
     // If we're invisible, we do not draw.
     if (!self.flags.visible) return;
 
     // If the renderer is managing a vsync on its own, we only draw
     // when we're forced to via `now`.
     if (!now and self.renderer.hasVsync()) return;
+
+    // win32 flip-model: every present must consume one frame-latency
+    // waitable slot or the accounting drifts and the pacing gate
+    // degrades to its timeout. The render path waits before sampling
+    // terminal state (renderCallback); draw-only paths (animation
+    // timer, draw-now) balance the books here.
+    if (!waited) self.waitUntilCanRender();
 
     if (must_draw_from_app_thread) {
         _ = self.app_mailbox.push(
@@ -571,7 +578,7 @@ fn drawNowCallback(
 
     // Draw immediately
     const t = self_.?;
-    t.drawFrame(true);
+    t.drawFrame(true, false);
 
     return .rearm;
 }
@@ -590,7 +597,7 @@ fn drawCallback(
     };
 
     // Draw
-    t.drawFrame(false);
+    t.drawFrame(false, false);
 
     // Only continue if we're still active
     if (t.draw_active) {
@@ -631,7 +638,7 @@ fn renderCallback(
         log.warn("error rendering err={}", .{err});
 
     // Draw
-    t.drawFrame(false);
+    t.drawFrame(false, true);
 
     return .disarm;
 }
