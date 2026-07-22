@@ -797,6 +797,7 @@ fn setupPwsh(
     // Walk the remaining arguments. Flags that change startup semantics
     // mean we can't safely append our own -Command: bail and run the
     // user's exact command without integration.
+    var user_policy = false;
     while (iter.next()) |arg| {
         if (std.ascii.eqlIgnoreCase(arg, "-command") or
             std.ascii.eqlIgnoreCase(arg, "-c") or
@@ -806,6 +807,17 @@ fn setupPwsh(
             std.ascii.eqlIgnoreCase(arg, "-file") or
             std.ascii.eqlIgnoreCase(arg, "-f") or
             std.ascii.eqlIgnoreCase(arg, "-noexit")) return null;
+
+        // PowerShell resolves CLI parameters by unambiguous prefix
+        // (-ex, -exec, ... all mean -ExecutionPolicy; pwsh also
+        // documents -ep). An explicit user policy must win: appending
+        // ours after it would silently override e.g. AllSigned.
+        if (std.ascii.eqlIgnoreCase(arg, "-ep") or
+            (arg.len >= 3 and
+                std.ascii.startsWithIgnoreCase("-executionpolicy", arg)))
+        {
+            user_policy = true;
+        }
         try args.append(alloc, try alloc.dupeZ(u8, arg));
     }
 
@@ -830,9 +842,13 @@ fn setupPwsh(
     // silently fails when our install dir is read-only and does nothing
     // under AllSigned. A process-scoped bypass is robust against both and
     // never persists; it only loses to a Group-Policy-enforced policy,
-    // where nothing short of a signature would work anyway.
-    try args.append(alloc, "-ExecutionPolicy");
-    try args.append(alloc, "Bypass");
+    // where nothing short of a signature would work anyway. Skipped when
+    // the user passed their own policy — theirs wins, even if it means
+    // our unsigned script fails to load.
+    if (!user_policy) {
+        try args.append(alloc, "-ExecutionPolicy");
+        try args.append(alloc, "Bypass");
+    }
     try args.append(alloc, "-NoExit");
     try args.append(alloc, "-Command");
     try args.append(alloc, try std.fmt.allocPrintSentinel(

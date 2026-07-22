@@ -58,8 +58,17 @@ if 'GHOSTTY_SHELL_INTEGRATION_XDG_DIR' in $env {
 # The path is sent as a file:// URI with forward slashes; on Windows
 # Ghostty converts it back to a native path. (yuurei addition: upstream's
 # nushell integration does not report the cwd.)
-$env.config.hooks.pre_prompt = ($env.config.hooks.pre_prompt | append {||
-  let p = ($env.PWD | str replace --all '\' '/')
-  let host = ($env.COMPUTERNAME? | default 'localhost')
-  print -rn $"\u{1b}]7;file://($host)/($p)\u{7}"
-})
+# Guarded so re-sourcing this file in the same process doesn't append a
+# duplicate hook (each duplicate would print the OSC 7 sequence once more
+# per prompt). The guard is keyed on the PID rather than mere presence:
+# nushell exports env vars to children, so a bare flag would be inherited
+# by a nested `nu` and wrongly suppress its hook (no cwd reporting at
+# all). A nested shell has a different $nu.pid, so it still installs.
+if ($env.GHOSTTY_NU_PROMPT_HOOKED? | default '') != $"($nu.pid)" {
+  $env.GHOSTTY_NU_PROMPT_HOOKED = $"($nu.pid)"
+  $env.config.hooks.pre_prompt = ($env.config.hooks.pre_prompt | append {||
+    let p = ($env.PWD | str replace --all '\' '/')
+    let host = ($env.COMPUTERNAME? | default 'localhost')
+    print -rn $"\u{1b}]7;file://($host)/($p)\u{7}"
+  })
+}

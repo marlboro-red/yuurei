@@ -38,8 +38,12 @@ function global:PSConsoleHostReadLine {
             $ExecutionContext
         )
     }
-    [Console]::Write("$([char]27)]133;C$([char]7)")
-    $global:__GhosttyCommandActive = $true
+    # A blank submission runs nothing: emitting C/D marks for it would
+    # report the previous command's status again.
+    if ($null -ne $line -and $line.Trim().Length -gt 0) {
+        [Console]::Write("$([char]27)]133;C$([char]7)")
+        $global:__GhosttyCommandActive = $true
+    }
     $line
 }
 
@@ -65,12 +69,17 @@ function global:prompt {
 
     if ($global:__GhosttyCommandActive) {
         $global:__GhosttyCommandActive = $false
-        $code = if ($lastSuccess -eq $false -and -not $lastExit) {
-            1
+        # $? reflects the last pipeline, cmdlets and native commands
+        # alike. $LASTEXITCODE only updates on native commands, so it
+        # goes stale across cmdlet successes and must never override a
+        # successful $? (a lone `cmd /c exit 5` would otherwise mark
+        # every following cmdlet as exit 5).
+        $code = if ($lastSuccess) {
+            0
         } elseif ($lastExit) {
             $lastExit
         } else {
-            0
+            1
         }
         $out += "$e]133;D;$code$bel"
     }
