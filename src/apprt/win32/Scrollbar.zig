@@ -139,6 +139,8 @@ fn paint(self: *Scrollbar, hdc: winapi.HDC) void {
     // as part of the terminal rather than a separate widget. Matching
     // the real background keeps the column invisible when there is
     // nothing to scroll (no thumb), instead of a stray dark strip.
+    // Known limitation: this is the config value, so a runtime change
+    // (OSC 11, theme light/dark flip) can still leave a mismatch.
     const bg = self.surface.app.config.background;
     const track: u32 = @as(u32, bg.b) << 16 | @as(u32, bg.g) << 8 | bg.r;
     if (winapi.CreateSolidBrush(track)) |b| {

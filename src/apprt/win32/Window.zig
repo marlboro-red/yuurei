@@ -383,6 +383,14 @@ fn tearOffTab(self: *Window, idx: usize) !void {
     var it = window.tabs.items[0].tree.iterator();
     while (it.next()) |entry| {
         const surface = entry.view;
+
+        // A search bar pinned to a surface in this tab belongs to the
+        // source window; close it rather than leave it targeting a
+        // surface that now lives elsewhere. (destroy clears self.search.)
+        if (self.search) |search| {
+            if (search.surface == surface) search.destroy();
+        }
+
         surface.window = window;
         _ = winapi.SetParent(surface.host, window.hwnd);
         if (surface.scrollbar) |sb| _ = winapi.SetParent(sb.hwnd, window.hwnd);
@@ -399,11 +407,21 @@ fn tearOffTab(self: *Window, idx: usize) !void {
     _ = winapi.GetCursorPos(&cur);
     const w = wr.right - wr.left;
     const h = wr.bottom - wr.top;
+
+    // Keep the title strip reachable on the drop monitor. Virtual-screen
+    // coordinates can be negative (monitors above/left of the primary),
+    // so clamp against that monitor's work area, not 0.
+    var y = cur.y - window.titlebarHeight();
+    const mon = winapi.MonitorFromPoint(cur, winapi.MONITOR_DEFAULTTONEAREST);
+    var mi: winapi.MONITORINFO = undefined;
+    mi.cbSize = @sizeOf(winapi.MONITORINFO);
+    if (winapi.GetMonitorInfoW(mon, &mi) != 0) y = @max(mi.rcWork.top, y);
+
     _ = winapi.SetWindowPos(
         window.hwnd,
         null,
         cur.x - @divTrunc(w, 2),
-        @max(0, cur.y - window.titlebarHeight()),
+        y,
         w,
         h,
         winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
@@ -783,7 +801,9 @@ fn refreshActiveTab(self: *Window) void {
     const tab = self.activeTab() orelse return;
     var it = tab.tree.iterator();
     while (it.next()) |entry| {
-        entry.view.core_surface.refreshCallback() catch {};
+        entry.view.core_surface.refreshCallback() catch |err| {
+            log.err("error refreshing surface after resize err={}", .{err});
+        };
     }
 }
 

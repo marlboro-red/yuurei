@@ -1584,7 +1584,7 @@ fn mouseRefreshLinks(
     // Get our link at the current position. This returns null if there
     // isn't a link OR if we shouldn't be showing links for some reason
     // (see further comments for cases).
-    const link_: ?apprt.action.MouseOverLink, const preview: bool = link: {
+    const link_: ?apprt.action.MouseOverLink, const preview: bool, const activate: bool = link: {
         // If we clicked and our mouse moved cells then we never
         // highlight links until the mouse is unclicked. This follows
         // standard macOS and Linux behavior where a click and drag cancels
@@ -1599,11 +1599,18 @@ fn mouseRefreshLinks(
 
             if (!click_pt.coord().eql(pos_vp)) {
                 log.debug("mouse moved while left click held, ignoring link hover", .{});
-                break :link .{ null, false };
+                break :link .{ null, false, false };
             }
         }
 
-        const link = (try self.linkAtPos(pos)) orelse break :link .{ null, false };
+        const link = (try self.linkAtPos(pos)) orelse break :link .{ null, false, false };
+
+        // Whether a click would open this link right now: the link's
+        // activation mods must be held (its configured mods, or Ctrl/Cmd
+        // for plain hover/always highlights — see linkAtPin). Uses the
+        // capture-aware mods so this agrees with detection.
+        const can_activate = self.mouseModsWithCapture(self.mouse.mods)
+            .equal(link.activation_mods);
         switch (link.action) {
             .open => {
                 const str = try self.io.terminal.screens.active.selectionString(alloc, .{
@@ -1613,6 +1620,7 @@ fn mouseRefreshLinks(
                 break :link .{
                     .{ .url = str },
                     self.config.link_previews == .true,
+                    can_activate,
                 };
             },
 
@@ -1621,11 +1629,12 @@ fn mouseRefreshLinks(
                 const pin = link.selection.start();
                 const uri = self.osc8URI(pin) orelse {
                     log.warn("failed to get URI for OSC8 hyperlink", .{});
-                    break :link .{ null, false };
+                    break :link .{ null, false, false };
                 };
                 break :link .{
                     .{ .url = try alloc.dupeZ(u8, uri) },
                     self.config.link_previews != .false,
+                    can_activate,
                 };
             },
         }
@@ -1638,14 +1647,12 @@ fn mouseRefreshLinks(
         self.mouse.over_link = true;
         self.renderer_state.terminal.screens.active.dirty.hyperlink_hover = true;
 
-        // The link underlines on plain hover (its highlight is `.hover`),
-        // but activation is gated on Ctrl/Cmd: only with the mods held do
-        // we switch to the hand cursor and surface the preview, and only
-        // then does a click open it (see mouseButtonCallback). This keeps
-        // a stray click from opening a URL and keeps the text under a link
+        // The link underlines on hover, but the hand cursor and preview
+        // appear only when the link's activation mods are held — and only
+        // then does a click open it (see processLinks). This keeps a
+        // stray click from opening a URL and keeps the text under a link
         // selectable. keyCallback re-runs this on a mods change, so
         // pressing Ctrl while hovering updates the cursor without a move.
-        const activate = self.mouse.mods.equal(input.ctrlOrSuper(.{}));
         _ = try self.rt_app.performAction(
             .{ .surface = self },
             .mouse_shape,
@@ -3880,12 +3887,12 @@ pub fn mouseButtonCallback(
 
         // Handle link clicking. We want to do this before we do mouse
         // reporting or any other mouse handling because a successfully
-        // clicked link will swallow the event. Opening is gated on
-        // Ctrl/Cmd: links underline on plain hover for discoverability,
-        // but a plain click selects rather than opens, so the hover
-        // affordance never costs an accidental navigation.
+        // clicked link will swallow the event. Opening additionally
+        // requires the link's activation mods (see processLinks): links
+        // underline on plain hover for discoverability, but a plain
+        // click selects rather than opens, so the hover affordance
+        // never costs an accidental navigation.
         if (self.mouse.over_link and
-            self.mouse.mods.equal(input.ctrlOrSuper(.{})) and
             !self.mouse.selection_gesture.left_click_dragged)
         {
             // We are holding the renderer lock, but this should just be
@@ -4284,6 +4291,13 @@ fn maybePromptClick(self: *Surface) !bool {
 const Link = struct {
     action: input.Link.Action,
     selection: terminal.Selection,
+
+    /// The mods a click must hold to open this link. Links configured
+    /// with explicit mods (`always_mods`/`hover_mods`) require those;
+    /// plain `always`/`hover` links (including the default URL link)
+    /// and OSC 8 hyperlinks require Ctrl/Cmd, so hover affordances
+    /// never cost an accidental open.
+    activation_mods: input.Mods,
 };
 
 /// Returns the link at the given cursor position, if any.
@@ -4313,7 +4327,11 @@ fn linkAtPos(
         const cell = rac.cell;
         if (!cell.hyperlink) break :hyperlink;
         const sel = terminal.Selection.init(mouse_pin, mouse_pin, false);
-        return .{ .action = ._open_osc8, .selection = sel };
+        return .{
+            .action = ._open_osc8,
+            .selection = sel,
+            .activation_mods = input.ctrlOrSuper(.{}),
+        };
     }
 
     // Fall back to configured links
@@ -4372,6 +4390,10 @@ fn linkAtPin(
             return .{
                 .action = link.action,
                 .selection = sel,
+                .activation_mods = switch (link.highlight) {
+                    .always, .hover => input.ctrlOrSuper(.{}),
+                    .always_mods, .hover_mods => |v| v,
+                },
             };
         }
     }
@@ -4404,6 +4426,13 @@ fn mouseModsWithCapture(self: *Surface, mods: input.Mods) input.Mods {
 /// Requires the renderer state mutex is held.
 fn processLinks(self: *Surface, pos: apprt.CursorPos) !bool {
     const link = try self.linkAtPos(pos) orelse return false;
+
+    // Opening requires the link's activation mods (its configured mods,
+    // or Ctrl/Cmd for plain hover/always highlights). Without them the
+    // click falls through to selection and mouse reporting.
+    if (!self.mouseModsWithCapture(self.mouse.mods).equal(link.activation_mods))
+        return false;
+
     switch (link.action) {
         .open => {
             const str = try self.io.terminal.screens.active.selectionString(self.alloc, .{

@@ -415,6 +415,7 @@ pub const WINDOWPLACEMENT = extern struct {
     rcNormalPosition: RECT,
 };
 pub extern "user32" fn MonitorFromWindow(HWND, DWORD) callconv(.winapi) HMONITOR;
+pub extern "user32" fn MonitorFromPoint(POINT, DWORD) callconv(.winapi) HMONITOR;
 pub extern "user32" fn GetMonitorInfoW(HMONITOR, *MONITORINFO) callconv(.winapi) BOOL;
 pub extern "user32" fn GetWindowPlacement(HWND, *WINDOWPLACEMENT) callconv(.winapi) BOOL;
 pub extern "user32" fn SetWindowPlacement(HWND, *const WINDOWPLACEMENT) callconv(.winapi) BOOL;
