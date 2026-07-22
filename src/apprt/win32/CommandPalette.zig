@@ -126,6 +126,18 @@ fn commands(self: *const CommandPalette) []const input.Command {
     return self.window.app.config.@"command-palette-entry".value.items;
 }
 
+/// The keybinding bound to `action`, formatted (e.g. "ctrl+shift+p"),
+/// or null if unbound. Uses the config's reverse action→trigger map.
+fn keybindLabel(
+    self: *const CommandPalette,
+    action: input.Binding.Action,
+    buf: []u8,
+) ?[]const u8 {
+    const trigger = self.window.app.config.keybind.set.reverse.get(action) orelse
+        return null;
+    return std.fmt.bufPrint(buf, "{f}", .{trigger}) catch null;
+}
+
 /// Recompute matches for the current filter (case-insensitive substring
 /// of the title or description) and fit the popup to them.
 /// Paste clipboard text into the filter at the cap, then re-filter.
@@ -398,6 +410,13 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             }
         }
 
+        // The keybinding accelerator (right-aligned on the title line);
+        // reserve room on the title's right so it doesn't overlap.
+        var kb_buf: [64]u8 = undefined;
+        const kb_label = self.keybindLabel(cmd.action, &kb_buf);
+        const kb_reserve: i32 = if (kb_label != null) window.scale(120) else 0;
+        const title_bottom = top + @divTrunc(row_h, 2) + window.scale(4);
+
         var buf: [512]u16 = undefined;
         if (title_font) |f| {
             const old = winapi.SelectObject(hdc, f);
@@ -416,8 +435,8 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
                 var rect: winapi.RECT = .{
                     .left = margin,
                     .top = top + window.scale(4),
-                    .right = client.right - margin,
-                    .bottom = top + @divTrunc(row_h, 2) + window.scale(4),
+                    .right = client.right - margin - kb_reserve,
+                    .bottom = title_bottom,
                 };
                 _ = winapi.DrawTextW(
                     hdc,
@@ -428,6 +447,31 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
                 );
             }
         }
+        if (kb_label) |label| if (desc_font) |f| {
+            const old = winapi.SelectObject(hdc, f);
+            defer if (old) |o| {
+                _ = winapi.SelectObject(hdc, o);
+            };
+            _ = winapi.SetTextColor(hdc, fg_dim);
+            var kbuf: [128]u16 = undefined;
+            const kn = std.unicode.utf8ToUtf16Le(kbuf[0 .. kbuf.len - 1], label) catch 0;
+            if (kn > 0) {
+                kbuf[kn] = 0;
+                var rect: winapi.RECT = .{
+                    .left = client.right - margin - kb_reserve,
+                    .top = top + window.scale(4),
+                    .right = client.right - margin,
+                    .bottom = title_bottom,
+                };
+                _ = winapi.DrawTextW(
+                    hdc,
+                    kbuf[0..kn :0],
+                    @intCast(kn),
+                    &rect,
+                    winapi.DT_RIGHT | winapi.DT_SINGLELINE,
+                );
+            }
+        };
         if (desc_font) |f| {
             const old = winapi.SelectObject(hdc, f);
             defer if (old) |o| {
