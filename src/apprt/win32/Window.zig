@@ -359,7 +359,7 @@ pub fn reapplyTransparency(self: *Window) void {
 /// interop here, so this cannot affect the GPU the way that path can.
 fn applyBlur(self: *Window) void {
     const enabled = self.app.config.@"background-blur".enabled();
-    const light = winapi.appsUseLightTheme();
+    const light = self.isLight();
     // A faint tint over the blur for legibility (0xAABBGGRR).
     const tint: u32 = if (light) 0x14FFFFFF else 0x14000000;
     var accent: winapi.ACCENT_POLICY = .{
@@ -464,6 +464,9 @@ fn showTabMenu(self: *Window, idx: usize) void {
     defer _ = winapi.DestroyMenu(menu);
     _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 1, std.unicode.utf8ToUtf16LeStringLiteral("Rename\u{2026}"));
     _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 2, std.unicode.utf8ToUtf16LeStringLiteral("Close Tab"));
+    if (self.tabs.items.len > 1) {
+        _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 3, std.unicode.utf8ToUtf16LeStringLiteral("Close Other Tabs"));
+    }
 
     var pt: winapi.POINT = .{ .x = 0, .y = 0 };
     _ = winapi.GetCursorPos(&pt);
@@ -484,6 +487,14 @@ fn showTabMenu(self: *Window, idx: usize) void {
         2 => {
             var it = self.tabs.items[idx].tree.iterator();
             while (it.next()) |entry| entry.view.should_close = true;
+            self.app.wakeup();
+        },
+        3 => {
+            for (self.tabs.items, 0..) |*tab, i| {
+                if (i == idx) continue;
+                var it = tab.tree.iterator();
+                while (it.next()) |entry| entry.view.should_close = true;
+            }
             self.app.wakeup();
         },
         else => {},
@@ -941,9 +952,11 @@ pub fn syncTitle(self: *Window) void {
     self.invalidateStrip();
 }
 
-/// Read the OS theme: forward to all tabs and set the DWM caption.
+/// Resolve the effective theme (config, falling back to the OS):
+/// forward to all tabs and set the DWM caption. Called on OS theme
+/// changes and on config reload, since `window-theme` can force either.
 pub fn notifyColorScheme(self: *Window) void {
-    const light = winapi.appsUseLightTheme();
+    const light = self.isLight();
 
     const dark_titlebar: winapi.BOOL = if (light) winapi.FALSE else winapi.TRUE;
     _ = winapi.DwmSetWindowAttribute(
@@ -972,6 +985,20 @@ pub fn notifyColorScheme(self: *Window) void {
 pub fn scale(self: *const Window, logical: i32) i32 {
     const dpi: i32 = @intCast(winapi.GetDpiForWindow(self.hwnd));
     return @divTrunc(logical * dpi, 96);
+}
+
+/// Resolve whether the window chrome should render light, honoring the
+/// `window-theme` config: dark/light force the value, auto/system/ghostty
+/// defer to the OS app theme. (`ghostty` upstream means "match the
+/// terminal background"; the OS theme is a fallback until that's
+/// implemented.) Also used by the other chrome windows (palette,
+/// search bar, settings) so a forced theme applies consistently.
+pub fn isLight(self: *const Window) bool {
+    return switch (self.app.config.@"window-theme") {
+        .dark => false,
+        .light => true,
+        .auto, .system, .ghostty => winapi.appsUseLightTheme(),
+    };
 }
 
 /// The title strip height in physical pixels.
@@ -1319,7 +1346,7 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
         .bottom = height,
     };
 
-    const light = winapi.appsUseLightTheme();
+    const light = self.isLight();
     const bg: u32 = if (light) 0x00E8E8E8 else 0x00181818;
     const tab_active_bg: u32 = if (light) 0x00F8F8F8 else 0x002C2C2C;
     const tab_hover_bg: u32 = if (light) 0x00F0F0F0 else 0x00222222;
@@ -1924,7 +1951,15 @@ pub fn wndProc(
                 var pt: winapi.POINT = undefined;
                 if (winapi.GetCursorPos(&pt) == 0) break :cursor;
                 _ = winapi.ScreenToClient(hwnd, &pt);
-                if (pt.y < self.titlebarHeight()) break :cursor;
+                if (pt.y < self.titlebarHeight()) {
+                    // Keep a normal arrow over the strip; otherwise the
+                    // terminal's I-beam lingers there.
+                    if (winapi.loadSystemCursor(winapi.IDC_ARROW)) |c| {
+                        _ = winapi.SetCursor(c);
+                        return 1;
+                    }
+                    break :cursor;
+                }
 
                 // Resize cursor over (or while dragging) a divider.
                 const divider: ?DividerHit = self.divider_drag orelse
@@ -2177,6 +2212,18 @@ pub fn wndProc(
                 if (msg == winapi.WM_RBUTTONUP) {
                     switch (self.hitTestStrip(lparamX(lparam), cy)) {
                         .tab => |i| self.showTabMenu(i),
+                        else => {},
+                    }
+                }
+                // Middle-click a tab closes it (closes every split in it).
+                if (msg == winapi.WM_MBUTTONUP) {
+                    switch (self.hitTestStrip(lparamX(lparam), cy)) {
+                        .tab => |i| {
+                            var it = self.tabs.items[i].tree.iterator();
+                            while (it.next()) |entry| {
+                                entry.view.should_close = true;
+                            }
+                        },
                         else => {},
                     }
                 }

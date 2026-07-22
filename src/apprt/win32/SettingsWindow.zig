@@ -46,8 +46,8 @@ const Palette = struct {
     accent: u32,
     sel: u32,
 
-    fn current() Palette {
-        return if (winapi.appsUseLightTheme()) .{
+    fn current(window: *const Window) Palette {
+        return if (window.isLight()) .{
             .bg = 0x00F3F3F3,
             .card = 0x00FFFFFF,
             .card_hover = 0x00ECECEC,
@@ -138,7 +138,7 @@ pub fn create(alloc: Allocator, window: *Window) !*SettingsWindow {
     );
 
     // Dark caption to match the dark client area (Win11 22H2+).
-    const dark: winapi.BOOL = if (winapi.appsUseLightTheme()) winapi.FALSE else winapi.TRUE;
+    const dark: winapi.BOOL = if (window.isLight()) winapi.FALSE else winapi.TRUE;
     _ = winapi.DwmSetWindowAttribute(
         hwnd,
         winapi.DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -503,7 +503,7 @@ const labels = [_][]const u8{ "Theme", "Font", "Font size", "Cursor style", "Bac
 
 fn paint(self: *SettingsWindow, hdc: winapi.HDC) void {
     const win = self.window;
-    const p = Palette.current();
+    const p = Palette.current(win);
     var client: winapi.RECT = undefined;
     _ = winapi.GetClientRect(self.hwnd, &client);
 
@@ -889,7 +889,7 @@ pub const DropdownPopup = struct {
 
     fn paint(self: *DropdownPopup, hdc: winapi.HDC) void {
         const win = self.owner.window;
-        const p = Palette.current();
+        const p = Palette.current(win);
         var client: winapi.RECT = undefined;
         _ = winapi.GetClientRect(self.hwnd, &client);
         fillRect(hdc, client, p.card);

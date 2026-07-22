@@ -947,8 +947,13 @@ fn reloadConfig(
 
     // Window-level transparency/blur are applied by the apprt (not the
     // renderer), so re-apply them here for background-opacity /
-    // background-blur changes to take effect live.
-    for (self.windows.items) |window| window.reapplyTransparency();
+    // background-blur changes to take effect live. Likewise the theme:
+    // window-theme can force light/dark, so the DWM caption, strip
+    // colors, and surface color scheme must be re-resolved.
+    for (self.windows.items) |window| {
+        window.reapplyTransparency();
+        window.notifyColorScheme();
+    }
 
     // Global hotkeys may have changed.
     self.registerGlobalHotkeys();

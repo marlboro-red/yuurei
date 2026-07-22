@@ -201,7 +201,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
     var client: winapi.RECT = undefined;
     _ = winapi.GetClientRect(self.hwnd, &client);
 
-    const light = winapi.appsUseLightTheme();
+    const light = window.isLight();
     const bg: u32 = if (light) 0x00F5F5F5 else 0x001F1F1F;
     const select_bg: u32 = if (light) 0x00DDDDDD else 0x00383838;
     const border: u32 = if (light) 0x00B0B0B0 else 0x00484848;
