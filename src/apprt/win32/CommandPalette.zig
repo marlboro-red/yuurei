@@ -41,6 +41,11 @@ const input_height_logical: i32 = 40;
 const row_height_logical: i32 = 44;
 const max_visible_rows: usize = 8;
 
+/// Hard cap on filter length in UTF-16 units. refilter converts into a
+/// fixed [512]u8 and utf16LeToUtf8 does not bounds-check its
+/// destination; 3 output bytes per unit is the worst case.
+const filter_max_units: usize = 512 / 3;
+
 pub fn create(alloc: Allocator, window: *Window) !*CommandPalette {
     const self = try alloc.create(CommandPalette);
     errdefer alloc.destroy(self);
@@ -70,7 +75,8 @@ pub fn create(alloc: Allocator, window: *Window) !*CommandPalette {
 
     self.refilter();
     _ = winapi.ShowWindow(hwnd, winapi.SW_SHOW);
-    _ = winapi.SetFocus(hwnd);
+    // No SetFocus here: the caller assigns window.palette first, then
+    // focuses, so the parent's WM_KILLFOCUS sees consistent state.
     return self;
 }
 
@@ -465,6 +471,14 @@ pub fn wndProc(
                     self.refilter();
                 }
             } else if (ch >= 0x20 and ch != 0x7F) {
+                // Enforce the fixed-buffer cap; a surrogate lead needs
+                // room for its trail too (a trail always pairs with an
+                // admitted lead, so it is never refused alone).
+                const lead = ch >= 0xD800 and ch <= 0xDBFF;
+                const trail = ch >= 0xDC00 and ch <= 0xDFFF;
+                const need: usize = if (lead) 2 else 1;
+                if (!trail and self.filter.items.len + need > filter_max_units)
+                    return 0;
                 self.filter.append(alloc, ch) catch return 0;
                 self.refilter();
             }

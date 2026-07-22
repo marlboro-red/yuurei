@@ -231,7 +231,14 @@ pub fn appsUseLightTheme() bool {
 }
 
 pub const HKEY = *opaque {};
-pub const HKEY_CURRENT_USER: HKEY = @ptrFromInt(0x80000001);
+/// Registry pseudo-handles are LONG values sign-extended to pointer
+/// width: ((HKEY)(ULONG_PTR)(LONG)0x80000001). The zero-extended
+/// 0x00000000_80000001 is an invalid handle on 64-bit and every
+/// registry call made with it fails.
+pub const HKEY_CURRENT_USER: HKEY = @ptrFromInt(@as(
+    usize,
+    @bitCast(@as(isize, @as(i32, @bitCast(@as(u32, 0x80000001))))),
+));
 pub const RRF_RT_REG_DWORD: DWORD = 0x00000010;
 pub extern "advapi32" fn RegGetValueW(
     hkey: HKEY,
@@ -289,6 +296,7 @@ pub const VK_OEM_4: u8 = 0xDB;
 pub const VK_OEM_5: u8 = 0xDC;
 pub const VK_OEM_6: u8 = 0xDD;
 pub const VK_OEM_7: u8 = 0xDE;
+pub const VK_OEM_102: u8 = 0xE2; // ISO <>| key next to left Shift
 
 // Clipboard
 pub const CF_UNICODETEXT: UINT = 13;
@@ -368,6 +376,8 @@ pub extern "user32" fn GetCursorPos(*POINT) callconv(.winapi) BOOL;
 pub extern "user32" fn ScreenToClient(HWND, *POINT) callconv(.winapi) BOOL;
 pub extern "user32" fn ClientToScreen(HWND, *POINT) callconv(.winapi) BOOL;
 pub extern "user32" fn SetFocus(?HWND) callconv(.winapi) ?HWND;
+pub const GA_ROOTOWNER: UINT = 3;
+pub extern "user32" fn GetAncestor(HWND, UINT) callconv(.winapi) ?HWND;
 pub extern "user32" fn SetWindowLongPtrW(HWND, i32, isize) callconv(.winapi) isize;
 pub extern "user32" fn GetWindowLongPtrW(HWND, i32) callconv(.winapi) isize;
 
@@ -388,6 +398,8 @@ pub extern "user32" fn LoadCursorW(?HINSTANCE, ?*align(1) const anyopaque) callc
 pub extern "user32" fn SetCursor(?HCURSOR) callconv(.winapi) ?HCURSOR;
 pub extern "user32" fn SetCapture(HWND) callconv(.winapi) ?HWND;
 pub extern "user32" fn ReleaseCapture() callconv(.winapi) BOOL;
+pub extern "user32" fn GetCapture() callconv(.winapi) ?HWND;
+pub const WM_CAPTURECHANGED: UINT = 0x0215;
 pub extern "user32" fn SetTimer(?HWND, usize, UINT, ?*anyopaque) callconv(.winapi) usize;
 pub extern "user32" fn KillTimer(?HWND, usize) callconv(.winapi) BOOL;
 pub extern "user32" fn AdjustWindowRectExForDpi(*RECT, DWORD, BOOL, DWORD, UINT) callconv(.winapi) BOOL;

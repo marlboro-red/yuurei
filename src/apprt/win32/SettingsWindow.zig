@@ -391,10 +391,23 @@ fn setValue(self: *SettingsWindow, key: []const u8, value: []const u8) void {
     };
     defer alloc.free(path);
 
+    // A read failure must abort the save: falling back to an empty
+    // baseline and then truncate-writing would replace the user's whole
+    // config with the single edited key. Only a missing file (no config
+    // yet) legitimately starts from empty.
     const text: []u8 = if (std.fs.openFileAbsolute(path, .{})) |file| blk: {
         defer file.close();
-        break :blk file.readToEndAlloc(alloc, 4 << 20) catch &.{};
-    } else |_| &.{};
+        break :blk file.readToEndAlloc(alloc, 4 << 20) catch |err| {
+            log.warn("settings: cannot read config; not saving err={}", .{err});
+            return;
+        };
+    } else |err| switch (err) {
+        error.FileNotFound => &.{},
+        else => {
+            log.warn("settings: cannot open config; not saving err={}", .{err});
+            return;
+        },
+    };
     defer if (text.len > 0) alloc.free(text);
 
     var out: std.ArrayList(u8) = .empty;

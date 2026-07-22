@@ -168,6 +168,10 @@ const DividerHit = struct {
 /// Logical (96-dpi) metrics, scaled by the window DPI at use.
 const titlebar_height_logical: i32 = 36;
 const caption_button_width_logical: i32 = 46;
+/// The scrollbar column each leaf reserves beside its GL host; also
+/// used by setInitialWindowSize to compute the client width a given
+/// grid size needs.
+pub const scrollbar_width_logical: i32 = 12;
 const tab_width_logical: i32 = 190;
 const new_tab_width_logical: i32 = 36;
 const modal_tick_timer_id: usize = 1;
@@ -503,7 +507,12 @@ pub fn togglePalette(self: *Window) !void {
         _ = winapi.SetFocus(self.hwnd);
         return;
     }
-    self.palette = try CommandPalette.create(self.app.core_app.alloc, self);
+    // Assign before focusing: the focus switch sends WM_KILLFOCUS to
+    // this window synchronously, and a quick terminal checks state to
+    // decide whether it may hide.
+    const palette = try CommandPalette.create(self.app.core_app.alloc, self);
+    self.palette = palette;
+    _ = winapi.SetFocus(palette.hwnd);
 }
 
 /// Remove a surface from whichever tab contains it, collapsing its
@@ -513,6 +522,16 @@ pub fn removeSurface(self: *Window, surface: *Surface) void {
     const alloc = self.app.core_app.alloc;
     const tab_idx = self.tabOf(surface) orelse return;
     const tab = &self.tabs.items[tab_idx];
+
+    // The tree (and possibly the tab list) is about to be rebuilt; an
+    // in-progress divider drag holds a handle into the old tree. This
+    // can happen mid-drag: a background shell exiting runs this from
+    // the app-loop sweep. Release the capture the drag was holding too,
+    // or it leaks until the next unrelated press/release.
+    if (self.divider_drag != null) {
+        self.divider_drag = null;
+        _ = winapi.ReleaseCapture();
+    }
 
     const handle = handleOf(&tab.tree, surface) orelse return;
     var new_tree = tab.tree.remove(alloc, handle) catch |err| {
@@ -527,11 +546,34 @@ pub fn removeSurface(self: *Window, surface: *Surface) void {
         new_tree.deinit();
         if (tab.custom_title) |t| alloc.free(t);
         _ = self.tabs.orderedRemove(tab_idx);
+
+        // Fix up everything that indexes the tab list, including an
+        // in-progress drag or rename of a shifted (or removed) tab.
+        if (self.tab_drag) |d| {
+            if (d == tab_idx) {
+                self.tab_drag = null;
+                _ = winapi.ReleaseCapture();
+            } else if (d > tab_idx) self.tab_drag = d - 1;
+        }
+        if (self.rename_active) {
+            if (self.rename_tab == tab_idx) {
+                self.rename_active = false;
+            } else if (self.rename_tab > tab_idx) self.rename_tab -= 1;
+        }
+
         if (self.tabs.items.len == 0) {
             self.should_close = true;
             return;
         }
-        self.activateTab(@min(tab_idx, self.tabs.items.len - 1));
+
+        // Closing a background tab must not steal the view: only
+        // re-activate when the removed tab was the active one.
+        if (tab_idx == self.active_tab) {
+            self.activateTab(@min(tab_idx, self.tabs.items.len - 1));
+        } else {
+            if (tab_idx < self.active_tab) self.active_tab -= 1;
+            self.invalidateStrip();
+        }
         return;
     }
 
@@ -600,7 +642,7 @@ fn startRenameTab(self: *Window, idx: usize) void {
 
     self.rename_buf.clearRetainingCapacity();
     var buf: [512]u16 = undefined;
-    const title = self.tabs.items[idx].title();
+    const title = utf8Capped(self.tabs.items[idx].title(), buf.len);
     const n = std.unicode.utf8ToUtf16Le(&buf, title) catch 0;
     self.rename_buf.appendSlice(alloc, buf[0..n]) catch {};
 
@@ -618,7 +660,16 @@ fn commitRename(self: *Window, save: bool) void {
 
     if (save and self.rename_tab < self.tabs.items.len and self.rename_buf.items.len > 0) {
         var u8buf: [1024]u8 = undefined;
-        const len = std.unicode.utf16LeToUtf8(&u8buf, self.rename_buf.items) catch 0;
+        // utf16LeToUtf8 doesn't bounds-check its destination either;
+        // 3 output bytes per unit is the worst case. Don't split a
+        // surrogate pair at the cap.
+        var units = self.rename_buf.items;
+        if (units.len > u8buf.len / 3) {
+            var end = u8buf.len / 3;
+            if (units[end - 1] >= 0xD800 and units[end - 1] <= 0xDBFF) end -= 1;
+            units = units[0..end];
+        }
+        const len = std.unicode.utf16LeToUtf8(&u8buf, units) catch 0;
         if (len > 0) {
             const alloc = self.app.core_app.alloc;
             const tab = &self.tabs.items[self.rename_tab];
@@ -747,7 +798,7 @@ pub fn layoutActiveTab(self: *Window) void {
 
     // Each leaf reserves a slim custom scrollbar column on its right
     // edge (Scrollbar.zig; the thumb is invisible without scrollback).
-    const sbw: i32 = self.scale(12);
+    const sbw: i32 = self.scale(scrollbar_width_logical);
 
     // The spatial slots parallel the node list; only leaves matter.
     // A 2px gap separates splits (painted by the parent background).
@@ -1051,11 +1102,27 @@ pub fn gotoTab(self: *Window, target: apprt.action.GotoTab) void {
     self.activateTab(idx);
 }
 
+/// Cap `s` to at most `max` bytes without splitting a UTF-8 sequence.
+/// The std UTF conversions do not bounds-check their destination, so
+/// every fixed-buffer caller must cap its input first (a UTF-16
+/// conversion never needs more units than the UTF-8 byte count).
+fn utf8Capped(s: []const u8, max: usize) []const u8 {
+    if (s.len <= max) return s;
+    // Back off while the first EXCLUDED byte is a UTF-8 continuation
+    // byte, i.e. the cut lands inside a multi-byte sequence. Testing
+    // s[end-1] (the last included byte) instead would leave a dangling
+    // lead byte and make the whole conversion fail. s[max] is in range
+    // because s.len > max.
+    var end = max;
+    while (end > 0 and s[end] & 0xC0 == 0x80) end -= 1;
+    return s[0..end];
+}
+
 /// Update the OS-level window title (taskbar/alt-tab) from the active
 /// tab and repaint the strip.
 pub fn syncTitle(self: *Window) void {
     const tab = self.activeTab() orelse return;
-    const title = tab.title();
+    const title = utf8Capped(tab.title(), 511);
     var buf: [512]u16 = undefined;
     const len = std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], title) catch return;
     buf[len] = 0;
@@ -1329,14 +1396,9 @@ fn syncTabTooltips(self: *Window) void {
     }
 
     for (self.tabs.items, 0..) |*tab, i| {
-        const title = title: {
-            const title = tab.title();
-            // Truncate at a codepoint boundary so the UTF-16 buffer
-            // below is always large enough.
-            var end = @min(title.len, 255);
-            while (end > 0 and title[end - 1] & 0xC0 == 0x80) end -= 1;
-            break :title title[0..end];
-        };
+        // Truncate at a codepoint boundary so the UTF-16 buffer below
+        // is always large enough.
+        const title = utf8Capped(tab.title(), 255);
         var text: [256:0]u16 = undefined;
         const len = std.unicode.utf8ToUtf16Le(text[0..255], title) catch 0;
         text[len] = 0;
@@ -1509,7 +1571,10 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
                 len = @min(self.rename_buf.items.len, buf.len - 1);
                 @memcpy(buf[0..len], self.rename_buf.items[0..len]);
             } else {
-                len = std.unicode.utf8ToUtf16Le(buf[0 .. buf.len - 1], tab.title()) catch 0;
+                len = std.unicode.utf8ToUtf16Le(
+                    buf[0 .. buf.len - 1],
+                    utf8Capped(tab.title(), buf.len - 1),
+                ) catch 0;
             }
             buf[len] = 0;
             const text_left = rect.left + self.scale(10);
@@ -1682,12 +1747,17 @@ fn imePositionWindow(self: *Window) void {
 
     // imePoint is relative to the terminal surface (the GL host); the
     // composition window position is relative to the top-level window.
+    // Splits place hosts at arbitrary offsets, so map the host origin
+    // back rather than assuming the top-left surface.
     const pos = tab.core_surface.imePoint();
+    var origin: winapi.POINT = .{ .x = 0, .y = 0 };
+    _ = winapi.ClientToScreen(tab.host, &origin);
+    _ = winapi.ScreenToClient(self.hwnd, &origin);
     _ = winapi.ImmSetCompositionWindow(himc, &.{
         .dwStyle = winapi.CFS_POINT,
         .ptCurrentPos = .{
-            .x = @intFromFloat(@max(0, pos.x)),
-            .y = @as(i32, @intFromFloat(@max(0, pos.y))) + self.titlebarHeight(),
+            .x = origin.x + @as(i32, @intFromFloat(@max(0, pos.x))),
+            .y = origin.y + @as(i32, @intFromFloat(@max(0, pos.y))),
         },
         .rcArea = std.mem.zeroes(winapi.RECT),
     });
@@ -2044,11 +2114,17 @@ pub fn wndProc(
                 };
             }
 
-            // Quick terminals hide when they lose focus — except to
-            // their own command palette.
-            if (self.quick and msg == winapi.WM_KILLFOCUS and
-                self.palette == null)
-            {
+            // Quick terminals hide when they lose focus — except to one
+            // of their own popups (command palette, search bar,
+            // settings, dropdowns), which all trace back to this window
+            // through the owner chain. wParam names the window gaining
+            // focus.
+            if (self.quick and msg == winapi.WM_KILLFOCUS) hide: {
+                if (wparam != 0) {
+                    const gaining: winapi.HWND = @ptrFromInt(wparam);
+                    if (winapi.GetAncestor(gaining, winapi.GA_ROOTOWNER) == hwnd)
+                        break :hide;
+                }
                 _ = winapi.ShowWindow(hwnd, winapi.SW_HIDE);
                 self.setOccluded(true);
             }
@@ -2269,6 +2345,16 @@ pub fn wndProc(
             return 0;
         },
 
+        // Capture was taken from us (e.g. a modal dialog opening
+        // mid-drag). Abandon any in-progress drag so its handle/index
+        // into now-possibly-stale state is dropped; the release that
+        // would normally end it will land elsewhere.
+        winapi.WM_CAPTURECHANGED => {
+            self.tab_drag = null;
+            self.divider_drag = null;
+            return 0;
+        },
+
         winapi.WM_LBUTTONDOWN,
         winapi.WM_LBUTTONUP,
         winapi.WM_RBUTTONDOWN,
@@ -2305,10 +2391,35 @@ pub fn wndProc(
                 }
             }
 
+            // A divider drag ends on release wherever the pointer is —
+            // including over the strip, which must not swallow it.
+            if (self.divider_drag != null and msg == winapi.WM_LBUTTONUP) {
+                self.divider_drag = null;
+                _ = winapi.ReleaseCapture();
+                // Final exact layout for whatever the throttle skipped.
+                self.layoutActiveTab();
+                return 0;
+            }
+
+            // A release that still holds our capture pairs with an
+            // earlier surface press (the tab and divider drags returned
+            // above and dropped their capture): route it to the terminal
+            // even over the strip, so a selection drag ending there
+            // doesn't operate strip buttons or leak the capture. Capture
+            // is OS state, so it can't drift the way a manual counter
+            // would if a release were ever lost.
+            const surface_release = switch (msg) {
+                winapi.WM_LBUTTONUP,
+                winapi.WM_RBUTTONUP,
+                winapi.WM_MBUTTONUP,
+                => winapi.GetCapture() == hwnd,
+                else => false,
+            };
+
             // Clicks in the strip operate tabs/buttons, never the
             // terminal.
             const cy = lparamY(lparam);
-            if (cy >= 0 and cy < self.titlebarHeight()) {
+            if (!surface_release and cy >= 0 and cy < self.titlebarHeight()) {
                 // Tabs activate on press, like native tab strips, and
                 // the press begins a possible drag-reorder.
                 if (msg == winapi.WM_LBUTTONDOWN) {
@@ -2372,14 +2483,6 @@ pub fn wndProc(
                     return 0;
                 }
             }
-            if (self.divider_drag != null and msg == winapi.WM_LBUTTONUP) {
-                self.divider_drag = null;
-                _ = winapi.ReleaseCapture();
-                // Final exact layout for whatever the throttle skipped.
-                self.layoutActiveTab();
-                return 0;
-            }
-
             // Clicking a split focuses it before the press is
             // delivered.
             const surface = self.surfaceAt(x, cy) orelse
@@ -2449,7 +2552,10 @@ fn keyEvent(
     // Key-to-present latency tracing (GHOSTTY_PERF_TRACE).
     if (action == .press) perf.keyPress();
 
-    // TODO: windows: AltGr discrimination (lParam bit 24 + scancode).
+    // TODO: windows: AltGr discrimination (lParam bit 24 + scancode)
+    // so AltGr chords report clean mods. The text path is already
+    // correct: charEvent marks ctrl+alt consumed when the layout
+    // produced a printable character.
     const mods = currentMods();
 
     // Keybind triggers match on the unshifted codepoint; derive it from
@@ -2567,6 +2673,18 @@ fn charEvent(self: *Window, unit: u16) void {
         key_event.consumed_mods.shift = true;
     }
 
+    // AltGr arrives as Ctrl+Alt on Windows. A printable char with both
+    // held means the layout folded them into the character (plain
+    // Ctrl+key or Alt+key never cooks a printable WM_CHAR), so mark
+    // them consumed too — otherwise the encoder sees text plus
+    // unconsumed ctrl+alt and emits a control sequence instead of the
+    // literal glyph ('@', '{', '~', ... on German/Nordic/French/Polish
+    // layouts).
+    if (key_event.mods.ctrl and key_event.mods.alt) {
+        key_event.consumed_mods.ctrl = true;
+        key_event.consumed_mods.alt = true;
+    }
+
     if (key_event.unshifted_codepoint == 0 and
         codepoint < 0x80 and !key_event.mods.shift)
     {
@@ -2657,6 +2775,7 @@ fn vkToKey(vk: u8, lparam: winapi.LPARAM) input.Key {
         winapi.VK_OEM_5 => .backslash,
         winapi.VK_OEM_6 => .bracket_right,
         winapi.VK_OEM_7 => .quote,
+        winapi.VK_OEM_102 => .intl_backslash,
         else => .unidentified,
     };
 }

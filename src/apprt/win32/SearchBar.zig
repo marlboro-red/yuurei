@@ -38,6 +38,11 @@ selected: ?usize = null,
 const width_logical: i32 = 360;
 const height_logical: i32 = 40;
 
+/// Hard cap on needle length in UTF-16 units. updateSearch converts
+/// into a fixed [1024]u8 and utf16LeToUtf8 does not bounds-check its
+/// destination; 3 output bytes per unit is the worst case.
+const needle_max_units: usize = 1024 / 3;
+
 pub fn create(alloc: Allocator, surface: *Surface) !*SearchBar {
     const window = surface.window;
     const self = try alloc.create(SearchBar);
@@ -93,10 +98,18 @@ pub fn setNeedle(self: *SearchBar, needle: []const u8) void {
     self.needle.clearRetainingCapacity();
 
     // Truncate to the buffer at a codepoint boundary; UTF-16 never
-    // needs more units than UTF-8 bytes.
-    var buf: [512]u16 = undefined;
-    var end = @min(needle.len, buf.len);
-    while (end > 0 and needle[end - 1] & 0xC0 == 0x80) end -= 1;
+    // needs more units than UTF-8 bytes. Only trim when actually
+    // truncating — backing off continuation bytes unconditionally
+    // would strip a trailing non-ASCII character from short needles.
+    // When we do cut, test the first EXCLUDED byte (needle[end]); the
+    // last included byte would leave a dangling lead and fail the
+    // conversion.
+    var buf: [needle_max_units]u16 = undefined;
+    var end = needle.len;
+    if (end > buf.len) {
+        end = buf.len;
+        while (end > 0 and needle[end] & 0xC0 == 0x80) end -= 1;
+    }
     const n = std.unicode.utf8ToUtf16Le(&buf, needle[0..end]) catch 0;
     self.needle.appendSlice(alloc, buf[0..n]) catch {};
     _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
@@ -347,6 +360,14 @@ pub fn wndProc(
                     self.updateSearch();
                 }
             } else if (ch >= 0x20 and ch != 0x7F) {
+                // Enforce the fixed-buffer cap; a surrogate lead needs
+                // room for its trail too (a trail always pairs with an
+                // admitted lead, so it is never refused alone).
+                const lead = ch >= 0xD800 and ch <= 0xDBFF;
+                const trail = ch >= 0xDC00 and ch <= 0xDFFF;
+                const need: usize = if (lead) 2 else 1;
+                if (!trail and self.needle.items.len + need > needle_max_units)
+                    return 0;
                 self.needle.append(alloc, ch) catch return 0;
                 self.updateSearch();
             }

@@ -110,12 +110,18 @@ pub fn init(self: *Self, app: *App, window: *Window) !void {
     _ = winapi.GetClientRect(window.hwnd, &client);
     const strip = window.titlebarHeight();
     const host = winapi.CreateWindowExW(
-        // Flip-capable hosts drop the GDI redirection surface: the
+        // Flip-model hosts drop the GDI redirection surface: the
         // window's pixels come solely from the DXGI swapchain, which
         // is what lets DWM consider it for hardware-overlay
-        // (independent flip) promotion. Creation-only style, so the
-        // capability was probed at App startup.
-        if (app.flip_capable) winapi.WS_EX_NOREDIRECTIONBITMAP else 0,
+        // (independent flip) promotion. Creation-only style, so it is
+        // decided here: only when the config opts into flip-model AND
+        // the App-startup probe found the interop capability. A
+        // capability-only test would strip the redirection surface the
+        // default SwapBuffers path presents into (see App.flip_capable).
+        if (app.flip_capable and app.config.@"windows-flip-model")
+            winapi.WS_EX_NOREDIRECTIONBITMAP
+        else
+            0,
         host_class_name,
         std.unicode.utf8ToUtf16LeStringLiteral(""),
         winapi.WS_CHILD | winapi.WS_DISABLED,
@@ -239,8 +245,13 @@ pub fn rtApp(self: *Self) *App {
 }
 
 /// Close this tab. The App run loop performs the actual teardown.
+/// `process_active` means the core detected a running child process
+/// (confirm-close-surface): ask before killing it.
 pub fn close(self: *Self, process_active: bool) void {
-    _ = process_active;
+    if (process_active and !confirmDialog(
+        self.window.hwnd,
+        "A process is still running in this terminal. Close it anyway?",
+    )) return;
     self.should_close = true;
     self.app.wakeup();
 }
@@ -346,6 +357,11 @@ pub fn clipboardRequest(
     // Read CF_UNICODETEXT and complete the request synchronously,
     // like the GLFW apprt did.
     const alloc = self.core_surface.alloc;
+    // Track the allocation separately from the value: an empty
+    // clipboard string still allocates (the sentinel), so freeing by
+    // `len > 0` would leak it.
+    var owned: ?[:0]const u8 = null;
+    defer if (owned) |t| alloc.free(t);
     const text: [:0]const u8 = text: {
         if (winapi.OpenClipboard(self.window.hwnd) == 0) break :text "";
         defer _ = winapi.CloseClipboard();
@@ -355,12 +371,13 @@ pub fn clipboardRequest(
         defer _ = winapi.GlobalUnlock(handle);
 
         const wide: [*:0]const u16 = @ptrCast(@alignCast(ptr));
-        break :text std.unicode.utf16LeToUtf8AllocZ(
+        const converted = std.unicode.utf16LeToUtf8AllocZ(
             alloc,
             std.mem.span(wide),
         ) catch break :text "";
+        owned = converted;
+        break :text converted;
     };
-    defer if (text.len > 0) alloc.free(text);
 
     // First attempt unconfirmed: the core rejects content it considers
     // unsafe (control characters in a paste, OSC 52 reads needing
@@ -480,12 +497,9 @@ pub fn defaultTermioEnv(self: *Self) !std.process.EnvMap {
 /// values are a client-area size in grid-derived pixels; convert to a
 /// full window size including the frame for the current DPI.
 pub fn setInitialWindowSize(self: *const Self, width: u32, height: u32) !void {
-    var rect: winapi.RECT = .{
-        .left = 0,
-        .top = 0,
-        .right = @intCast(width),
-        .bottom = @intCast(height),
-    };
+    const w: i32 = @intCast(width);
+    const h: i32 = @intCast(height);
+    var rect: winapi.RECT = .{ .left = 0, .top = 0, .right = w, .bottom = h };
     _ = winapi.AdjustWindowRectExForDpi(
         &rect,
         winapi.WS_OVERLAPPEDWINDOW,
@@ -493,13 +507,22 @@ pub fn setInitialWindowSize(self: *const Self, width: u32, height: u32) !void {
         0,
         winapi.GetDpiForWindow(self.window.hwnd),
     );
+
+    // Our WM_NCCALCSIZE hands the whole caption area back to the client
+    // (the custom strip is drawn there), so of the frame the Adjust
+    // call added, only the side and bottom borders survive. The client
+    // also holds the strip plus each leaf's scrollbar column and 2px
+    // gap (layoutActiveTab), which the grid size doesn't include.
+    const border_x = (rect.right - rect.left) - w;
+    const border_bottom = rect.bottom - h;
+    const sbw = self.window.scale(Window.scrollbar_width_logical) + 2;
     _ = winapi.SetWindowPos(
         self.window.hwnd,
         null,
         0,
         0,
-        rect.right - rect.left,
-        rect.bottom - rect.top + self.window.titlebarHeight(),
+        w + sbw + border_x,
+        h + 2 + self.window.titlebarHeight() + border_bottom,
         winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE | winapi.SWP_NOMOVE,
     );
 }

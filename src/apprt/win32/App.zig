@@ -58,9 +58,10 @@ tray_hwnd: ?winapi.HWND = null,
 /// Whether flip-model presentation is available (the WGL DX-interop
 /// extension exists), probed once at startup with a throwaway
 /// context. GL host windows are created with
-/// WS_EX_NOREDIRECTIONBITMAP when true — the style is creation-only
-/// and would break the SwapBuffers fallback, so it must be decided
-/// before the renderer ever runs.
+/// WS_EX_NOREDIRECTIONBITMAP only when this is true AND the config
+/// enables windows-flip-model — the style is creation-only and would
+/// break the (default) SwapBuffers path, so it must match the present
+/// path decided before the renderer ever runs.
 flip_capable: bool = false,
 
 /// Flips to true to quit on the next event loop tick.
@@ -498,12 +499,12 @@ pub fn performAction(
         },
 
         .goto_tab => switch (target) {
-            .app => {},
+            .app => return false,
             .surface => |surface| surface.rt_surface.window.gotoTab(value),
         },
 
         .close_tab => switch (target) {
-            .app => {},
+            .app => return false,
             .surface => |surface| {
                 surface.rt_surface.window.closeTabContaining(surface.rt_surface);
             },
@@ -522,44 +523,44 @@ pub fn performAction(
         },
 
         .goto_split => switch (target) {
-            .app => {},
+            .app => return false,
             .surface => |surface| surface.rt_surface.window.gotoSplit(value),
         },
 
         .resize_split => switch (target) {
-            .app => {},
+            .app => return false,
             .surface => |surface| surface.rt_surface.window.resizeSplit(value),
         },
 
         .equalize_splits => switch (target) {
-            .app => {},
+            .app => return false,
             .surface => |surface| surface.rt_surface.window.equalizeSplits(),
         },
 
         .toggle_split_zoom => switch (target) {
-            .app => {},
+            .app => return false,
             .surface => |surface| surface.rt_surface.window.toggleSplitZoom(),
         },
 
         .close_window => switch (target) {
-            .app => {},
+            .app => return false,
             .surface => |surface| {
                 surface.rt_surface.window.should_close = true;
             },
         },
 
         .set_title => switch (target) {
-            .app => {},
+            .app => return false,
             .surface => |surface| try surface.rt_surface.setTitle(value.title),
         },
 
         .mouse_shape => switch (target) {
-            .app => {},
+            .app => return false,
             .surface => |surface| try surface.rt_surface.setMouseShape(value),
         },
 
         .initial_size => switch (target) {
-            .app => {},
+            .app => return false,
             .surface => |surface| try surface.rt_surface.setInitialWindowSize(
                 value.width,
                 value.height,
@@ -736,7 +737,7 @@ pub fn performAction(
         },
 
         .ring_bell => switch (target) {
-            .app => {},
+            .app => return false,
             .surface => |surface| {
                 const hwnd = surface.rt_surface.window.hwnd;
                 // Beep only when we're in the background; flash either
