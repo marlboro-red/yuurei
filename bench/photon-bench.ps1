@@ -87,5 +87,7 @@ for ($i = 0; $i -lt $Samples; $i++) {
 
 $sorted = @($results | Sort-Object)
 if ($sorted.Count -eq 0) { "[$Label] NO PIXEL CHANGES DETECTED skipped=$skipped of $Samples"; exit 1 }
-$median = $sorted[[int]($sorted.Count / 2)]
+# [math]::Floor, not [int]: PowerShell's [int] cast banker's-rounds, so
+# n=15 indexed the 9th sample instead of the true median (index 7).
+$median = $sorted[[math]::Floor($sorted.Count / 2)]
 "[$Label] keyboard-to-pixels: n=$($sorted.Count) skipped=$skipped median=$($median)ms samples: $($sorted -join ', ')"

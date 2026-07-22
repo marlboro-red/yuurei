@@ -192,7 +192,9 @@ fn render(self: *InspectorWindow) void {
     // The imgui GL3 backend leaves GL_SCISSOR_TEST enabled after
     // rendering, which would confine this clear to the last clip rect.
     gl.disable(gl.c.GL_SCISSOR_TEST) catch {};
-    gl.clearColor(0x28 / 0xFF, 0x2C / 0xFF, 0x34 / 0xFF, 1.0);
+    // Float division: 0x28 / 0xFF was comptime *integer* division
+    // (== 0), which cleared to black instead of the intended #282C34.
+    gl.clearColor(40.0 / 255.0, 44.0 / 255.0, 52.0 / 255.0, 1.0);
     gl.clear(gl.c.GL_COLOR_BUFFER_BIT);
     cimgui.ImGui_ImplOpenGL3_RenderDrawData(cimgui.c.ImGui_GetDrawData());
 

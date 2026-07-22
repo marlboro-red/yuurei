@@ -1,10 +1,11 @@
 //! Lightweight, env-gated performance tracing (yuurei Phase 5).
 //!
-//! Set GHOSTTY_PERF_TRACE=1 to enable. Costs a single relaxed atomic
-//! load on the traced paths when disabled. This is intentionally
-//! minimal plumbing for measuring the port on real machines — not a
-//! general profiling framework.
+//! Set GHOSTTY_PERF_TRACE=1 to enable (an empty value or "0" leaves it
+//! disabled). Costs a single relaxed atomic load on the traced paths
+//! when disabled. This is intentionally minimal plumbing for measuring
+//! the port on real machines — not a general profiling framework.
 const std = @import("std");
+const builtin = @import("builtin");
 
 /// Nanosecond timestamp of the most recent key press. Consumed by the
 /// renderer on the first present after pty data arrived (the echo
@@ -20,12 +21,24 @@ pub var echo_seen: std.atomic.Value(bool) = .init(false);
 
 var enabled = std.atomic.Value(u8).init(0xFF);
 
-/// Whether tracing is enabled (GHOSTTY_PERF_TRACE set). First call
-/// reads the environment; later calls are a relaxed load.
+/// Whether tracing is enabled (GHOSTTY_PERF_TRACE set to something
+/// other than "" or "0" — presence alone must not enable it, or the
+/// conventional VAR=0 would turn tracing on). First call reads the
+/// environment; later calls are a relaxed load.
 pub fn isEnabled() bool {
     const v = enabled.load(.monotonic);
     if (v != 0xFF) return v != 0;
-    const e = std.process.hasEnvVarConstant("GHOSTTY_PERF_TRACE");
+    const e = read: {
+        if (comptime builtin.os.tag == .windows) {
+            const key = std.unicode.utf8ToUtf16LeStringLiteral("GHOSTTY_PERF_TRACE");
+            const value = std.process.getenvW(key) orelse break :read false;
+            if (value.len == 0) break :read false;
+            if (value.len == 1 and value[0] == '0') break :read false;
+            break :read true;
+        }
+        const value = std.posix.getenv("GHOSTTY_PERF_TRACE") orelse break :read false;
+        break :read value.len > 0 and !std.mem.eql(u8, value, "0");
+    };
     enabled.store(@intFromBool(e), .monotonic);
     return e;
 }

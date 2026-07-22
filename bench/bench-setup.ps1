@@ -8,11 +8,14 @@ param(
 Add-Type @'
 using System; using System.Runtime.InteropServices; using System.Text;
 public class BS {
-  [DllImport("user32.dll")] public static extern IntPtr FindWindowW(string cls, string title);
+  // CharSet.Unicode: the DllImport default is Ansi, which marshals
+  // string/StringBuilder as ANSI against these W-suffixed APIs —
+  // class-name matching then never succeeds.
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string cls, string title);
   [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int hh, bool repaint);
   [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr ctx);
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr lp);
-  [DllImport("user32.dll")] public static extern int GetClassNameW(IntPtr h, StringBuilder sb, int max);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, StringBuilder sb, int max);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll", SetLastError=true)] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   public delegate bool EnumProc(IntPtr h, IntPtr lp);
