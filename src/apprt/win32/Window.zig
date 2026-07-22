@@ -202,15 +202,49 @@ pub const CreateOptions = struct {
     no_initial_tab: bool = false,
 };
 
+/// The docked geometry for a quick terminal on the primary monitor,
+/// honoring quick-terminal-position and -size. Defaults match the old
+/// hardcoded dock: full width, ~40% height, top.
+fn quickTerminalGeometry(app: *App) struct { x: i32, y: i32, w: i32, h: i32 } {
+    const pos = app.config.@"quick-terminal-position";
+    const size = app.config.@"quick-terminal-size";
+    const sw: i32 = @max(1, winapi.GetSystemMetrics(winapi.SM_CXSCREEN));
+    const sh: i32 = @max(1, winapi.GetSystemMetrics(winapi.SM_CYSCREEN));
+
+    // "primary" is the dimension along the dock axis; "secondary" is
+    // the cross axis (full by default).
+    const horizontal = pos == .left or pos == .right;
+    const primary_parent: u32 = @intCast(if (horizontal) sw else sh);
+    const secondary_parent: u32 = @intCast(if (horizontal) sh else sw);
+    const primary_px: i32 = @intCast(if (size.primary) |s|
+        s.toPixels(primary_parent)
+    else
+        @as(u32, @intFromFloat(0.4 * @as(f32, @floatFromInt(primary_parent)))));
+    const secondary_px: i32 = @intCast(if (size.secondary) |s|
+        s.toPixels(secondary_parent)
+    else
+        secondary_parent);
+
+    const w: i32 = if (horizontal) primary_px else secondary_px;
+    const h: i32 = if (horizontal) secondary_px else primary_px;
+    const x: i32, const y: i32 = switch (pos) {
+        .top => .{ @divTrunc(sw - w, 2), 0 },
+        .bottom => .{ @divTrunc(sw - w, 2), sh - h },
+        .left => .{ 0, @divTrunc(sh - h, 2) },
+        .right => .{ sw - w, @divTrunc(sh - h, 2) },
+        .center => .{ @divTrunc(sw - w, 2), @divTrunc(sh - h, 2) },
+    };
+    return .{ .x = x, .y = y, .w = w, .h = h };
+}
+
 /// Create a window with one tab, show it, and return it.
 pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
     const self = try alloc.create(Window);
     errdefer alloc.destroy(self);
 
-    // Quick terminals dock to the top of the primary monitor: topmost,
-    // no taskbar button, full width, ~40% height.
-    const quick_w = winapi.GetSystemMetrics(winapi.SM_CXSCREEN);
-    const quick_h = @divTrunc(winapi.GetSystemMetrics(winapi.SM_CYSCREEN) * 2, 5);
+    // Quick terminals are topmost tool windows docked per the config's
+    // quick-terminal-position / -size on the primary monitor.
+    const qt = quickTerminalGeometry(app);
 
     const hwnd = winapi.CreateWindowExW(
         if (opts.quick) winapi.WS_EX_TOOLWINDOW | winapi.WS_EX_TOPMOST else 0,
@@ -219,10 +253,10 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
         // CLIPCHILDREN so painting the split gaps can't stomp the GL
         // host children.
         winapi.WS_OVERLAPPEDWINDOW | winapi.WS_CLIPCHILDREN,
-        if (opts.quick) 0 else winapi.CW_USEDEFAULT,
-        if (opts.quick) 0 else winapi.CW_USEDEFAULT,
-        if (opts.quick) quick_w else 800,
-        if (opts.quick) quick_h else 600,
+        if (opts.quick) qt.x else winapi.CW_USEDEFAULT,
+        if (opts.quick) qt.y else winapi.CW_USEDEFAULT,
+        if (opts.quick) qt.w else 800,
+        if (opts.quick) qt.h else 600,
         null,
         null,
         app.hinstance,
@@ -285,9 +319,31 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
     // via the DWM accent policy. Pure compositor effect — no GL interop.
     self.applyBlur();
 
-    // A tear-off window stays hidden until tearOffTab has moved a tab
-    // in and positioned it at the cursor.
-    if (!opts.no_initial_tab) _ = winapi.ShowWindow(hwnd, winapi.SW_SHOWDEFAULT);
+    // Startup geometry from config, for a normal (non-quick, non-
+    // tear-off) window: an explicit position, then maximized or the
+    // default placement.
+    if (!opts.no_initial_tab and !opts.quick) {
+        if (app.config.@"window-position-x") |px| {
+            _ = winapi.SetWindowPos(
+                hwnd,
+                null,
+                px,
+                app.config.@"window-position-y" orelse px,
+                0,
+                0,
+                winapi.SWP_NOZORDER | winapi.SWP_NOSIZE | winapi.SWP_NOACTIVATE,
+            );
+        }
+        const show: i32 = if (app.config.maximize)
+            winapi.SW_MAXIMIZE
+        else
+            winapi.SW_SHOWDEFAULT;
+        _ = winapi.ShowWindow(hwnd, show);
+        // Borderless fullscreen at startup (any non-false value).
+        if (app.config.fullscreen != .false) self.toggleFullscreen();
+    } else if (!opts.no_initial_tab) {
+        _ = winapi.ShowWindow(hwnd, winapi.SW_SHOWDEFAULT);
+    }
 
     // Report the OS theme so window-theme=auto and light/dark
     // conditional config work; also sets the DWM dark caption.
