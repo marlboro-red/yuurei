@@ -276,20 +276,37 @@ fn runCapture(
     defer _ = winapi.CloseHandle(pi.hProcess.?);
     defer _ = winapi.CloseHandle(pi.hThread.?);
 
-    // Drain the pipe first (a full pipe would deadlock the child if we
-    // waited on the process before reading), then bound the wait.
+    // Poll with a hard deadline. A blocking ReadFile would hang the
+    // caller (the UI thread, via ensureProfiles) forever if the child
+    // neither writes, closes stdout, nor exits — a real "wedged WSL"
+    // scenario. Instead: read only what PeekNamedPipe reports available
+    // (never blocking), give up and kill the child once timeout_ms
+    // elapses, and stop once it exits with the pipe drained. Draining as
+    // data arrives also avoids a full-pipe deadlock on large output.
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
     var buf: [4096]u8 = undefined;
+    const deadline = std.time.milliTimestamp() + @as(i64, timeout_ms);
     while (true) {
-        var n: winapi.DWORD = 0;
-        if (winapi.ReadFile(read_h.?, &buf, buf.len, &n, null) == 0 or n == 0) break;
-        out.appendSlice(alloc, buf[0..n]) catch break;
-        if (out.items.len > 1 << 20) break;
-    }
-    if (winapi.WaitForSingleObject(pi.hProcess.?, timeout_ms) != 0) {
-        _ = winapi.TerminateProcess(pi.hProcess.?, 1);
-        return null;
+        var avail: winapi.DWORD = 0;
+        // A broken pipe (child gone, nothing buffered) ends the read.
+        if (winapi.PeekNamedPipe(read_h.?, null, 0, null, &avail, null) == 0) break;
+        if (avail > 0) {
+            var n: winapi.DWORD = 0;
+            const want = @min(avail, @as(winapi.DWORD, buf.len));
+            if (winapi.ReadFile(read_h.?, &buf, want, &n, null) == 0 or n == 0) break;
+            out.appendSlice(alloc, buf[0..n]) catch break;
+            if (out.items.len > 1 << 20) break;
+            continue; // more may be waiting; don't sleep
+        }
+        // Nothing right now: done if the child finished (pipe was just
+        // drained), killed if we're out of time, else wait briefly.
+        if (winapi.WaitForSingleObject(pi.hProcess.?, 0) == 0) break;
+        if (std.time.milliTimestamp() >= deadline) {
+            _ = winapi.TerminateProcess(pi.hProcess.?, 1);
+            break;
+        }
+        std.Thread.sleep(5 * std.time.ns_per_ms);
     }
 
     return alloc.dupe(u8, out.items) catch null;
