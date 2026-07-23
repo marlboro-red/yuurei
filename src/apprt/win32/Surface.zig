@@ -109,6 +109,12 @@ pub fn init(self: *Self, app: *App, window: *Window) !void {
     var client: winapi.RECT = undefined;
     _ = winapi.GetClientRect(window.hwnd, &client);
     const strip = window.titlebarHeight();
+    // Create the host at exactly the size layoutActiveTab() assigns a
+    // sole leaf: full client below the strip, minus the scrollbar
+    // column and the 2px split gap. Matching it here means the first
+    // ConPTY/shell starts at the final grid and never sees a
+    // post-startup resize, which would reflow-scroll its banner.
+    const sbw = window.scale(Window.scrollbar_width_logical);
     const host = winapi.CreateWindowExW(
         // Flip-model hosts drop the GDI redirection surface: the
         // window's pixels come solely from the DXGI swapchain, which
@@ -127,8 +133,8 @@ pub fn init(self: *Self, app: *App, window: *Window) !void {
         winapi.WS_CHILD | winapi.WS_DISABLED,
         0,
         strip,
-        client.right - client.left,
-        @max(0, client.bottom - client.top - strip),
+        @max(0, client.right - client.left - 2 - sbw),
+        @max(0, client.bottom - client.top - strip - 2),
         window.hwnd,
         null,
         app.hinstance,

@@ -298,6 +298,27 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
         null,
     );
 
+    // DPI-scale the default window size BEFORE the first tab exists.
+    // The window was created at a fixed 800x600 physical size (tiny on
+    // a high-DPI monitor); growing it here — while the client is still
+    // empty — means newTab() creates the ConPTY/shell at the final grid
+    // instead of starting small and reflowing on a later resize, which
+    // scrolls the shell banner. maximize/fullscreen override the size,
+    // so skip it for those.
+    if (!opts.no_initial_tab and !opts.quick and
+        !app.config.maximize and app.config.fullscreen == .false)
+    {
+        _ = winapi.SetWindowPos(
+            hwnd,
+            null,
+            0,
+            0,
+            self.scale(default_window_width_logical),
+            self.scale(default_window_height_logical),
+            winapi.SWP_NOMOVE | winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
+        );
+    }
+
     if (!opts.no_initial_tab) _ = try self.newTab();
     errdefer self.closeAllTabs();
 
@@ -318,23 +339,10 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
     // tear-off) window: a DPI-scaled default size, an explicit
     // position, then maximized or the default placement.
     if (!opts.no_initial_tab and !opts.quick) {
-        // The window was created at a fixed 800x600 physical size, which
-        // is tiny on a high-DPI monitor. Scale the default to the
-        // window's DPI so it opens at a comfortable size (unless the
-        // config maximizes or goes fullscreen, which override it).
-        if (!app.config.maximize and app.config.fullscreen == .false) {
-            _ = winapi.SetWindowPos(
-                hwnd,
-                null,
-                0,
-                0,
-                self.scale(default_window_width_logical),
-                self.scale(default_window_height_logical),
-                winapi.SWP_NOMOVE | winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
-            );
-        }
         // Position is honored only when BOTH coordinates are set, per
-        // the documented behavior.
+        // the documented behavior. (The DPI-scaled default size was
+        // already applied above, before the first tab, so the shell
+        // never sees a startup reflow.)
         if (app.config.@"window-position-x") |px| {
             if (app.config.@"window-position-y") |py| {
                 _ = winapi.SetWindowPos(
