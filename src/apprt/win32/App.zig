@@ -18,12 +18,18 @@ const InspectorWindow = @import("InspectorWindow.zig");
 const ProfileMenu = @import("ProfileMenu.zig");
 const profiles = @import("profiles.zig");
 const session = @import("session.zig");
+const defterm = @import("defterm.zig");
 const Scrollbar = @import("Scrollbar.zig");
 const SearchBar = @import("SearchBar.zig");
 const SettingsWindow = @import("SettingsWindow.zig");
 const winapi = @import("winapi.zig");
 
 const log = std.log.scoped(.win32);
+
+/// The App receiving default-terminal handoffs. defterm's COM callback
+/// is context-free (a bare fn pointer), so it finds the app here. Set
+/// in init; there is only ever one App per process.
+var handoff_app: ?*App = null;
 
 /// The core app instance we're connected to.
 core_app: *CoreApp,
@@ -265,12 +271,39 @@ pub fn init(
         .flip_capable = flip_capable,
         .com_initialized = com_initialized,
     };
+    handoff_app = self;
 
     // Make sure the loop processes the queued message immediately.
     self.wakeup();
 
     // Register `global:` keybinds as system-wide hotkeys.
     self.registerGlobalHotkeys();
+
+    // Default-terminal handoff: register the COM class object on this
+    // (STA) thread so conhost can hand off console sessions to us. The
+    // handoff callback runs on this message loop. No-op unless the
+    // handoff server is enabled (defterm.handoff_ready).
+    defterm.on_handoff = onHandoff;
+    defterm.startServer();
+}
+
+/// Receive a default-terminal handoff (defterm.zig): open a window
+/// whose surface adopts conhost's PTY instead of spawning one. Runs on
+/// the UI thread (COM marshals it onto our message loop).
+fn onHandoff(h: defterm.Handoff) void {
+    const app = handoff_app orelse {
+        // No app to receive it: close the handles so conhost isn't left
+        // waiting on a terminal that will never read.
+        _ = winapi.CloseHandle(h.our_read);
+        _ = winapi.CloseHandle(h.our_write);
+        if (h.signal) |s| _ = winapi.CloseHandle(s);
+        if (h.reference) |r| _ = winapi.CloseHandle(r);
+        if (h.client) |c| _ = winapi.CloseHandle(c);
+        return;
+    };
+    app.receiveHandoff(h) catch |err| {
+        log.err("handoff surface creation failed err={}", .{err});
+    };
 }
 
 pub fn terminate(self: *App) void {
@@ -286,7 +319,25 @@ pub fn terminate(self: *App) void {
     self.windows.deinit(self.core_app.alloc);
     if (self.profiles_list) |*l| l.deinit();
     self.config.deinit();
+    defterm.stopServer();
     if (self.com_initialized) winapi.CoUninitialize();
+}
+
+/// Adopt a default-terminal handoff into a new surface. NOT YET
+/// IMPLEMENTED (increment 2b): the COM server and pipe handoff are in
+/// place, but wiring conhost's PTY into a surface (termio adoption of a
+/// pre-made pty + pre-existing client process) is the remaining work.
+/// Until then, decline by releasing the handles so conhost isn't left
+/// waiting. This path is unreachable in shipping builds because
+/// defterm.handoff_ready gates the server off entirely.
+fn receiveHandoff(self: *App, h: defterm.Handoff) !void {
+    _ = self;
+    _ = winapi.CloseHandle(h.our_read);
+    _ = winapi.CloseHandle(h.our_write);
+    if (h.signal) |s| _ = winapi.CloseHandle(s);
+    if (h.reference) |r| _ = winapi.CloseHandle(r);
+    if (h.client) |c| _ = winapi.CloseHandle(c);
+    return error.HandoffNotImplemented;
 }
 
 /// The profile list, scanned on first use. See profiles.zig.

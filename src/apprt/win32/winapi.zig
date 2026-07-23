@@ -510,6 +510,20 @@ pub const STARTF_USESTDHANDLES: DWORD = 0x0100;
 pub const CREATE_NO_WINDOW: DWORD = 0x08000000;
 pub extern "kernel32" fn CreatePipe(*?HANDLE, *?HANDLE, ?*SECURITY_ATTRIBUTES, DWORD) callconv(.winapi) BOOL;
 pub extern "kernel32" fn SetHandleInformation(HANDLE, DWORD, DWORD) callconv(.winapi) BOOL;
+pub extern "kernel32" fn CreateNamedPipeW([*:0]const u16, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, ?*SECURITY_ATTRIBUTES) callconv(.winapi) HANDLE;
+pub extern "kernel32" fn CreateFileW([*:0]const u16, DWORD, DWORD, ?*SECURITY_ATTRIBUTES, DWORD, DWORD, ?HANDLE) callconv(.winapi) HANDLE;
+pub extern "kernel32" fn WriteFile(HANDLE, [*]const u8, DWORD, ?*DWORD, ?*anyopaque) callconv(.winapi) BOOL;
+pub const GetCurrentProcessId = windows.GetCurrentProcessId;
+pub const PIPE_ACCESS_INBOUND: DWORD = 0x1;
+pub const PIPE_ACCESS_OUTBOUND: DWORD = 0x2;
+pub const FILE_FLAG_OVERLAPPED: DWORD = 0x40000000;
+pub const FILE_FLAG_FIRST_PIPE_INSTANCE: DWORD = 0x00080000;
+pub const PIPE_TYPE_BYTE: DWORD = 0x0;
+pub const GENERIC_READ: DWORD = 0x80000000;
+pub const GENERIC_WRITE: DWORD = 0x40000000;
+pub const OPEN_EXISTING: DWORD = 3;
+pub const FILE_ATTRIBUTE_NORMAL: DWORD = 0x80;
+pub const INVALID_HANDLE_VALUE: HANDLE = @ptrFromInt(std.math.maxInt(usize));
 pub const HANDLE_FLAG_INHERIT: DWORD = 1;
 pub extern "kernel32" fn CreateProcessW(
     ?[*:0]const u16,

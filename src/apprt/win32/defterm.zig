@@ -266,6 +266,371 @@ fn proxyPath(scratch: *[winapi.MAX_PATH:0]u16) ?[:0]const u16 {
     return scratch[0 .. i + name.len :0];
 }
 
+// ---------------------------------------------------------------------
+// COM handoff server
+//
+// A class factory for CLSID_YuureiTerminal plus an ITerminalHandoff3
+// object. Registered on the main STA thread (App owns the CoInitialize),
+// so COM marshals EstablishPtyHandoff onto our message loop and it runs
+// directly on the UI thread — no cross-thread handoff needed.
+
+const HANDLE = winapi.HANDLE;
+const HRESULT = winapi.HRESULT;
+
+const S_OK: HRESULT = 0;
+fn hr(comptime code: u32) HRESULT {
+    return @bitCast(code);
+}
+const E_NOINTERFACE = hr(0x80004002);
+const E_POINTER = hr(0x80004003);
+const E_FAIL = hr(0x80004005);
+const CLASS_E_NOAGGREGATION = hr(0x80040110);
+const CLASS_E_CLASSNOTAVAILABLE = hr(0x80040111);
+
+const HANDLE_FLAG_INHERIT: winapi.DWORD = 1;
+
+/// STARTUPINFO-ish metadata conhost forwards (title, icon, size hints).
+/// Fields past the title are unused today; the terminal sizes itself.
+const TERMINAL_STARTUP_INFO = extern struct {
+    pszTitle: ?[*:0]u16, // BSTR (NUL-terminated UTF-16)
+    pszIconPath: ?[*:0]u16,
+    iconIndex: i32,
+    dwX: winapi.DWORD,
+    dwY: winapi.DWORD,
+    dwXSize: winapi.DWORD,
+    dwYSize: winapi.DWORD,
+    dwXCountChars: winapi.DWORD,
+    dwYCountChars: winapi.DWORD,
+    dwFillAttribute: winapi.DWORD,
+    dwFlags: winapi.DWORD,
+    wShowWindow: u16,
+};
+
+const ITerminalHandoff3 = extern struct {
+    vtable: *const Vtbl,
+    const Vtbl = extern struct {
+        QueryInterface: *const fn (*ITerminalHandoff3, *const winapi.GUID, *?*anyopaque) callconv(.winapi) HRESULT,
+        AddRef: *const fn (*ITerminalHandoff3) callconv(.winapi) u32,
+        Release: *const fn (*ITerminalHandoff3) callconv(.winapi) u32,
+        EstablishPtyHandoff: *const fn (
+            *ITerminalHandoff3,
+            *?HANDLE, // [out] in  (ConPTY reads keystrokes)
+            *?HANDLE, // [out] out (ConPTY writes app output)
+            ?HANDLE, // [in] signal
+            ?HANDLE, // [in] reference
+            ?HANDLE, // [in] server
+            ?HANDLE, // [in] client
+            *const TERMINAL_STARTUP_INFO,
+        ) callconv(.winapi) HRESULT,
+    };
+};
+
+const IClassFactory = extern struct {
+    vtable: *const Vtbl,
+    const Vtbl = extern struct {
+        QueryInterface: *const fn (*IClassFactory, *const winapi.GUID, *?*anyopaque) callconv(.winapi) HRESULT,
+        AddRef: *const fn (*IClassFactory) callconv(.winapi) u32,
+        Release: *const fn (*IClassFactory) callconv(.winapi) u32,
+        CreateInstance: *const fn (*IClassFactory, ?*anyopaque, *const winapi.GUID, *?*anyopaque) callconv(.winapi) HRESULT,
+        LockServer: *const fn (*IClassFactory, winapi.BOOL) callconv(.winapi) HRESULT,
+    };
+};
+
+/// A received handoff, owned by the callback once delivered: the
+/// terminal's pipe ends (drive them exactly like a self-created PTY),
+/// the signal pipe (resize), the reference handle (keeps conhost's
+/// ConPTY alive; hold until teardown), and the client process (its exit
+/// is the shell exit). `title` is the console app's window title, if any.
+pub const Handoff = struct {
+    our_read: HANDLE, // app output (== pty.out_pipe)
+    our_write: HANDLE, // user input (== pty.in_pipe)
+    signal: ?HANDLE,
+    reference: ?HANDLE,
+    client: ?HANDLE,
+    title: ?[]const u16,
+    title_buf: [256]u16,
+};
+
+/// Set by App.startHandoffServer; invoked on the UI thread when a
+/// handoff arrives. Null means no app is ready to receive (the handoff
+/// is then declined and conhost falls back).
+pub var on_handoff: ?*const fn (Handoff) void = null;
+
+fn guidEql(a: *const winapi.GUID, b: *const winapi.GUID) bool {
+    return std.mem.eql(u8, std.mem.asBytes(a), std.mem.asBytes(b));
+}
+
+// --- ITerminalHandoff3 (a process-lifetime singleton) ---
+
+var handoff_vtable: ITerminalHandoff3.Vtbl = .{
+    .QueryInterface = handoffQI,
+    .AddRef = handoffAddRef,
+    .Release = handoffRelease,
+    .EstablishPtyHandoff = establishPtyHandoff,
+};
+var handoff_obj: ITerminalHandoff3 = .{ .vtable = &handoff_vtable };
+
+fn handoffQI(self: *ITerminalHandoff3, riid: *const winapi.GUID, ppv: *?*anyopaque) callconv(.winapi) HRESULT {
+    if (guidEql(riid, &winapi.IID_IUnknown) or
+        guidEql(riid, &IID_ITerminalHandoff) or
+        guidEql(riid, &IID_ITerminalHandoff2) or
+        guidEql(riid, &IID_ITerminalHandoff3))
+    {
+        ppv.* = self;
+        return S_OK;
+    }
+    ppv.* = null;
+    return E_NOINTERFACE;
+}
+fn handoffAddRef(_: *ITerminalHandoff3) callconv(.winapi) u32 {
+    return 1; // singleton; lives for the process
+}
+fn handoffRelease(_: *ITerminalHandoff3) callconv(.winapi) u32 {
+    return 1;
+}
+
+fn establishPtyHandoff(
+    _: *ITerminalHandoff3,
+    in_out: *?HANDLE,
+    out_out: *?HANDLE,
+    signal: ?HANDLE,
+    reference: ?HANDLE,
+    server: ?HANDLE,
+    client: ?HANDLE,
+    startup: *const TERMINAL_STARTUP_INFO,
+) callconv(.winapi) HRESULT {
+    // The server (conhost) handle is not needed once we have the pipes.
+    if (server) |s| _ = winapi.CloseHandle(s);
+
+    const cb = on_handoff orelse return E_FAIL;
+
+    const pipes = createHandoffPipes() catch return E_FAIL;
+    // Return conhost's ends (the proxy duplicates them cross-process).
+    in_out.* = pipes.conhost_in;
+    out_out.* = pipes.conhost_out;
+
+    var h: Handoff = .{
+        .our_read = pipes.our_read,
+        .our_write = pipes.our_write,
+        .signal = signal,
+        .reference = reference,
+        .client = client,
+        .title = null,
+        .title_buf = undefined,
+    };
+    if (startup.pszTitle) |t| {
+        const src = std.mem.sliceTo(t, 0);
+        const n = @min(src.len, h.title_buf.len);
+        @memcpy(h.title_buf[0..n], src[0..n]);
+        h.title = h.title_buf[0..n];
+    }
+
+    cb(h);
+    return S_OK;
+}
+
+const HandoffPipes = struct {
+    our_read: HANDLE,
+    our_write: HANDLE,
+    conhost_in: HANDLE,
+    conhost_out: HANDLE,
+};
+
+var pipe_counter: std.atomic.Value(u32) = .init(1);
+
+/// Create the two pipes for a handoff, mirroring pty.WindowsPty.open:
+/// an overlapped named pipe for user input (our write / conhost read)
+/// and an anonymous pipe for app output (our read / conhost write). The
+/// named pipe is required for libxev's IOCP path. Returns our ends plus
+/// conhost's ends (the latter marshaled back over the proxy).
+fn createHandoffPipes() !HandoffPipes {
+    var name_a: [128]u8 = undefined;
+    const name = std.fmt.bufPrintZ(
+        &name_a,
+        "\\\\.\\pipe\\LOCAL\\yuurei-handoff-{d}-{d}",
+        .{ winapi.GetCurrentProcessId(), pipe_counter.fetchAdd(1, .monotonic) },
+    ) catch return error.NameTooLong;
+    var name_w: [128:0]u16 = undefined;
+    const nlen = std.unicode.utf8ToUtf16Le(&name_w, name) catch return error.Encode;
+    name_w[nlen] = 0;
+
+    var sa: winapi.SECURITY_ATTRIBUTES = .{ .bInheritHandle = winapi.FALSE };
+
+    const our_write = winapi.CreateNamedPipeW(
+        name_w[0..nlen :0].ptr,
+        winapi.PIPE_ACCESS_OUTBOUND |
+            winapi.FILE_FLAG_FIRST_PIPE_INSTANCE |
+            winapi.FILE_FLAG_OVERLAPPED,
+        winapi.PIPE_TYPE_BYTE,
+        1,
+        4096,
+        4096,
+        0,
+        &sa,
+    );
+    if (our_write == winapi.INVALID_HANDLE_VALUE) return error.CreatePipe;
+    errdefer _ = winapi.CloseHandle(our_write);
+
+    const conhost_in = winapi.CreateFileW(
+        name_w[0..nlen :0].ptr,
+        winapi.GENERIC_READ,
+        0,
+        &sa,
+        winapi.OPEN_EXISTING,
+        winapi.FILE_ATTRIBUTE_NORMAL,
+        null,
+    );
+    if (conhost_in == winapi.INVALID_HANDLE_VALUE) return error.OpenPipe;
+    errdefer _ = winapi.CloseHandle(conhost_in);
+
+    var our_read: ?HANDLE = null;
+    var conhost_out: ?HANDLE = null;
+    if (winapi.CreatePipe(&our_read, &conhost_out, &sa, 0) == 0) return error.CreatePipe;
+
+    // Our ends must not leak into any child we later spawn.
+    _ = winapi.SetHandleInformation(our_write, HANDLE_FLAG_INHERIT, 0);
+    _ = winapi.SetHandleInformation(our_read.?, HANDLE_FLAG_INHERIT, 0);
+
+    return .{
+        .our_read = our_read.?,
+        .our_write = our_write,
+        .conhost_in = conhost_in,
+        .conhost_out = conhost_out.?,
+    };
+}
+
+// --- IClassFactory (a process-lifetime singleton) ---
+
+var factory_vtable: IClassFactory.Vtbl = .{
+    .QueryInterface = factoryQI,
+    .AddRef = factoryAddRef,
+    .Release = factoryRelease,
+    .CreateInstance = factoryCreateInstance,
+    .LockServer = factoryLockServer,
+};
+var factory_obj: IClassFactory = .{ .vtable = &factory_vtable };
+
+fn factoryQI(self: *IClassFactory, riid: *const winapi.GUID, ppv: *?*anyopaque) callconv(.winapi) HRESULT {
+    if (guidEql(riid, &winapi.IID_IUnknown) or guidEql(riid, &winapi.IID_IClassFactory)) {
+        ppv.* = self;
+        return S_OK;
+    }
+    ppv.* = null;
+    return E_NOINTERFACE;
+}
+fn factoryAddRef(_: *IClassFactory) callconv(.winapi) u32 {
+    return 1;
+}
+fn factoryRelease(_: *IClassFactory) callconv(.winapi) u32 {
+    return 1;
+}
+fn factoryCreateInstance(
+    _: *IClassFactory,
+    outer: ?*anyopaque,
+    riid: *const winapi.GUID,
+    ppv: *?*anyopaque,
+) callconv(.winapi) HRESULT {
+    ppv.* = null;
+    if (outer != null) return CLASS_E_NOAGGREGATION; // no aggregation
+    return handoffQI(&handoff_obj, riid, ppv);
+}
+fn factoryLockServer(_: *IClassFactory, _: winapi.BOOL) callconv(.winapi) HRESULT {
+    return S_OK;
+}
+
+/// The CoRegisterClassObject cookie while the server is registered.
+var class_cookie: winapi.DWORD = 0;
+
+/// Register the handoff class object on the current (STA) thread so COM
+/// routes EstablishPtyHandoff to this process's message loop. Safe to
+/// call when not the default terminal (it just sits idle). No-op if the
+/// server is gated off.
+pub fn startServer() void {
+    if (comptime builtin.os.tag != .windows) return;
+    if (!handoff_ready) return;
+    if (class_cookie != 0) return;
+    const rc = winapi.CoRegisterClassObject(
+        &CLSID_YuureiTerminal,
+        &factory_obj,
+        winapi.CLSCTX_LOCAL_SERVER,
+        winapi.REGCLS_MULTIPLEUSE,
+        &class_cookie,
+    );
+    if (rc != S_OK) {
+        log.warn("defterm CoRegisterClassObject failed hr={x}", .{@as(u32, @bitCast(rc))});
+        class_cookie = 0;
+    }
+}
+
+pub fn stopServer() void {
+    if (comptime builtin.os.tag != .windows) return;
+    if (class_cookie == 0) return;
+    _ = winapi.CoRevokeClassObject(class_cookie);
+    class_cookie = 0;
+}
+
+test "class factory and handoff vtables answer QueryInterface" {
+    if (comptime builtin.os.tag != .windows) return error.SkipZigTest;
+    const testing = std.testing;
+
+    // Factory: IClassFactory and IUnknown resolve, others don't.
+    var ppv: ?*anyopaque = null;
+    try testing.expectEqual(S_OK, factory_obj.vtable.QueryInterface(&factory_obj, &winapi.IID_IClassFactory, &ppv));
+    try testing.expect(ppv != null);
+    try testing.expectEqual(E_NOINTERFACE, factory_obj.vtable.QueryInterface(&factory_obj, &CLSID_YuureiTerminal, &ppv));
+
+    // CreateInstance hands back an ITerminalHandoff3.
+    var obj: ?*anyopaque = null;
+    try testing.expectEqual(S_OK, factory_obj.vtable.CreateInstance(&factory_obj, null, &IID_ITerminalHandoff3, &obj));
+    try testing.expect(obj != null);
+}
+
+test "EstablishPtyHandoff creates pipes and delivers to the callback" {
+    if (comptime builtin.os.tag != .windows) return error.SkipZigTest;
+    const testing = std.testing;
+
+    const Captured = struct {
+        var got: ?Handoff = null;
+        fn cb(h: Handoff) void {
+            got = h;
+        }
+    };
+    Captured.got = null;
+    on_handoff = Captured.cb;
+    defer on_handoff = null;
+
+    var in_h: ?HANDLE = null;
+    var out_h: ?HANDLE = null;
+    var startup: TERMINAL_STARTUP_INFO = std.mem.zeroes(TERMINAL_STARTUP_INFO);
+    const title = std.unicode.utf8ToUtf16LeStringLiteral("cmd.exe");
+    startup.pszTitle = @constCast(title.ptr);
+
+    const rc = handoff_obj.vtable.EstablishPtyHandoff(
+        &handoff_obj,
+        &in_h,
+        &out_h,
+        null,
+        null,
+        null,
+        null,
+        &startup,
+    );
+    try testing.expectEqual(S_OK, rc);
+    // conhost's two ends were produced...
+    try testing.expect(in_h != null and out_h != null);
+    // ...and the callback received our ends + the title.
+    try testing.expect(Captured.got != null);
+    const h = Captured.got.?;
+    try testing.expect(h.title != null);
+    try testing.expectEqualSlices(u16, title, h.title.?);
+
+    // Clean up every handle the test produced.
+    _ = winapi.CloseHandle(in_h.?);
+    _ = winapi.CloseHandle(out_h.?);
+    _ = winapi.CloseHandle(h.our_read);
+    _ = winapi.CloseHandle(h.our_write);
+}
+
 test "guidString formats the canonical registry form" {
     if (comptime builtin.os.tag != .windows) return error.SkipZigTest;
     var buf: GuidBuf = undefined;
