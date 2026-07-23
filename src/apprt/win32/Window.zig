@@ -141,6 +141,14 @@ profile_menu: ?*ProfileMenu = null,
 /// changes; ~1-2MB at 4K.
 strip_buf: ?StripBuf = null,
 
+/// Whether the Win11 Mica Alt backdrop is active for this window: the
+/// frame is extended over the strip and the strip paints with
+/// per-pixel alpha so the material shows through (markOpaque /
+/// glassTextAlpha handle the GDI alpha fixups). False on Win10, when
+/// DWM declines, or when background-blur is configured (the accent
+/// blur and system backdrops fight over the same surface).
+mica: bool = false,
+
 /// When the dropdown last closed (std.time.milliTimestamp). Clicking
 /// the chevron while the menu is open dismisses it via WM_KILLFOCUS on
 /// the mouse-down; without this stamp the mouse-up would immediately
@@ -373,6 +381,22 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
     // background-blur: frost the desktop behind the (translucent) window
     // via the DWM accent policy. Pure compositor effect — no GL interop.
     self.applyBlur();
+
+    // Win11 Mica Alt backdrop for the title strip (Windows Terminal's
+    // titlebar material). Requires 22H2+; on refusal we just keep the
+    // opaque strip. Mutually exclusive with the accent blur above.
+    if (!app.config.@"background-blur".enabled()) mica: {
+        const backdrop: u32 = winapi.DWMSBT_TABBEDWINDOW;
+        if (winapi.DwmSetWindowAttribute(
+            hwnd,
+            winapi.DWMWA_SYSTEMBACKDROP_TYPE,
+            &backdrop,
+            @sizeOf(u32),
+        ) != 0) break :mica;
+        const margins: winapi.MARGINS = .{ .cyTopHeight = self.titlebarHeight() };
+        if (winapi.DwmExtendFrameIntoClientArea(hwnd, &margins) != 0) break :mica;
+        self.mica = true;
+    }
 
     // Startup geometry from config, for a normal (non-quick, non-
     // tear-off) window: a DPI-scaled default size, an explicit
@@ -1965,6 +1989,55 @@ fn paintTitlebarBuffered(self: *Window, hdc: winapi.HDC) void {
 /// `bg` with analytic circle coverage, producing antialiased rounded
 /// corners on whatever was just filled there. `corners` selects which
 /// (bit 0: top-left, 1: top-right, 2: bottom-left, 3: bottom-right).
+/// Mica fixup: set alpha to 255 in a rect. GDI writes alpha=0, so any
+/// opaque plate (tab fill, hover pill, hairline) must be marked after
+/// ALL GDI drawing inside it — text drawn later would re-zero glyph
+/// pixels. No-op when Mica is off (alpha is ignored then).
+fn markOpaque(self: *Window, rect: winapi.RECT) void {
+    if (!self.mica) return;
+    const buf = &(self.strip_buf orelse return);
+    const x0 = @max(rect.left, 0);
+    const x1 = @min(rect.right, buf.w);
+    const y0 = @max(rect.top, 0);
+    const y1 = @min(rect.bottom, buf.h);
+    var y = y0;
+    while (y < y1) : (y += 1) {
+        var x = x0;
+        while (x < x1) : (x += 1) {
+            buf.bits[@intCast((y * buf.w + x) * 4 + 3)] = 255;
+        }
+    }
+}
+
+/// Mica fixup: reconstruct the alpha of antialiased text GDI drew on
+/// the transparent (black) base. GDI blended fg over black, so each
+/// channel already holds premultiplied coverage; alpha is coverage
+/// normalized by the brightest channel of the text color. Pixels
+/// already marked opaque are left alone.
+fn glassTextAlpha(self: *Window, rect: winapi.RECT, fg_color: u32) void {
+    if (!self.mica) return;
+    const buf = &(self.strip_buf orelse return);
+    const fg_max: u32 = @max(
+        (fg_color >> 16) & 0xFF,
+        @max((fg_color >> 8) & 0xFF, fg_color & 0xFF),
+    );
+    if (fg_max == 0) return;
+    const x0 = @max(rect.left, 0);
+    const x1 = @min(rect.right, buf.w);
+    const y0 = @max(rect.top, 0);
+    const y1 = @min(rect.bottom, buf.h);
+    var y = y0;
+    while (y < y1) : (y += 1) {
+        var x = x0;
+        while (x < x1) : (x += 1) {
+            const p = buf.bits + @as(usize, @intCast((y * buf.w + x) * 4));
+            if (p[3] == 255) continue;
+            const m: u32 = @max(p[0], @max(p[1], p[2]));
+            p[3] = @intCast(@min(255, m * 255 / fg_max));
+        }
+    }
+}
+
 fn roundCorners(
     self: *Window,
     rect: winapi.RECT,
@@ -2012,6 +2085,12 @@ fn roundCorners(
                     p[0] = @intFromFloat(bg_b + (@as(f32, @floatFromInt(p[0])) - bg_b) * cov);
                     p[1] = @intFromFloat(bg_g + (@as(f32, @floatFromInt(p[1])) - bg_g) * cov);
                     p[2] = @intFromFloat(bg_r + (@as(f32, @floatFromInt(p[2])) - bg_r) * cov);
+                    // Under Mica the corner fades to the material, so
+                    // alpha follows coverage too (bg there is the
+                    // transparent black base; premultiplied holds).
+                    if (self.mica) p[3] = @intFromFloat(
+                        @as(f32, @floatFromInt(p[3])) * cov,
+                    );
                 }
             }
         }
@@ -2036,7 +2115,12 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
     const separator: u32 = if (light) 0x00C8C8C8 else 0x00333333;
     const accent = systemAccentColor();
 
-    const bg_brush = winapi.CreateSolidBrush(bg) orelse return;
+    // Under Mica the base is transparent black (GDI writes alpha=0,
+    // which premultiplied is fully transparent): the material shows
+    // everywhere no opaque plate is marked.
+    const bg_brush = winapi.CreateSolidBrush(
+        if (self.mica) 0x00000000 else bg,
+    ) orelse return;
     defer _ = winapi.DeleteObject(bg_brush);
     _ = winapi.FillRect(hdc, &strip, bg_brush);
 
@@ -2071,8 +2155,10 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
                 defer _ = winapi.DeleteObject(b);
                 _ = winapi.FillRect(hdc, &rect, b);
             }
-            // Antialiased rounded top corners (classic tab shape).
-            self.roundCorners(rect, 6, bg, 0b0011);
+            // markOpaque + roundCorners happen after the tab's text
+            // and close glyph, at the end of this loop body: text
+            // drawn later would re-zero the alpha, and the corner
+            // fade needs the final alpha in place.
         }
 
         // Active tab: a slim accent underline in the system accent
@@ -2105,6 +2191,7 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
                     defer _ = winapi.DeleteObject(b);
                     _ = winapi.FillRect(hdc, &sep, b);
                 }
+                self.markOpaque(sep);
             }
         }
 
@@ -2145,6 +2232,9 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
                     winapi.DT_LEFT | winapi.DT_VCENTER |
                         winapi.DT_SINGLELINE | winapi.DT_END_ELLIPSIS,
                 );
+                // Inactive titles sit directly on the material.
+                if (!active and !hovered)
+                    self.glassTextAlpha(text_rect, fg_dim);
             }
             if (renaming) {
                 // Draw a caret after the text to signal edit mode.
@@ -2202,6 +2292,19 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
                 winapi.DT_CENTER | winapi.DT_VCENTER | winapi.DT_SINGLELINE,
             );
         }
+
+        // Mica/rounding finalization for filled tabs, after every GDI
+        // op inside the tab: opaque plate first, then the corner fade
+        // (which needs the final alpha in place).
+        if (active or hovered) {
+            self.markOpaque(rect);
+            self.roundCorners(
+                rect,
+                6,
+                if (self.mica) 0x00000000 else bg,
+                0b0011,
+            );
+        }
     }
 
     // New tab "+" button
@@ -2211,18 +2314,17 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
             _ = winapi.SelectObject(hdc, o);
         };
         var plus_rect = self.newTabRect();
+        var plus_pill = plus_rect;
+        plus_pill.left += self.scale(2);
+        plus_pill.right -= self.scale(2);
+        plus_pill.top += self.scale(6);
+        plus_pill.bottom -= self.scale(6);
         if (self.hover == .new_tab) {
-            var pill = plus_rect;
-            pill.left += self.scale(2);
-            pill.right -= self.scale(2);
-            pill.top += self.scale(6);
-            pill.bottom -= self.scale(6);
             const brush = winapi.CreateSolidBrush(tab_hover_bg);
             if (brush) |b| {
                 defer _ = winapi.DeleteObject(b);
-                _ = winapi.FillRect(hdc, &pill, b);
+                _ = winapi.FillRect(hdc, &plus_pill, b);
             }
-            self.roundCorners(pill, 5, bg, 0b1111);
         }
         _ = winapi.SetTextColor(hdc, fg_dim);
         var glyph: [2:0]u16 = .{ 0xE710, 0 }; // Add
@@ -2233,23 +2335,31 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
             &plus_rect,
             winapi.DT_CENTER | winapi.DT_VCENTER | winapi.DT_SINGLELINE,
         );
+        if (self.hover == .new_tab) {
+            self.markOpaque(plus_pill);
+            self.roundCorners(
+                plus_pill,
+                5,
+                if (self.mica) 0x00000000 else bg,
+                0b1111,
+            );
+        } else self.glassTextAlpha(plus_rect, fg_dim);
 
         // Profile dropdown chevron beside it (the split half of the
         // WT-style new-tab button); its own hover highlight so each
         // zone reads as a distinct target.
         var chev_rect = self.newTabChevronRect();
+        var chev_pill = chev_rect;
+        chev_pill.left += self.scale(2);
+        chev_pill.right -= self.scale(2);
+        chev_pill.top += self.scale(6);
+        chev_pill.bottom -= self.scale(6);
         if (self.hover == .new_tab_chevron) {
-            var pill = chev_rect;
-            pill.left += self.scale(2);
-            pill.right -= self.scale(2);
-            pill.top += self.scale(6);
-            pill.bottom -= self.scale(6);
             const brush = winapi.CreateSolidBrush(tab_hover_bg);
             if (brush) |b| {
                 defer _ = winapi.DeleteObject(b);
-                _ = winapi.FillRect(hdc, &pill, b);
+                _ = winapi.FillRect(hdc, &chev_pill, b);
             }
-            self.roundCorners(pill, 5, bg, 0b1111);
         }
         var chevron: [2:0]u16 = .{ 0xE70D, 0 }; // ChevronDown
         _ = winapi.DrawTextW(
@@ -2259,6 +2369,15 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
             &chev_rect,
             winapi.DT_CENTER | winapi.DT_VCENTER | winapi.DT_SINGLELINE,
         );
+        if (self.hover == .new_tab_chevron) {
+            self.markOpaque(chev_pill);
+            self.roundCorners(
+                chev_pill,
+                5,
+                if (self.mica) 0x00000000 else bg,
+                0b1111,
+            );
+        } else self.glassTextAlpha(chev_rect, fg_dim);
     }
 
     // Drop the tab clip before the caption buttons.
@@ -2311,6 +2430,10 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
                 &rect,
                 winapi.DT_CENTER | winapi.DT_VCENTER | winapi.DT_SINGLELINE,
             );
+            if (hovered)
+                self.markOpaque(rect)
+            else
+                self.glassTextAlpha(rect, fg);
         }
     }
 
@@ -2691,6 +2814,14 @@ pub fn wndProc(
                 suggested.bottom - suggested.top,
                 winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
             );
+            // The strip height scales with DPI; keep the Mica frame
+            // extension in sync.
+            if (self.mica) {
+                const margins: winapi.MARGINS = .{
+                    .cyTopHeight = self.titlebarHeight(),
+                };
+                _ = winapi.DwmExtendFrameIntoClientArea(hwnd, &margins);
+            }
 
             const dpi: f32 = @floatFromInt(wparam & 0xFFFF);
             const content_scale: apprt.ContentScale = .{

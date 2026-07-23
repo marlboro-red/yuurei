@@ -828,7 +828,16 @@ pub const MAX_PATH: usize = 260;
 // DWM
 pub const DWMWA_USE_IMMERSIVE_DARK_MODE: DWORD = 20;
 pub const DWMWA_WINDOW_CORNER_PREFERENCE: DWORD = 33;
+pub const DWMWA_SYSTEMBACKDROP_TYPE: DWORD = 38;
+pub const DWMSBT_TABBEDWINDOW: u32 = 4; // Mica Alt
 pub extern "dwmapi" fn DwmGetColorizationColor(*DWORD, *BOOL) callconv(.winapi) i32;
+pub const MARGINS = extern struct {
+    cxLeftWidth: i32 = 0,
+    cxRightWidth: i32 = 0,
+    cyTopHeight: i32 = 0,
+    cyBottomHeight: i32 = 0,
+};
+pub extern "dwmapi" fn DwmExtendFrameIntoClientArea(HWND, *const MARGINS) callconv(.winapi) i32;
 pub const DWMWCP_ROUND: u32 = 2;
 pub const DWMWCP_ROUNDSMALL: u32 = 3;
 pub extern "dwmapi" fn DwmSetWindowAttribute(
