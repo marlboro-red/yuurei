@@ -12,6 +12,8 @@ const datastruct = @import("../../datastruct/main.zig");
 const App = @import("App.zig");
 const Surface = @import("Surface.zig");
 const CommandPalette = @import("CommandPalette.zig");
+const ProfileMenu = @import("ProfileMenu.zig");
+const profiles = @import("profiles.zig");
 const SearchBar = @import("SearchBar.zig");
 const winapi = @import("winapi.zig");
 const perf = @import("../../perf.zig");
@@ -130,6 +132,9 @@ tooltip_hash: u64 = 0,
 /// The command palette popup while it is open.
 palette: ?*CommandPalette = null,
 
+/// The profile dropdown popup while it is open.
+profile_menu: ?*ProfileMenu = null,
+
 /// The search bar while a search is active.
 search: ?*SearchBar = null,
 
@@ -165,6 +170,7 @@ const Hover = union(enum) {
     tab: usize,
     tab_close: usize,
     new_tab,
+    new_tab_chevron,
 };
 
 const StripFonts = struct {
@@ -192,6 +198,7 @@ const caption_button_width_logical: i32 = 46;
 pub const scrollbar_width_logical: i32 = 12;
 const tab_width_logical: i32 = 190;
 const new_tab_width_logical: i32 = 36;
+const new_tab_chevron_width_logical: i32 = 16;
 /// Default window size in logical (96-dpi) pixels, scaled to the
 /// monitor DPI at creation so the window isn't tiny on high-DPI
 /// displays (window-width/height config overrides via initial_size).
@@ -385,6 +392,7 @@ pub fn destroy(self: *Window) void {
     const alloc = self.app.core_app.alloc;
     self.rename_buf.deinit(alloc);
     if (self.palette) |palette| palette.destroy();
+    if (self.profile_menu) |menu| menu.destroy();
     if (self.search) |search| search.destroy();
     if (self.fonts) |f| {
         if (f.text) |t| _ = winapi.DeleteObject(t);
@@ -408,12 +416,12 @@ fn closeAllTabs(self: *Window) void {
 
 /// Create a new surface (with its GL host) owned by a fresh
 /// single-leaf tree. The tree holds the only reference on return.
-fn newSurfaceTree(self: *Window) !Tree {
+fn newSurfaceTree(self: *Window, profile: ?*const profiles.Profile) !Tree {
     const alloc = self.app.core_app.alloc;
     const surface = try alloc.create(Surface);
     errdefer alloc.destroy(surface);
 
-    try surface.init(self.app, self);
+    try surface.init(self.app, self, profile);
     errdefer surface.deinit();
 
     const tree = try Tree.init(alloc, surface);
@@ -424,12 +432,30 @@ fn newSurfaceTree(self: *Window) !Tree {
 
 /// Create and activate a new tab.
 pub fn newTab(self: *Window) !*Surface {
+    return self.newTabWithProfile(null);
+}
+
+/// Create and activate a new tab running under the given profile (null
+/// = the base configuration, i.e. today's plain new tab).
+pub fn newTabWithProfile(
+    self: *Window,
+    profile: ?*const profiles.Profile,
+) !*Surface {
     const alloc = self.app.core_app.alloc;
-    var tree = try self.newSurfaceTree();
+    var tree = try self.newSurfaceTree(profile);
     errdefer tree.deinit();
 
     const surface = tree.nodes[0].leaf;
     try self.tabs.append(alloc, .{ .tree = tree, .focused = surface });
+
+    // Label the tab with the profile name (WT-style): clearer than the
+    // generic title, especially for shells that never set one. A
+    // manual rename still overwrites it.
+    if (profile) |p| {
+        self.tabs.items[self.tabs.items.len - 1].custom_title =
+            alloc.dupe(u8, p.name) catch null;
+    }
+
     self.activateTab(self.tabs.items.len - 1);
     return surface;
 }
@@ -689,6 +715,25 @@ pub fn removeSurface(self: *Window, surface: *Surface) void {
 /// the general actions. This is the fork's main discovery surface for
 /// users who don't know the keybinds — a lightweight substitute for a
 /// menu bar (macOS/GTK expose these elsewhere).
+/// Open the profile dropdown anchored under the new-tab chevron.
+fn openProfileMenu(self: *Window) void {
+    if (self.profile_menu != null) return;
+    const rect = self.newTabRect();
+    var pt: winapi.POINT = .{ .x = rect.left, .y = rect.bottom };
+    _ = winapi.ClientToScreen(self.hwnd, &pt);
+    self.profile_menu = ProfileMenu.create(
+        self.app.core_app.alloc,
+        self,
+        pt.x,
+        pt.y,
+    ) catch |err| {
+        if (err != error.NoProfiles)
+            log.err("error opening profile menu err={}", .{err});
+        return;
+    };
+    _ = winapi.SetFocus(self.profile_menu.?.hwnd);
+}
+
 fn showStripMenu(self: *Window, idx: ?usize) void {
     if (idx) |i| if (i >= self.tabs.items.len) return;
     const menu = winapi.CreatePopupMenu() orelse return;
@@ -1207,7 +1252,14 @@ pub fn newSplit(self: *Window, direction: apprt.action.SplitDirection) !*Surface
     const tab = self.activeTab() orelse return error.NoActiveTab;
     const handle = handleOf(&tab.tree, tab.focused) orelse return error.NoFocusedSurface;
 
-    var insert = try self.newSurfaceTree();
+    // Splits inherit the focused surface's profile (resolved by name;
+    // a since-removed profile falls back to the base config).
+    const profile: ?*const profiles.Profile = if (tab.focused.profile_name) |name|
+        self.app.ensureProfiles().byName(name)
+    else
+        null;
+
+    var insert = try self.newSurfaceTree(profile);
     defer insert.deinit();
     const surface = insert.nodes[0].leaf;
 
@@ -1537,7 +1589,9 @@ fn captionButtonRect(self: *const Window, button: CaptionButton) winapi.RECT {
 /// Width of one tab, shrinking when they no longer fit. Below a floor
 /// the tabs stop shrinking and the strip scrolls instead (tabScroll).
 fn tabWidth(self: *const Window) i32 {
-    const avail = self.tabsRegionRight() - self.scale(new_tab_width_logical);
+    const avail = self.tabsRegionRight() -
+        self.scale(new_tab_width_logical) -
+        self.scale(new_tab_chevron_width_logical);
     const n: i32 = @intCast(@max(1, self.tabs.items.len));
     return @max(self.scale(60), @min(self.scale(tab_width_logical), @divTrunc(avail, n)));
 }
@@ -1549,10 +1603,12 @@ fn tabsRegionRight(self: *const Window) i32 {
     return self.clientWidth() - 3 * self.scale(caption_button_width_logical);
 }
 
-/// Total width of all tabs plus the new-tab button, unscrolled.
+/// Total width of all tabs plus the split new-tab button, unscrolled.
 fn tabsContentWidth(self: *const Window) i32 {
     const n: i32 = @intCast(self.tabs.items.len);
-    return n * self.tabWidth() + self.scale(new_tab_width_logical);
+    return n * self.tabWidth() +
+        self.scale(new_tab_width_logical) +
+        self.scale(new_tab_chevron_width_logical);
 }
 
 /// Maximum horizontal scroll: how far the content overflows the region.
@@ -1601,6 +1657,18 @@ fn newTabRect(self: *const Window) winapi.RECT {
     };
 }
 
+/// The profile-dropdown chevron zone, immediately right of the + zone
+/// (together they form the WT-style split new-tab button).
+fn newTabChevronRect(self: *const Window) winapi.RECT {
+    const plus = self.newTabRect();
+    return .{
+        .left = plus.right,
+        .top = 0,
+        .right = plus.right + self.scale(new_tab_chevron_width_logical),
+        .bottom = self.titlebarHeight(),
+    };
+}
+
 /// Adjust tab_scroll so tab `idx` is fully visible in the strip region
 /// (called on activation so switching to an off-screen tab reveals it).
 fn scrollTabIntoView(self: *Window, idx: usize) void {
@@ -1633,6 +1701,7 @@ fn hitTestStrip(self: *const Window, x: i32, y: i32) Hover {
         if (inRect(x, y, self.tabRect(i))) return .{ .tab = i };
     }
     if (inRect(x, y, self.newTabRect())) return .new_tab;
+    if (inRect(x, y, self.newTabChevronRect())) return .new_tab_chevron;
     return .none;
 }
 
@@ -1957,6 +2026,26 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
             &glyph,
             1,
             &plus_rect,
+            winapi.DT_CENTER | winapi.DT_VCENTER | winapi.DT_SINGLELINE,
+        );
+
+        // Profile dropdown chevron beside it (the split half of the
+        // WT-style new-tab button); its own hover highlight so each
+        // zone reads as a distinct target.
+        var chev_rect = self.newTabChevronRect();
+        if (self.hover == .new_tab_chevron) {
+            const brush = winapi.CreateSolidBrush(tab_hover_bg);
+            if (brush) |b| {
+                defer _ = winapi.DeleteObject(b);
+                _ = winapi.FillRect(hdc, &chev_rect, b);
+            }
+        }
+        var chevron: [2:0]u16 = .{ 0xE70D, 0 }; // ChevronDown
+        _ = winapi.DrawTextW(
+            hdc,
+            &chevron,
+            1,
+            &chev_rect,
             winapi.DT_CENTER | winapi.DT_VCENTER | winapi.DT_SINGLELINE,
         );
     }
@@ -2841,6 +2930,7 @@ pub fn wndProc(
                         .new_tab => _ = self.newTab() catch |err| {
                             log.err("error creating tab err={}", .{err});
                         },
+                        .new_tab_chevron => self.openProfileMenu(),
                     }
                 }
                 // Right-click a tab for its context menu (Rename / Close).
@@ -2849,7 +2939,7 @@ pub fn wndProc(
                         .tab => |i| self.showStripMenu(i),
                         // Right-click on the empty strip or the new-tab
                         // button shows the general menu.
-                        .none, .new_tab => self.showStripMenu(null),
+                        .none, .new_tab, .new_tab_chevron => self.showStripMenu(null),
                         else => {},
                     }
                 }

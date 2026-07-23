@@ -449,6 +449,60 @@ pub extern "user32" fn SetClipboardData(UINT, HANDLE) callconv(.winapi) ?HANDLE;
 
 pub extern "kernel32" fn WaitForSingleObject(HANDLE, DWORD) callconv(.winapi) DWORD;
 pub extern "kernel32" fn CloseHandle(HANDLE) callconv(.winapi) BOOL;
+
+// Minimal process/pipe surface for capturing a child's stdout without
+// a console window (profile discovery runs `wsl -l -q`).
+pub const SECURITY_ATTRIBUTES = extern struct {
+    nLength: DWORD = @sizeOf(SECURITY_ATTRIBUTES),
+    lpSecurityDescriptor: ?*anyopaque = null,
+    bInheritHandle: BOOL = FALSE,
+};
+pub const STARTUPINFOW = extern struct {
+    cb: DWORD = @sizeOf(STARTUPINFOW),
+    lpReserved: ?[*:0]u16 = null,
+    lpDesktop: ?[*:0]u16 = null,
+    lpTitle: ?[*:0]u16 = null,
+    dwX: DWORD = 0,
+    dwY: DWORD = 0,
+    dwXSize: DWORD = 0,
+    dwYSize: DWORD = 0,
+    dwXCountChars: DWORD = 0,
+    dwYCountChars: DWORD = 0,
+    dwFillAttribute: DWORD = 0,
+    dwFlags: DWORD = 0,
+    wShowWindow: u16 = 0,
+    cbReserved2: u16 = 0,
+    lpReserved2: ?*u8 = null,
+    hStdInput: ?HANDLE = null,
+    hStdOutput: ?HANDLE = null,
+    hStdError: ?HANDLE = null,
+};
+pub const PROCESS_INFORMATION = extern struct {
+    hProcess: ?HANDLE = null,
+    hThread: ?HANDLE = null,
+    dwProcessId: DWORD = 0,
+    dwThreadId: DWORD = 0,
+};
+pub const STARTF_USESTDHANDLES: DWORD = 0x0100;
+pub const CREATE_NO_WINDOW: DWORD = 0x08000000;
+pub extern "kernel32" fn CreatePipe(*?HANDLE, *?HANDLE, ?*SECURITY_ATTRIBUTES, DWORD) callconv(.winapi) BOOL;
+pub extern "kernel32" fn SetHandleInformation(HANDLE, DWORD, DWORD) callconv(.winapi) BOOL;
+pub const HANDLE_FLAG_INHERIT: DWORD = 1;
+pub extern "kernel32" fn CreateProcessW(
+    ?[*:0]const u16,
+    ?[*:0]u16,
+    ?*SECURITY_ATTRIBUTES,
+    ?*SECURITY_ATTRIBUTES,
+    BOOL,
+    DWORD,
+    ?*anyopaque,
+    ?[*:0]const u16,
+    *STARTUPINFOW,
+    *PROCESS_INFORMATION,
+) callconv(.winapi) BOOL;
+pub extern "kernel32" fn ReadFile(HANDLE, [*]u8, DWORD, ?*DWORD, ?*anyopaque) callconv(.winapi) BOOL;
+pub extern "kernel32" fn TerminateProcess(HANDLE, UINT) callconv(.winapi) BOOL;
+pub extern "kernel32" fn SearchPathW(?[*:0]const u16, [*:0]const u16, ?[*:0]const u16, DWORD, [*]u16, ?*?[*:0]u16) callconv(.winapi) DWORD;
 pub extern "kernel32" fn GlobalAlloc(UINT, usize) callconv(.winapi) ?HANDLE;
 pub extern "kernel32" fn GlobalLock(HANDLE) callconv(.winapi) ?*anyopaque;
 pub extern "kernel32" fn GlobalUnlock(HANDLE) callconv(.winapi) BOOL;
@@ -766,9 +820,14 @@ pub const DT_VCENTER: UINT = 0x0004;
 pub const DT_SINGLELINE: UINT = 0x0020;
 pub const DT_LEFT: UINT = 0x0000;
 pub const DT_END_ELLIPSIS: UINT = 0x8000;
+pub const DT_NOPREFIX: UINT = 0x0800;
+pub const MAX_PATH: usize = 260;
 
 // DWM
 pub const DWMWA_USE_IMMERSIVE_DARK_MODE: DWORD = 20;
+pub const DWMWA_WINDOW_CORNER_PREFERENCE: DWORD = 33;
+pub const DWMWCP_ROUND: u32 = 2;
+pub const DWMWCP_ROUNDSMALL: u32 = 3;
 pub extern "dwmapi" fn DwmSetWindowAttribute(
     hwnd: HWND,
     attr: DWORD,

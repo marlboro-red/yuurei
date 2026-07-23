@@ -15,6 +15,8 @@ const Surface = @import("Surface.zig");
 const Window = @import("Window.zig");
 const CommandPalette = @import("CommandPalette.zig");
 const InspectorWindow = @import("InspectorWindow.zig");
+const ProfileMenu = @import("ProfileMenu.zig");
+const profiles = @import("profiles.zig");
 const Scrollbar = @import("Scrollbar.zig");
 const SearchBar = @import("SearchBar.zig");
 const SettingsWindow = @import("SettingsWindow.zig");
@@ -68,6 +70,11 @@ flip_capable: bool = false,
 /// ShowCursor keeps a process-global counter, so this must be tracked
 /// app-wide, not per-window, to avoid unbalanced hide/show calls.
 cursor_hidden: bool = false,
+
+/// Discovered shell profiles (profiles.zig), scanned lazily on first
+/// dropdown open (the WSL probe spawns a process) and invalidated on
+/// config reload so new overlay files appear without a restart.
+profiles_list: ?profiles.List = null,
 
 /// Deadline (std.time.milliTimestamp) for quitting after the last
 /// window closed, when quit-after-last-window-closed-delay is set.
@@ -152,6 +159,16 @@ pub fn init(
         .lpszClassName = CommandPalette.class_name,
     };
     if (winapi.RegisterClassExW(&palette_class) == 0) return error.RegisterClassFailed;
+
+    // The profile dropdown popup class.
+    const profile_menu_class: winapi.WNDCLASSEXW = .{
+        .style = winapi.CS_HREDRAW | winapi.CS_VREDRAW | winapi.CS_DROPSHADOW,
+        .lpfnWndProc = ProfileMenu.wndProc,
+        .hInstance = hinstance,
+        .hbrBackground = null,
+        .lpszClassName = ProfileMenu.class_name,
+    };
+    if (winapi.RegisterClassExW(&profile_menu_class) == 0) return error.RegisterClassFailed;
 
     // The inspector window class (CS_OWNDC for its WGL context).
     const inspector_class: winapi.WNDCLASSEXW = .{
@@ -266,8 +283,50 @@ pub fn terminate(self: *App) void {
     self.hotkey_actions.deinit(self.core_app.alloc);
     while (self.windows.pop()) |window| window.destroy();
     self.windows.deinit(self.core_app.alloc);
+    if (self.profiles_list) |*l| l.deinit();
     self.config.deinit();
     if (self.com_initialized) winapi.CoUninitialize();
+}
+
+/// The profile list, scanned on first use. See profiles.zig.
+pub fn ensureProfiles(self: *App) *const profiles.List {
+    if (self.profiles_list == null)
+        self.profiles_list = profiles.scan(self.core_app.alloc);
+    return &self.profiles_list.?;
+}
+
+/// Build the effective configuration for a profile: the standard load
+/// pipeline (defaults, config files, CLI args) with the profile laid
+/// on top before finalize, so a profile overlay behaves exactly like
+/// extra lines at the end of the user's config. Caller owns the
+/// result (deinit after the surface snapshot).
+pub fn profileConfig(
+    self: *App,
+    profile: *const profiles.Profile,
+) !Config {
+    const alloc_gpa = self.core_app.alloc;
+    var cfg = try Config.default(alloc_gpa);
+    errdefer cfg.deinit();
+    try cfg.loadDefaultFiles(alloc_gpa);
+    try cfg.loadCliArgs(alloc_gpa);
+
+    switch (profile.source) {
+        .file => |path| try cfg.loadFile(alloc_gpa, path),
+        .builtin => |cmdline| {
+            // Must go through the parse machinery (not a direct field
+            // assignment): finalize's theme handling replays the
+            // recorded config inputs over a fresh config, and only
+            // parsed inputs are recorded.
+            var buf: [512]u8 = undefined;
+            const arg = try std.fmt.bufPrint(&buf, "--command={s}", .{cmdline});
+            var iter = @import("../../cli.zig").args.sliceIterator(&.{arg});
+            try cfg.loadIter(alloc_gpa, &iter);
+        },
+    }
+
+    try cfg.loadRecursiveFiles(alloc_gpa);
+    try cfg.finalize();
+    return cfg;
 }
 
 /// Register every `global:`-flagged keybind as a Win32 system hotkey.
@@ -1209,6 +1268,17 @@ fn reloadConfig(
     // Update the existing config, be sure to clean up the old one.
     self.config.deinit();
     self.config = config;
+
+    // Profile overlay files may have changed; rescan on next use. An
+    // open dropdown holds pointers into the old list's arena, so close
+    // it first.
+    for (self.windows.items) |window| {
+        if (window.profile_menu) |menu| menu.destroy();
+    }
+    if (self.profiles_list) |*l| {
+        l.deinit();
+        self.profiles_list = null;
+    }
 
     // Window-level transparency/blur are applied by the apprt (not the
     // renderer), so re-apply them here for background-opacity /
