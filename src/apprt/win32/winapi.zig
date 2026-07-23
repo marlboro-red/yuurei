@@ -173,6 +173,7 @@ pub const WM_MOUSEHWHEEL: UINT = 0x020E;
 pub const WM_DPICHANGED: UINT = 0x02E0;
 pub const WM_SETCURSOR: UINT = 0x0020;
 pub const WM_SETTINGCHANGE: UINT = 0x001A;
+pub const WM_DWMCOLORIZATIONCOLORCHANGED: UINT = 0x0320;
 pub const WM_COMMAND: UINT = 0x0111;
 pub const WM_SETFONT: UINT = 0x0030;
 
@@ -827,6 +828,7 @@ pub const MAX_PATH: usize = 260;
 // DWM
 pub const DWMWA_USE_IMMERSIVE_DARK_MODE: DWORD = 20;
 pub const DWMWA_WINDOW_CORNER_PREFERENCE: DWORD = 33;
+pub extern "dwmapi" fn DwmGetColorizationColor(*DWORD, *BOOL) callconv(.winapi) i32;
 pub const DWMWCP_ROUND: u32 = 2;
 pub const DWMWCP_ROUNDSMALL: u32 = 3;
 pub extern "dwmapi" fn DwmSetWindowAttribute(

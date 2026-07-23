@@ -1872,6 +1872,24 @@ fn stripFonts(self: *Window) StripFonts {
     return f;
 }
 
+/// Cached system accent color as a COLORREF. The DWM query is cheap,
+/// but the strip repaints on every hover transition, so ask once and
+/// refresh only on WM_DWMCOLORIZATIONCOLORCHANGED.
+var accent_cache: ?u32 = null;
+
+fn systemAccentColor() u32 {
+    if (accent_cache) |c| return c;
+    var argb: winapi.DWORD = 0;
+    var opaque_blend: winapi.BOOL = 0;
+    const c: u32 = if (winapi.DwmGetColorizationColor(&argb, &opaque_blend) == 0)
+        // 0xAARRGGBB -> COLORREF (0x00BBGGRR)
+        ((argb & 0xFF) << 16) | (argb & 0xFF00) | ((argb >> 16) & 0xFF)
+    else
+        0x00D47800; // #0078D4, the stock Windows accent
+    accent_cache = c;
+    return c;
+}
+
 fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
     const height = self.titlebarHeight();
     var strip: winapi.RECT = .{
@@ -1887,6 +1905,8 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
     const tab_hover_bg: u32 = if (light) 0x00F0F0F0 else 0x00222222;
     const fg: u32 = if (light) 0x00000000 else 0x00FFFFFF;
     const fg_dim: u32 = if (light) 0x00505050 else 0x00B0B0B0;
+    const separator: u32 = if (light) 0x00C8C8C8 else 0x00333333;
+    const accent = systemAccentColor();
 
     const bg_brush = winapi.CreateSolidBrush(bg) orelse return;
     defer _ = winapi.DeleteObject(bg_brush);
@@ -1922,6 +1942,39 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
             if (brush) |b| {
                 defer _ = winapi.DeleteObject(b);
                 _ = winapi.FillRect(hdc, &rect, b);
+            }
+        }
+
+        // Active tab: a slim accent underline in the system accent
+        // color ties the strip to the user's Windows personalization.
+        if (active) {
+            var line = rect;
+            line.top = line.bottom - self.scale(2);
+            if (winapi.CreateSolidBrush(accent)) |b| {
+                defer _ = winapi.DeleteObject(b);
+                _ = winapi.FillRect(hdc, &line, b);
+            }
+        }
+
+        // Hairline separator on the left edge of an inactive tab when
+        // its left neighbor is also plain (WT-style): highlighted tabs
+        // delineate themselves.
+        if (i > 0 and !active and !hovered) {
+            const prev_plain = i - 1 != self.active_tab and
+                switch (self.hover) {
+                    .tab, .tab_close => |h| h != i - 1,
+                    else => true,
+                };
+            if (prev_plain) {
+                const inset = self.scale(11);
+                var sep = rect;
+                sep.right = sep.left + self.scale(1);
+                sep.top += inset;
+                sep.bottom -= inset;
+                if (winapi.CreateSolidBrush(separator)) |b| {
+                    defer _ = winapi.DeleteObject(b);
+                    _ = winapi.FillRect(hdc, &sep, b);
+                }
             }
         }
 
@@ -2607,6 +2660,14 @@ pub fn wndProc(
         winapi.WM_SETTINGCHANGE => {
             self.notifyColorScheme();
             return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+
+        // The user changed their accent color: drop the cache and
+        // repaint the strip (the active-tab underline uses it).
+        winapi.WM_DWMCOLORIZATIONCOLORCHANGED => {
+            accent_cache = null;
+            self.invalidateStrip();
+            return 0;
         },
 
         winapi.WM_IME_STARTCOMPOSITION => {
