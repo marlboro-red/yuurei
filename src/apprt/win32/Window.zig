@@ -1747,9 +1747,14 @@ fn inRect(x: i32, y: i32, r: winapi.RECT) bool {
 
 /// What lives at the given strip-area client coordinate.
 fn hitTestStrip(self: *const Window, x: i32, y: i32) Hover {
-    inline for (.{ .minimize, .maximize, .close }) |button| {
-        if (inRect(x, y, self.captionButtonRect(button)))
-            return .{ .caption = button };
+    // Under Mica the caption buttons are DWM's, hit-tested by
+    // DwmDefWindowProc before any of our handling; their region is
+    // nothing of ours.
+    if (!self.mica) {
+        inline for (.{ .minimize, .maximize, .close }) |button| {
+            if (inRect(x, y, self.captionButtonRect(button)))
+                return .{ .caption = button };
+        }
     }
     for (self.tabs.items, 0..) |_, i| {
         if (inRect(x, y, self.tabCloseRect(i))) return .{ .tab_close = i };
@@ -2383,8 +2388,8 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
     // Drop the tab clip before the caption buttons.
     if (clip_saved != 0) _ = winapi.RestoreDC(hdc, clip_saved);
 
-    // Caption buttons
-    if (glyph_font) |f| {
+    // Caption buttons (DWM draws the native ones under Mica)
+    if (!self.mica) if (glyph_font) |f| {
         const old = winapi.SelectObject(hdc, f);
         defer if (old) |o| {
             _ = winapi.SelectObject(hdc, o);
@@ -2435,7 +2440,7 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
             else
                 self.glassTextAlpha(rect, fg);
         }
-    }
+    };
 
     self.syncTabTooltips();
 }
@@ -2548,6 +2553,25 @@ pub fn wndProc(
         const ptr = winapi.GetWindowLongPtrW(hwnd, winapi.GWLP_USERDATA);
         if (ptr == 0) return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
         break :self @ptrFromInt(@as(usize, @bitCast(ptr)));
+    };
+
+    // Under Mica, DWM draws (and owns) the native caption buttons in
+    // the extended frame; DwmDefWindowProc hit-tests them, renders
+    // their hover states, and shows the snap-layouts flyout. Give it
+    // first refusal on the NC messages it cares about; everywhere it
+    // declines, our handling below proceeds unchanged.
+    if (self.mica) switch (msg) {
+        winapi.WM_NCHITTEST,
+        winapi.WM_NCMOUSEMOVE,
+        winapi.WM_NCMOUSELEAVE,
+        winapi.WM_NCLBUTTONDOWN,
+        winapi.WM_NCLBUTTONUP,
+        => {
+            var result: winapi.LRESULT = 0;
+            if (winapi.DwmDefWindowProc(hwnd, msg, wparam, lparam, &result) != 0)
+                return result;
+        },
+        else => {},
     };
 
     switch (msg) {

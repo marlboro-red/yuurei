@@ -838,6 +838,7 @@ pub const MARGINS = extern struct {
     cyBottomHeight: i32 = 0,
 };
 pub extern "dwmapi" fn DwmExtendFrameIntoClientArea(HWND, *const MARGINS) callconv(.winapi) i32;
+pub extern "dwmapi" fn DwmDefWindowProc(HWND, UINT, WPARAM, LPARAM, *LRESULT) callconv(.winapi) BOOL;
 pub const DWMWCP_ROUND: u32 = 2;
 pub const DWMWCP_ROUNDSMALL: u32 = 3;
 pub extern "dwmapi" fn DwmSetWindowAttribute(
