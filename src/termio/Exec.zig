@@ -640,7 +640,22 @@ const Subprocess = struct {
         //
         // For now, we just look up a bundled dir but in the future we should
         // also load the terminfo database and look for it.
-        if (cfg.resources_dir) |base| {
+        if (comptime builtin.os.tag == .windows) {
+            // On Windows no client can resolve xterm-ghostty: we bundle
+            // only the terminfo *source* (no tic-compiled database), and
+            // MSYS/Cygwin tools (e.g. git's `less`) consult their own
+            // database, which predates ghostty. Advertising it makes
+            // `git log` warn "terminal is not fully functional" and page
+            // in dumb mode. ConPTY mediates the VT dialect anyway, so
+            // advertise the universally-known xterm-256color instead —
+            // unless the user explicitly configured a different term.
+            const term = if (std.mem.eql(u8, cfg.term, "xterm-ghostty"))
+                "xterm-256color"
+            else
+                cfg.term;
+            try env.put("TERM", term);
+            try env.put("COLORTERM", "truecolor");
+        } else if (cfg.resources_dir) |base| {
             try env.put("TERM", cfg.term);
             try env.put("COLORTERM", "truecolor");
 
