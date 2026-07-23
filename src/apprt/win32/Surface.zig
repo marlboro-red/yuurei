@@ -113,7 +113,7 @@ pub fn init(
     self: *Self,
     app: *App,
     window: *Window,
-    profile: ?*const profiles.Profile,
+    spawn_opts: Window.SpawnOpts,
 ) !void {
     // The GL host child fills the client area below the title strip.
     // It is created hidden; activateTab shows the active one.
@@ -209,20 +209,21 @@ pub fn init(
     try app.core_app.addSurface(self);
     errdefer app.core_app.deleteSurface(self);
 
-    // The base configuration: the app's, or — under a profile — the
-    // profile overlay applied via the standard load pipeline. A failed
-    // overlay falls back to the base config rather than failing the
-    // spawn.
-    var profile_base: ?configpkg.Config = if (profile) |p|
-        app.profileConfig(p) catch |err| base: {
-            log.warn("profile config failed, using base config err={}", .{err});
+    // The base configuration: the app's, or — under a profile or
+    // restore override — the overlay applied via the standard load
+    // pipeline. A failed overlay falls back to the base config rather
+    // than failing the spawn.
+    var profile_base: ?configpkg.Config = if (spawn_opts.profile != null or
+        spawn_opts.cwd != null)
+        app.spawnConfig(spawn_opts) catch |err| base: {
+            log.warn("spawn config failed, using base config err={}", .{err});
             break :base null;
         }
     else
         null;
     defer if (profile_base) |*c| c.deinit();
 
-    if (profile) |p| {
+    if (spawn_opts.profile) |p| {
         self.profile_name = app.core_app.alloc.dupeZ(u8, p.name) catch null;
     }
     errdefer if (self.profile_name) |n| {
@@ -230,8 +231,13 @@ pub fn init(
         self.profile_name = null;
     };
 
-    // Get our new surface config
-    var config = try apprt.surface.newConfig(
+    // Get our new surface config. With an explicit cwd override
+    // (session restore), skip newConfig's working-directory
+    // inheritance — it would clobber the override with the focused
+    // surface's pwd.
+    var config = if (spawn_opts.cwd != null and profile_base != null)
+        profile_base.?.shallowClone(app.core_app.alloc)
+    else try apprt.surface.newConfig(
         app.core_app,
         if (profile_base) |*c| c else &app.config,
         .window,

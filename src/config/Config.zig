@@ -2038,6 +2038,13 @@ keybind: Keybinds = .{},
 /// strip. Live-reloadable.
 @"windows-titlebar-thin": bool = false,
 
+/// Windows: restore the previous session at startup. Tabs (their
+/// profile, working directory, and manual titles) are recorded when a
+/// window is closed or the app quits, and reopened on the next
+/// launch. Splits within a tab are not yet restored (the tab reopens
+/// as its focused pane).
+@"windows-restore-session": bool = false,
+
 /// If true, new windows will inherit the working directory of the
 /// previously focused window. If no window was previously focused, the default
 /// working directory will be used (the `working-directory` option).

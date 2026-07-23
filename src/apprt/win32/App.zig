@@ -17,6 +17,7 @@ const CommandPalette = @import("CommandPalette.zig");
 const InspectorWindow = @import("InspectorWindow.zig");
 const ProfileMenu = @import("ProfileMenu.zig");
 const profiles = @import("profiles.zig");
+const session = @import("session.zig");
 const Scrollbar = @import("Scrollbar.zig");
 const SearchBar = @import("SearchBar.zig");
 const SettingsWindow = @import("SettingsWindow.zig");
@@ -295,14 +296,18 @@ pub fn ensureProfiles(self: *App) *const profiles.List {
     return &self.profiles_list.?;
 }
 
-/// Build the effective configuration for a profile: the standard load
-/// pipeline (defaults, config files, CLI args) with the profile laid
-/// on top before finalize, so a profile overlay behaves exactly like
-/// extra lines at the end of the user's config. Caller owns the
-/// result (deinit after the surface snapshot).
-pub fn profileConfig(
+/// Build the effective configuration for a spawn override (profile
+/// and/or working directory): the standard load pipeline (defaults,
+/// config files, CLI args) with the overrides laid on top before
+/// finalize, so they behave exactly like extra lines at the end of
+/// the user's config. Everything goes through the parse machinery
+/// (never direct field assignment): finalize's theme handling replays
+/// the recorded config inputs over a fresh config, and only parsed
+/// inputs are recorded. Caller owns the result (deinit after the
+/// surface snapshot).
+pub fn spawnConfig(
     self: *App,
-    profile: *const profiles.Profile,
+    opts: Window.SpawnOpts,
 ) !Config {
     const alloc_gpa = self.core_app.alloc;
     var cfg = try Config.default(alloc_gpa);
@@ -310,18 +315,21 @@ pub fn profileConfig(
     try cfg.loadDefaultFiles(alloc_gpa);
     try cfg.loadCliArgs(alloc_gpa);
 
-    switch (profile.source) {
+    if (opts.profile) |profile| switch (profile.source) {
         .file => |path| try cfg.loadFile(alloc_gpa, path),
         .builtin => |cmdline| {
-            // Must go through the parse machinery (not a direct field
-            // assignment): finalize's theme handling replays the
-            // recorded config inputs over a fresh config, and only
-            // parsed inputs are recorded.
             var buf: [512]u8 = undefined;
             const arg = try std.fmt.bufPrint(&buf, "--command={s}", .{cmdline});
             var iter = @import("../../cli.zig").args.sliceIterator(&.{arg});
             try cfg.loadIter(alloc_gpa, &iter);
         },
+    };
+
+    if (opts.cwd) |cwd| {
+        var buf: [1024]u8 = undefined;
+        const arg = try std.fmt.bufPrint(&buf, "--working-directory={s}", .{cwd});
+        var iter = @import("../../cli.zig").args.sliceIterator(&.{arg});
+        try cfg.loadIter(alloc_gpa, &iter);
     }
 
     try cfg.loadRecursiveFiles(alloc_gpa);
@@ -553,8 +561,10 @@ pub fn run(self: *App) !void {
             continue;
         }
 
-        // If the tick caused us to quit, then we're done.
+        // If the tick caused us to quit, then we're done. Snapshot the
+        // session first, while every window is still alive.
         if (self.quit) {
+            session.save(self);
             while (self.windows.pop()) |window| window.destroy();
             return;
         }
@@ -628,10 +638,18 @@ pub fn performAction(
             self.wakeup();
         },
 
-        .new_window => _ = try self.newSurface(switch (target) {
-            .app => null,
-            .surface => |v| v,
-        }),
+        .new_window => {
+            const parent: ?*CoreSurface = switch (target) {
+                .app => null,
+                .surface => |v| v,
+            };
+            // The launch window: restore the previous session when
+            // configured; fall through to the default on any failure.
+            if (parent == null and self.windows.items.len == 0) {
+                if (session.restore(self) != null) return true;
+            }
+            _ = try self.newSurface(parent);
+        },
 
         .new_tab => switch (target) {
             // No focused surface: a tab in no window is a window.

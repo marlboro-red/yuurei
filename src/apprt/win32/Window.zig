@@ -351,26 +351,9 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
         null,
     );
 
-    // DPI-scale the default window size BEFORE the first tab exists.
-    // The window was created at a fixed 800x600 physical size (tiny on
-    // a high-DPI monitor); growing it here — while the client is still
-    // empty — means newTab() creates the ConPTY/shell at the final grid
-    // instead of starting small and reflowing on a later resize, which
-    // scrolls the shell banner. maximize/fullscreen override the size,
-    // so skip it for those.
-    if (!opts.no_initial_tab and !opts.quick and
-        !app.config.maximize and app.config.fullscreen == .false)
-    {
-        _ = winapi.SetWindowPos(
-            hwnd,
-            null,
-            0,
-            0,
-            self.scale(default_window_width_logical),
-            self.scale(default_window_height_logical),
-            winapi.SWP_NOMOVE | winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
-        );
-    }
+    // DPI-scale the default window size BEFORE the first tab exists
+    // (see applyDefaultSize: the shell must spawn at the final grid).
+    if (!opts.no_initial_tab and !opts.quick) self.applyDefaultSize();
 
     if (!opts.no_initial_tab) _ = try self.newTab();
     errdefer self.closeAllTabs();
@@ -394,33 +377,10 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
     self.applyBackdrop();
 
     // Startup geometry from config, for a normal (non-quick, non-
-    // tear-off) window: a DPI-scaled default size, an explicit
-    // position, then maximized or the default placement.
+    // tear-off) window: an explicit position, then maximized or the
+    // default placement.
     if (!opts.no_initial_tab and !opts.quick) {
-        // Position is honored only when BOTH coordinates are set, per
-        // the documented behavior. (The DPI-scaled default size was
-        // already applied above, before the first tab, so the shell
-        // never sees a startup reflow.)
-        if (app.config.@"window-position-x") |px| {
-            if (app.config.@"window-position-y") |py| {
-                _ = winapi.SetWindowPos(
-                    hwnd,
-                    null,
-                    px,
-                    py,
-                    0,
-                    0,
-                    winapi.SWP_NOZORDER | winapi.SWP_NOSIZE | winapi.SWP_NOACTIVATE,
-                );
-            }
-        }
-        const show: i32 = if (app.config.maximize)
-            winapi.SW_MAXIMIZE
-        else
-            winapi.SW_SHOWDEFAULT;
-        _ = winapi.ShowWindow(hwnd, show);
-        // Borderless fullscreen at startup (any non-false value).
-        if (app.config.fullscreen != .false) self.toggleFullscreen();
+        self.applyStartupShow();
     } else if (!opts.no_initial_tab) {
         _ = winapi.ShowWindow(hwnd, winapi.SW_SHOWDEFAULT);
     }
@@ -461,14 +421,21 @@ fn closeAllTabs(self: *Window) void {
     }
 }
 
+/// How to spawn a surface: under a profile, in a specific working
+/// directory (session restore), or plainly (all defaults).
+pub const SpawnOpts = struct {
+    profile: ?*const profiles.Profile = null,
+    cwd: ?[]const u8 = null,
+};
+
 /// Create a new surface (with its GL host) owned by a fresh
 /// single-leaf tree. The tree holds the only reference on return.
-fn newSurfaceTree(self: *Window, profile: ?*const profiles.Profile) !Tree {
+fn newSurfaceTree(self: *Window, opts: SpawnOpts) !Tree {
     const alloc = self.app.core_app.alloc;
     const surface = try alloc.create(Surface);
     errdefer alloc.destroy(surface);
 
-    try surface.init(self.app, self, profile);
+    try surface.init(self.app, self, opts);
     errdefer surface.deinit();
 
     const tree = try Tree.init(alloc, surface);
@@ -479,7 +446,7 @@ fn newSurfaceTree(self: *Window, profile: ?*const profiles.Profile) !Tree {
 
 /// Create and activate a new tab.
 pub fn newTab(self: *Window) !*Surface {
-    return self.newTabWithProfile(null);
+    return self.newTabWithOpts(.{});
 }
 
 /// Create and activate a new tab running under the given profile (null
@@ -488,8 +455,12 @@ pub fn newTabWithProfile(
     self: *Window,
     profile: ?*const profiles.Profile,
 ) !*Surface {
+    return self.newTabWithOpts(.{ .profile = profile });
+}
+
+pub fn newTabWithOpts(self: *Window, opts: SpawnOpts) !*Surface {
     const alloc = self.app.core_app.alloc;
-    var tree = try self.newSurfaceTree(profile);
+    var tree = try self.newSurfaceTree(opts);
     errdefer tree.deinit();
 
     const surface = tree.nodes[0].leaf;
@@ -498,7 +469,7 @@ pub fn newTabWithProfile(
     // Label the tab with the profile name (WT-style): clearer than the
     // generic title, especially for shells that never set one. A
     // manual rename still overwrites it.
-    if (profile) |p| {
+    if (opts.profile) |p| {
         self.tabs.items[self.tabs.items.len - 1].custom_title =
             alloc.dupe(u8, p.name) catch null;
     }
@@ -1040,6 +1011,8 @@ pub fn requestCloseWindow(self: *Window) void {
         }
     }
     if (needs and !self.confirmClose()) return;
+    // Snapshot the session while this window's tabs are still alive.
+    @import("session.zig").save(self.app);
     self.should_close = true;
     self.app.wakeup();
 }
@@ -1340,7 +1313,7 @@ pub fn newSplit(self: *Window, direction: apprt.action.SplitDirection) !*Surface
     else
         null;
 
-    var insert = try self.newSurfaceTree(profile);
+    var insert = try self.newSurfaceTree(.{ .profile = profile });
     defer insert.deinit();
     const surface = insert.nodes[0].leaf;
 
@@ -1553,6 +1526,55 @@ pub fn isLight(self: *const Window) bool {
         .light => true,
         .auto, .system, .ghostty => winapi.appsUseLightTheme(),
     };
+}
+
+/// DPI-scale the default window size while the client is still empty:
+/// the window is created at a fixed 800x600 physical size (tiny on a
+/// high-DPI monitor), and growing it BEFORE any tab exists means the
+/// first ConPTY/shell spawns at the final grid instead of reflowing
+/// (which scrolls the shell banner). maximize/fullscreen override the
+/// size, so it is skipped for those. Also used by session restore.
+pub fn applyDefaultSize(self: *Window) void {
+    const app = self.app;
+    if (app.config.maximize or app.config.fullscreen != .false) return;
+    _ = winapi.SetWindowPos(
+        self.hwnd,
+        null,
+        0,
+        0,
+        self.scale(default_window_width_logical),
+        self.scale(default_window_height_logical),
+        winapi.SWP_NOMOVE | winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
+    );
+}
+
+/// Startup position and reveal for a normal window: the configured
+/// position (honored only when BOTH coordinates are set, per the
+/// documented behavior), then maximized or the default placement,
+/// then borderless fullscreen if configured. Also used by session
+/// restore.
+pub fn applyStartupShow(self: *Window) void {
+    const app = self.app;
+    if (app.config.@"window-position-x") |px| {
+        if (app.config.@"window-position-y") |py| {
+            _ = winapi.SetWindowPos(
+                self.hwnd,
+                null,
+                px,
+                py,
+                0,
+                0,
+                winapi.SWP_NOZORDER | winapi.SWP_NOSIZE | winapi.SWP_NOACTIVATE,
+            );
+        }
+    }
+    const show: i32 = if (app.config.maximize)
+        winapi.SW_MAXIMIZE
+    else
+        winapi.SW_SHOWDEFAULT;
+    _ = winapi.ShowWindow(self.hwnd, show);
+    // Borderless fullscreen at startup (any non-false value).
+    if (app.config.fullscreen != .false) self.toggleFullscreen();
 }
 
 /// Apply (or remove) the Mica Alt backdrop to match the current
