@@ -107,23 +107,80 @@ fn dismiss(self: *CommandPalette) void {
     _ = winapi.SetFocus(window.hwnd);
 }
 
-/// Perform the selected command on the parent's focused surface.
+/// Perform the selected entry: a core command on the focused surface,
+/// or a profile spawn for the appended profile rows.
 fn execute(self: *CommandPalette) void {
     const window = self.window;
-    const action: ?input.Binding.Action = if (self.matches.items.len > 0)
-        self.commands()[self.matches.items[self.selected]].action
-    else
-        null;
-    self.dismiss();
+    if (self.matches.items.len == 0) return self.dismiss();
+    const idx = self.matches.items[self.selected];
+    const cmds = self.commands();
 
+    if (idx >= cmds.len) {
+        const pi = idx - cmds.len;
+        self.dismiss();
+        const list = window.app.ensureProfiles();
+        if (pi < list.items.len) {
+            _ = window.newTabWithProfile(&list.items[pi]) catch |err| {
+                log.err("error opening profile tab err={}", .{err});
+            };
+        }
+        return;
+    }
+
+    const action = cmds[idx].action;
+    self.dismiss();
     const surface = window.activeSurface() orelse return;
-    _ = surface.core_surface.performBindingAction(action orelse return) catch |err| {
+    _ = surface.core_surface.performBindingAction(action) catch |err| {
         log.err("error performing palette action err={}", .{err});
     };
 }
 
 fn commands(self: *const CommandPalette) []const input.Command {
     return self.window.app.config.@"command-palette-entry".value.items;
+}
+
+/// A resolved palette row: core commands first, then one "New Tab:"
+/// row per profile.
+const EntryRef = struct {
+    title: []const u8,
+    description: []const u8,
+    action: ?input.Binding.Action,
+    /// Shortcut label override for profile rows (core rows resolve
+    /// theirs from the keybind set).
+    label: ?[]const u8,
+};
+
+fn entryCount(self: *const CommandPalette) usize {
+    return self.commands().len +
+        self.window.app.ensureProfiles().items.len;
+}
+
+fn entryAt(
+    self: *const CommandPalette,
+    i: usize,
+    title_buf: []u8,
+    label_buf: []u8,
+) EntryRef {
+    const cmds = self.commands();
+    if (i < cmds.len) return .{
+        .title = cmds[i].title,
+        .description = cmds[i].description,
+        .action = cmds[i].action,
+        .label = null,
+    };
+    const list = self.window.app.ensureProfiles();
+    const pi = i - cmds.len;
+    const p = &list.items[pi];
+    return .{
+        .title = std.fmt.bufPrint(title_buf, "New Tab: {s}", .{p.name}) catch
+            p.name,
+        .description = p.hint,
+        .action = null,
+        .label = if (pi < 9)
+            std.fmt.bufPrint(label_buf, "ctrl+shift+{d}", .{pi + 1}) catch null
+        else
+            null,
+    };
 }
 
 /// The keybinding bound to `action`, formatted (e.g. "ctrl+shift+p"),
@@ -198,14 +255,17 @@ fn refilter(self: *CommandPalette) void {
     var scored: std.ArrayList(Scored) = .empty;
     defer scored.deinit(alloc);
 
-    for (self.commands(), 0..) |cmd, i| {
+    var title_buf: [256]u8 = undefined;
+    var label_buf: [32]u8 = undefined;
+    for (0..self.entryCount()) |i| {
+        const entry = self.entryAt(i, &title_buf, &label_buf);
         if (needle.len == 0) {
             scored.append(alloc, .{ .i = i, .score = 0 }) catch return;
             continue;
         }
         // Best of title (preferred) and description (penalized).
-        var best: ?i32 = fuzzyScore(needle, cmd.title);
-        if (fuzzyScore(needle, cmd.description)) |d| {
+        var best: ?i32 = fuzzyScore(needle, entry.title);
+        if (fuzzyScore(needle, entry.description)) |d| {
             const dp = d - 8;
             if (best == null or dp > best.?) best = dp;
         }
@@ -390,10 +450,11 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
     }
 
     // Match rows: title with the description below it, dim.
-    const cmds = self.commands();
     const end = @min(self.scroll + self.visibleRows(), self.matches.items.len);
     for (self.matches.items[self.scroll..end], self.scroll..) |cmd_idx, row| {
-        const cmd = cmds[cmd_idx];
+        var title_buf: [256]u8 = undefined;
+        var label_buf: [32]u8 = undefined;
+        const cmd = self.entryAt(cmd_idx, &title_buf, &label_buf);
         const top = input_h + @as(i32, @intCast(row - self.scroll)) * row_h;
 
         if (row == self.selected) {
@@ -413,7 +474,10 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
         // The keybinding accelerator (right-aligned on the title line);
         // reserve room on the title's right so it doesn't overlap.
         var kb_buf: [64]u8 = undefined;
-        const kb_label = self.keybindLabel(cmd.action, &kb_buf);
+        const kb_label = cmd.label orelse if (cmd.action) |action|
+            self.keybindLabel(action, &kb_buf)
+        else
+            null;
         const kb_reserve: i32 = if (kb_label != null) window.scale(120) else 0;
         const title_bottom = top + @divTrunc(row_h, 2) + window.scale(4);
 

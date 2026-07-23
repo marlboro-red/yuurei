@@ -797,6 +797,30 @@ fn showStripMenu(self: *Window, idx: ?usize) void {
         _ = winapi.AppendMenuW(menu, winapi.MF_SEPARATOR, 0, null);
     }
     _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 10, S("New Tab"));
+
+    // "New Tab with Profile" submenu (IDs 100+i map into the list).
+    // Once appended with MF_POPUP the parent owns the submenu; the
+    // outer DestroyMenu tears it down too.
+    const profile_list = self.app.ensureProfiles();
+    if (profile_list.items.len > 0) {
+        if (winapi.CreatePopupMenu()) |pm| {
+            var buf: [128:0]u16 = undefined;
+            for (profile_list.items, 0..) |*p, i| {
+                if (i >= 32) break;
+                const n = std.unicode.utf8ToUtf16Le(&buf, p.name) catch 0;
+                if (n == 0) continue;
+                buf[@min(n, buf.len - 1)] = 0;
+                _ = winapi.AppendMenuW(pm, winapi.MF_STRING, 100 + i, &buf);
+            }
+            if (winapi.AppendMenuW(
+                menu,
+                winapi.MF_POPUP,
+                @intFromPtr(pm),
+                S("New Tab with Profile"),
+            ) == 0) _ = winapi.DestroyMenu(pm);
+        }
+    }
+
     _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 11, S("New Split Right"));
     _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 12, S("New Split Down"));
     _ = winapi.AppendMenuW(menu, winapi.MF_SEPARATOR, 0, null);
@@ -829,7 +853,14 @@ fn showStripMenu(self: *Window, idx: ?usize) void {
         13 => self.togglePalette() catch |err| log.err("menu palette err={}", .{err}),
         14 => _ = self.app.performAction(.app, .open_config, {}) catch |err|
             log.err("menu settings err={}", .{err}),
-        else => {},
+        else => if (cmd >= 100) {
+            const list = self.app.ensureProfiles();
+            const i: usize = @intCast(cmd - 100);
+            if (i < list.items.len) {
+                _ = self.newTabWithProfile(&list.items[i]) catch |err|
+                    log.err("menu profile tab err={}", .{err});
+            }
+        },
     }
 }
 
@@ -3504,6 +3535,30 @@ fn keyEvent(
     if (self.altgr_down) {
         mods.ctrl = false;
         mods.alt = false;
+    }
+
+    // Fork shortcut: ctrl+shift+1..9 opens the Nth profile (WT-style),
+    // unless the user bound that chord to something else themselves.
+    if (action == .press and mods.ctrl and mods.shift and
+        !mods.alt and !mods.super and vk >= '1' and vk <= '9')
+    profile: {
+        const set = &self.app.config.keybind.set;
+        const chord: input.Mods = .{ .ctrl = true, .shift = true };
+        const digit_key: input.Key = @enumFromInt(
+            @intFromEnum(input.Key.digit_1) + (vk - '1'),
+        );
+        if (set.get(.{ .mods = chord, .key = .{ .physical = digit_key } }) != null)
+            break :profile;
+        if (set.get(.{ .mods = chord, .key = .{ .unicode = vk } }) != null)
+            break :profile;
+        const list = self.app.ensureProfiles();
+        const i: usize = vk - '1';
+        if (i >= list.items.len) break :profile;
+        // Swallow the paired WM_CHAR too.
+        self.pending_key_event = null;
+        _ = self.newTabWithProfile(&list.items[i]) catch |err|
+            log.err("profile shortcut err={}", .{err});
+        return;
     }
 
     // Keybind triggers match on the unshifted codepoint; derive it from
