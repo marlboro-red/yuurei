@@ -145,7 +145,19 @@ fn detectShell(alloc: Allocator, command: config.Command) !?Shell {
     defer arg_iter.deinit();
 
     const arg0 = arg_iter.next() orelse return null;
-    const exe = std.fs.path.basename(arg0);
+    const exe_raw = std.fs.path.basename(arg0);
+
+    // On Windows executable names carry .exe and case is not
+    // significant (Git's MINGW bash is "bash.exe"); normalize so every
+    // shell comparison below matches, not just the pwsh branch.
+    var exe_buf: [32]u8 = undefined;
+    const exe = exe: {
+        if (comptime builtin.os.tag != .windows) break :exe exe_raw;
+        if (exe_raw.len > exe_buf.len) break :exe exe_raw;
+        var name: []const u8 = std.ascii.lowerString(&exe_buf, exe_raw);
+        if (std.mem.endsWith(u8, name, ".exe")) name = name[0 .. name.len - 4];
+        break :exe name;
+    };
 
     if (std.mem.eql(u8, "bash", exe)) {
         // Apple distributes their own patched version of Bash 3.2
@@ -201,6 +213,14 @@ test detectShell {
 
     try testing.expectEqual(.bash, try detectShell(alloc, .{ .shell = "bash -c 'command'" }));
     try testing.expectEqual(.bash, try detectShell(alloc, .{ .shell = "\"/a b/bash\"" }));
+
+    if (comptime builtin.target.os.tag == .windows) {
+        try testing.expectEqual(.bash, try detectShell(
+            alloc,
+            .{ .shell = "C:\\PROGRA~1\\Git\\bin\\bash.exe -i -l" },
+        ));
+        try testing.expectEqual(.nushell, try detectShell(alloc, .{ .shell = "NU.EXE" }));
+    }
 }
 
 /// Set up the shell integration features environment variable.
