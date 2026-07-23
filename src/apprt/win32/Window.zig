@@ -154,6 +154,11 @@ utf8_buf: [4]u8 = undefined,
 /// Pending high surrogate from WM_CHAR, awaiting its low half.
 high_surrogate: ?u16 = null,
 
+/// Whether the ctrl currently reported down by GetKeyState is the one
+/// Windows injects for AltGr (see keyEvent): while true, ctrl+alt are
+/// stripped from key event mods so AltGr chords report clean.
+altgr_down: bool = false,
+
 const Hover = union(enum) {
     none,
     caption: CaptionButton,
@@ -2561,6 +2566,10 @@ pub fn wndProc(
             return 0;
         },
 
+        // Dead keys: keyEvent already reported the composing keydown;
+        // the accent codepoint itself must not reach the terminal.
+        winapi.WM_DEADCHAR, winapi.WM_SYSDEADCHAR => return 0,
+
         winapi.WM_MOUSEWHEEL, winapi.WM_MOUSEHWHEEL => {
             // Wheel scrolls the surface under the cursor (lparam here
             // is in screen coordinates).
@@ -2933,11 +2942,38 @@ fn keyEvent(
     // Key-to-present latency tracing (GHOSTTY_PERF_TRACE).
     if (action == .press) perf.keyPress();
 
-    // TODO: windows: AltGr discrimination (lParam bit 24 + scancode)
-    // so AltGr chords report clean mods on the text-less keydown. The
-    // text path is already correct: charEvent clears ctrl+alt when the
-    // layout produced a printable character.
-    const mods = currentMods();
+    // AltGr discrimination. On layouts with AltGr, Windows injects a
+    // left-ctrl keydown immediately before right-alt's keydown, sharing
+    // its message timestamp -- that pairing is the discriminator (the
+    // same technique Chromium uses). Swallow the injected ctrl events
+    // and strip ctrl+alt from mods while AltGr is held, so text-less
+    // AltGr chords don't trigger ctrl+alt keybinds or report dirty
+    // modifiers under the kitty keyboard protocol.
+    const extended = (lparam & (1 << 24)) != 0;
+    if (vk == winapi.VK_CONTROL and !extended) {
+        if (!released) {
+            if (self.altGrInjectedCtrl()) {
+                self.altgr_down = true;
+                return;
+            }
+            // An autorepeat of the injected ctrl can arrive without its
+            // paired right-alt repeat already queued; it is still not a
+            // genuine ctrl press.
+            if (self.altgr_down and was_down) return;
+            self.altgr_down = false;
+        } else if (self.altgr_down) {
+            // The paired injected release right before right-alt's up.
+            return;
+        }
+    }
+    if (vk == winapi.VK_MENU and extended and released)
+        self.altgr_down = false;
+
+    var mods = currentMods();
+    if (self.altgr_down) {
+        mods.ctrl = false;
+        mods.alt = false;
+    }
 
     // Keybind triggers match on the unshifted codepoint; derive it from
     // the layout. The high bit of VK_TO_CHAR flags a dead key.
@@ -2957,6 +2993,22 @@ fn keyEvent(
         .utf8 = "",
         .unshifted_codepoint = unshifted,
     };
+
+    // A dead key: TranslateMessage queued WM_DEADCHAR, not WM_CHAR.
+    // Report the keydown as composing -- the core then suppresses
+    // encoding the raw key (the kitty protocol would otherwise leak a
+    // spurious key event to TUIs) -- and clear any stash so the
+    // eventually composed WM_CHAR completes the *next* keydown, not
+    // this one. The WM_DEADCHAR itself is consumed in the wndproc.
+    if ((action == .press or action == .repeat) and self.deadCharQueued()) {
+        var composing = key_event;
+        composing.composing = true;
+        _ = tab.core_surface.keyCallback(composing) catch |err| {
+            log.err("error in key callback err={}", .{err});
+        };
+        self.pending_key_event = null;
+        return;
+    }
 
     // TranslateMessage has already queued the layout-cooked WM_CHAR(s)
     // for character-producing keys behind this keydown. When that text is
@@ -2989,6 +3041,46 @@ fn keyEvent(
     if (effect == .ignored and (action == .press or action == .repeat)) {
         self.pending_key_event = key_event;
     }
+}
+
+/// Whether the WM_KEYDOWN being handled is the left-ctrl press Windows
+/// injects for AltGr: the next queued key message is right-alt's
+/// keydown carrying the same timestamp. A genuine ctrl press has no
+/// such paired message.
+fn altGrInjectedCtrl(self: *Window) bool {
+    var msg: winapi.MSG = undefined;
+    if (winapi.PeekMessageW(
+        &msg,
+        self.hwnd,
+        winapi.WM_KEYFIRST,
+        winapi.WM_KEYLAST,
+        winapi.PM_NOREMOVE,
+    ) == 0) return false;
+    if (msg.message != winapi.WM_KEYDOWN and
+        msg.message != winapi.WM_SYSKEYDOWN) return false;
+    if (@as(u8, @truncate(msg.wParam)) != winapi.VK_MENU) return false;
+    if ((msg.lParam & (1 << 24)) == 0) return false;
+    return msg.time == @as(u32, @bitCast(winapi.GetMessageTime()));
+}
+
+/// Whether a dead-key WM_DEADCHAR is queued behind the keydown we're
+/// handling (TranslateMessage posts it before this dispatch).
+fn deadCharQueued(self: *Window) bool {
+    var msg: winapi.MSG = undefined;
+    if (winapi.PeekMessageW(
+        &msg,
+        self.hwnd,
+        winapi.WM_DEADCHAR,
+        winapi.WM_DEADCHAR,
+        winapi.PM_NOREMOVE,
+    ) != 0) return true;
+    return winapi.PeekMessageW(
+        &msg,
+        self.hwnd,
+        winapi.WM_SYSDEADCHAR,
+        winapi.WM_SYSDEADCHAR,
+        winapi.PM_NOREMOVE,
+    ) != 0;
 }
 
 /// Whether a printable WM_CHAR is sitting in the queue directly behind
