@@ -259,6 +259,27 @@ pub extern "advapi32" fn RegGetValueW(
     pcbData: ?*DWORD,
 ) callconv(.winapi) i32;
 
+// Registry writes for default-terminal registration (defterm.zig).
+pub const REG_SZ: DWORD = 1;
+pub const REG_DWORD: DWORD = 4;
+pub extern "advapi32" fn RegSetKeyValueW(
+    hkey: HKEY,
+    lpSubKey: ?[*:0]const u16,
+    lpValueName: ?[*:0]const u16,
+    dwType: DWORD,
+    lpData: ?*const anyopaque,
+    cbData: DWORD,
+) callconv(.winapi) i32;
+pub extern "advapi32" fn RegDeleteTreeW(
+    hkey: HKEY,
+    lpSubKey: ?[*:0]const u16,
+) callconv(.winapi) i32;
+pub extern "advapi32" fn RegDeleteKeyValueW(
+    hkey: HKEY,
+    lpSubKey: ?[*:0]const u16,
+    lpValueName: ?[*:0]const u16,
+) callconv(.winapi) i32;
+
 // Virtual keys (only those we map; see Surface.vkToKey)
 pub const VK_BACK: u8 = 0x08;
 pub const VK_TAB: u8 = 0x09;
@@ -506,6 +527,7 @@ pub extern "kernel32" fn ReadFile(HANDLE, [*]u8, DWORD, ?*DWORD, ?*anyopaque) ca
 pub extern "kernel32" fn TerminateProcess(HANDLE, UINT) callconv(.winapi) BOOL;
 pub extern "kernel32" fn SearchPathW(?[*:0]const u16, [*:0]const u16, ?[*:0]const u16, DWORD, [*]u16, ?*?[*:0]u16) callconv(.winapi) DWORD;
 pub extern "kernel32" fn GetShortPathNameW([*:0]const u16, [*]u16, DWORD) callconv(.winapi) DWORD;
+pub extern "kernel32" fn GetModuleFileNameW(?HANDLE, [*]u16, DWORD) callconv(.winapi) DWORD;
 pub extern "kernel32" fn GlobalAlloc(UINT, usize) callconv(.winapi) ?HANDLE;
 pub extern "kernel32" fn GlobalLock(HANDLE) callconv(.winapi) ?*anyopaque;
 pub extern "kernel32" fn GlobalUnlock(HANDLE) callconv(.winapi) BOOL;
@@ -638,6 +660,33 @@ pub const COINIT_APARTMENTTHREADED: DWORD = 0x2;
 pub const CLSCTX_INPROC_SERVER: DWORD = 0x1;
 pub extern "ole32" fn CoInitializeEx(?*anyopaque, DWORD) callconv(.winapi) HRESULT;
 pub extern "ole32" fn CoUninitialize() callconv(.winapi) void;
+pub const COINIT_MULTITHREADED: DWORD = 0x0;
+pub const CLSCTX_LOCAL_SERVER: DWORD = 0x4;
+pub const REGCLS_MULTIPLEUSE: DWORD = 1;
+pub const REGCLS_SUSPENDED: DWORD = 4;
+pub extern "ole32" fn CoRegisterClassObject(
+    *const GUID,
+    *anyopaque,
+    DWORD,
+    DWORD,
+    *DWORD,
+) callconv(.winapi) HRESULT;
+pub extern "ole32" fn CoRevokeClassObject(DWORD) callconv(.winapi) HRESULT;
+pub extern "ole32" fn CoResumeClassObjects() callconv(.winapi) HRESULT;
+pub extern "ole32" fn CoAddRefServerProcess() callconv(.winapi) u32;
+pub extern "ole32" fn CoReleaseServerProcess() callconv(.winapi) u32;
+pub const IID_IUnknown: GUID = .{
+    .Data1 = 0x00000000,
+    .Data2 = 0x0000,
+    .Data3 = 0x0000,
+    .Data4 = .{ 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 },
+};
+pub const IID_IClassFactory: GUID = .{
+    .Data1 = 0x00000001,
+    .Data2 = 0x0000,
+    .Data3 = 0x0000,
+    .Data4 = .{ 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 },
+};
 pub extern "ole32" fn CoCreateInstance(
     *const GUID,
     ?*anyopaque,

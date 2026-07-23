@@ -197,6 +197,11 @@ pub fn build(b: *std.Build) !void {
                     b.path("vendor/conpty/OpenConsole.exe"),
                     "OpenConsole.exe",
                 ).step);
+                // Default-terminal handoff marshaling (vendor/defterm).
+                b.getInstallStep().dependOn(&b.addInstallBinFile(
+                    b.path("vendor/defterm/yuurei-defterm-proxy.dll"),
+                    "yuurei-defterm-proxy.dll",
+                ).step);
             }
         }
     } else if (!config.emit_lib_vt) {

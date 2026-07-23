@@ -20,6 +20,7 @@ const validate_config = @import("validate_config.zig");
 const crash_report = @import("crash_report.zig");
 const show_face = @import("show_face.zig");
 const boo = @import("boo.zig");
+const defterm = @import("defterm.zig");
 const new_window = @import("new_window.zig");
 const toggle_quick_terminal = @import("toggle_quick_terminal.zig");
 
@@ -80,6 +81,9 @@ pub const Action = enum {
 
     // Use IPC to tell the running Ghostty to toggle the quick terminal.
     @"toggle-quick-terminal",
+
+    // Windows: register/unregister yuurei as the default terminal.
+    defterm,
 
     pub fn detectSpecialCase(arg: []const u8) ?SpecialCase(Action) {
         // If we see a "-e" and we haven't seen a command yet, then
@@ -162,6 +166,7 @@ pub const Action = enum {
             .boo => try boo.run(alloc),
             .@"new-window" => try new_window.run(alloc),
             .@"toggle-quick-terminal" => try toggle_quick_terminal.run(alloc),
+            .defterm => try defterm.run(alloc),
         };
     }
 
@@ -204,6 +209,7 @@ pub const Action = enum {
                 .boo => boo.Options,
                 .@"new-window" => new_window.Options,
                 .@"toggle-quick-terminal" => toggle_quick_terminal.Options,
+                .defterm => defterm.Options,
             };
         }
     }
