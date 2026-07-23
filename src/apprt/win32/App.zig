@@ -69,6 +69,15 @@ flip_capable: bool = false,
 /// app-wide, not per-window, to avoid unbalanced hide/show calls.
 cursor_hidden: bool = false,
 
+/// Deadline (std.time.milliTimestamp) for quitting after the last
+/// window closed, when quit-after-last-window-closed-delay is set.
+/// Null while windows exist or when no linger is in progress.
+quit_deadline_ms: ?i64 = null,
+
+/// Thread timer (SetTimer with a null hwnd) that wakes the run loop
+/// so the quit deadline is noticed; 0 when not armed.
+quit_timer_id: usize = 0,
+
 /// The shell taskbar-list object for OSC 9;4 progress, created lazily
 /// on the first progress report. null until then (or if COM/creation
 /// failed).
@@ -486,9 +495,52 @@ pub fn run(self: *App) !void {
         }
 
         // If the tick caused us to quit, then we're done.
-        if (self.quit or self.windows.items.len == 0) {
+        if (self.quit) {
             while (self.windows.pop()) |window| window.destroy();
             return;
+        }
+
+        if (self.windows.items.len == 0) {
+            // Honor quit-after-last-window-closed-delay: linger with
+            // the message loop alive (a `global:` hotkey can still
+            // summon the quick terminal) until the deadline passes.
+            // Flag off or no delay set quits immediately, as before.
+            const delay_ns: u64 = delay: {
+                if (!self.config.@"quit-after-last-window-closed")
+                    break :delay 0;
+                const d = self.config.@"quit-after-last-window-closed-delay" orelse
+                    break :delay 0;
+                break :delay d.duration;
+            };
+            if (delay_ns == 0) return;
+
+            const delay_ms: i64 = @intCast(@max(1, delay_ns / std.time.ns_per_ms));
+            const now = std.time.milliTimestamp();
+            if (self.quit_deadline_ms) |deadline| {
+                if (now >= deadline) return;
+            } else {
+                self.quit_deadline_ms = now + delay_ms;
+                // A thread timer wakes GetMessageW so the deadline is
+                // noticed even with no other message traffic. Its
+                // WM_TIMER (null hwnd, no callback) is dropped by
+                // DispatchMessage; only the wakeup matters. A margin
+                // past the deadline keeps the first firing from
+                // landing a hair early and doubling the linger.
+                self.quit_timer_id = winapi.SetTimer(
+                    null,
+                    0,
+                    @intCast(@max(1, delay_ns / std.time.ns_per_ms) + 100),
+                    null,
+                );
+            }
+        } else if (self.quit_deadline_ms != null) {
+            // A window appeared during the linger: cancel the pending
+            // quit.
+            self.quit_deadline_ms = null;
+            if (self.quit_timer_id != 0) {
+                _ = winapi.KillTimer(null, self.quit_timer_id);
+                self.quit_timer_id = 0;
+            }
         }
     }
 }
@@ -904,6 +956,18 @@ pub fn performAction(
         // with the notification, so accept it silently rather than log
         // "unimplemented" on every prompt.
         .pwd => {},
+
+        // High-frequency notifications with no win32 UI (yet): hovering
+        // a link fires mouse_over_link on every mouse move across it,
+        // selection_changed on every drag tick, and color_change per
+        // OSC 4/10/11. Logging "unimplemented" for each floods stderr;
+        // decline them quietly instead.
+        .mouse_over_link, .selection_changed, .color_change => return false,
+
+        // The quit-after-last-window-closed linger is driven by the run
+        // loop's window count (see run()); the core's start/stop signal
+        // carries no extra information for us, so accept it silently.
+        .quit_timer => {},
 
         // Everything else is honestly unimplemented for the skeleton:
         // report "not performed" so the core can fall back or ignore.
