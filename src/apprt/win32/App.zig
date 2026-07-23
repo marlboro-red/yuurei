@@ -684,10 +684,17 @@ pub fn run(self: *App) !void {
                 // DispatchMessage; only the wakeup matters. A margin
                 // past the deadline keeps the first firing from
                 // landing a hair early and doubling the linger.
+                // Clamp to the UINT the API takes: a multi-week configured
+                // delay would otherwise overflow the @intCast. Windows
+                // caps at USER_TIMER_MAXIMUM (~24.8 days) anyway.
+                const timer_ms: u32 = ms: {
+                    const m = @max(1, delay_ns / std.time.ns_per_ms) + 100;
+                    break :ms @intCast(@min(m, std.math.maxInt(u32)));
+                };
                 self.quit_timer_id = winapi.SetTimer(
                     null,
                     0,
-                    @intCast(@max(1, delay_ns / std.time.ns_per_ms) + 100),
+                    timer_ms,
                     null,
                 );
             }

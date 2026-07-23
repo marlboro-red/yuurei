@@ -2063,6 +2063,18 @@ fn systemAccentColor() u32 {
 /// Paint the strip into the back buffer, then blit once. Rounded-tab
 /// antialiasing writes pixels directly into the buffer, so all strip
 /// painting must go through here.
+/// Degraded fallback when the strip back buffer can't be created (GDI
+/// object exhaustion): paint straight to the window DC. Under Mica the
+/// buffered path fills a transparent-black base and relies on the alpha
+/// fixups; on a real DC with no alpha that reads as opaque black, so
+/// force the non-Mica opaque strip for this one paint.
+fn paintTitlebarDirect(self: *Window, hdc: winapi.HDC) void {
+    const saved = self.mica;
+    self.mica = false;
+    defer self.mica = saved;
+    self.paintTitlebar(hdc);
+}
+
 fn paintTitlebarBuffered(self: *Window, hdc: winapi.HDC) void {
     const w = self.clientWidth();
     const h = self.titlebarHeight();
@@ -2076,7 +2088,7 @@ fn paintTitlebarBuffered(self: *Window, hdc: winapi.HDC) void {
     }
     if (self.strip_buf == null) {
         const dc = winapi.CreateCompatibleDC(null) orelse
-            return self.paintTitlebar(hdc); // degraded: direct paint
+            return self.paintTitlebarDirect(hdc); // degraded: direct paint
         const bmi: winapi.BITMAPINFO = .{ .bmiHeader = .{
             .biWidth = w,
             .biHeight = -h, // top-down, so bits[0] is row 0
@@ -2091,7 +2103,7 @@ fn paintTitlebarBuffered(self: *Window, hdc: winapi.HDC) void {
             0,
         ) orelse {
             _ = winapi.DeleteDC(dc);
-            return self.paintTitlebar(hdc);
+            return self.paintTitlebarDirect(hdc);
         };
         const old = winapi.SelectObject(dc, bmp);
         self.strip_buf = .{

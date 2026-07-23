@@ -402,9 +402,18 @@ fn establishPtyHandoff(
     // The server (conhost) handle is not needed once we have the pipes.
     if (server) |s| _ = winapi.CloseHandle(s);
 
-    const cb = on_handoff orelse return E_FAIL;
+    // The proxy already duplicated signal/reference/client into this
+    // process; on any early return we must close them or they leak.
+    // On success they move into the Handoff (the callback owns them).
+    const cb = on_handoff orelse {
+        closeInHandles(signal, reference, client);
+        return E_FAIL;
+    };
 
-    const pipes = createHandoffPipes() catch return E_FAIL;
+    const pipes = createHandoffPipes() catch {
+        closeInHandles(signal, reference, client);
+        return E_FAIL;
+    };
     // Return conhost's ends (the proxy duplicates them cross-process).
     in_out.* = pipes.conhost_in;
     out_out.* = pipes.conhost_out;
@@ -427,6 +436,12 @@ fn establishPtyHandoff(
 
     cb(h);
     return S_OK;
+}
+
+fn closeInHandles(signal: ?HANDLE, reference: ?HANDLE, client: ?HANDLE) void {
+    if (signal) |s| _ = winapi.CloseHandle(s);
+    if (reference) |r| _ = winapi.CloseHandle(r);
+    if (client) |c| _ = winapi.CloseHandle(c);
 }
 
 const HandoffPipes = struct {
