@@ -135,6 +135,12 @@ palette: ?*CommandPalette = null,
 /// The profile dropdown popup while it is open.
 profile_menu: ?*ProfileMenu = null,
 
+/// When the dropdown last closed (std.time.milliTimestamp). Clicking
+/// the chevron while the menu is open dismisses it via WM_KILLFOCUS on
+/// the mouse-down; without this stamp the mouse-up would immediately
+/// reopen it, making the chevron impossible to toggle closed.
+profile_menu_closed_ms: i64 = 0,
+
 /// The search bar while a search is active.
 search: ?*SearchBar = null,
 
@@ -198,7 +204,7 @@ const caption_button_width_logical: i32 = 46;
 pub const scrollbar_width_logical: i32 = 12;
 const tab_width_logical: i32 = 190;
 const new_tab_width_logical: i32 = 36;
-const new_tab_chevron_width_logical: i32 = 16;
+const new_tab_chevron_width_logical: i32 = 24;
 /// Default window size in logical (96-dpi) pixels, scaled to the
 /// monitor DPI at creation so the window isn't tiny on high-DPI
 /// displays (window-width/height config overrides via initial_size).
@@ -718,6 +724,9 @@ pub fn removeSurface(self: *Window, surface: *Surface) void {
 /// Open the profile dropdown anchored under the new-tab chevron.
 fn openProfileMenu(self: *Window) void {
     if (self.profile_menu != null) return;
+    // The click that just dismissed the menu (see profile_menu_closed_ms)
+    // must not reopen it: that's the close half of the toggle.
+    if (std.time.milliTimestamp() - self.profile_menu_closed_ms < 250) return;
     const rect = self.newTabRect();
     var pt: winapi.POINT = .{ .x = rect.left, .y = rect.bottom };
     _ = winapi.ClientToScreen(self.hwnd, &pt);

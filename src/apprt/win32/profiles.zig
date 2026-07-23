@@ -146,6 +146,20 @@ fn fileExists(path: []const u8) bool {
     return true;
 }
 
+/// The 8.3 short form of a path (no spaces), or null if unavailable
+/// (short names can be disabled per-volume).
+fn shortPath(alloc: std.mem.Allocator, path: []const u8) ?[]const u8 {
+    var long_w: [winapi.MAX_PATH:0]u16 = undefined;
+    const long_len = std.unicode.utf8ToUtf16Le(&long_w, path) catch return null;
+    if (long_len >= long_w.len) return null;
+    long_w[long_len] = 0;
+
+    var short_w: [winapi.MAX_PATH]u16 = undefined;
+    const n = winapi.GetShortPathNameW(long_w[0..long_len :0], &short_w, short_w.len);
+    if (n == 0 or n >= short_w.len) return null;
+    return std.unicode.utf16LeToUtf8Alloc(alloc, short_w[0..n]) catch null;
+}
+
 /// Fixed probes for the common Windows shells. Commands are bare names
 /// where PATH resolution suffices; quoting protects the Git Bash path.
 fn detectShells(alloc: std.mem.Allocator, items: *std.ArrayList(Profile)) void {
@@ -162,14 +176,20 @@ fn detectShells(alloc: std.mem.Allocator, items: *std.ArrayList(Profile)) void {
     if (onPath("nu.exe")) addBuiltin(alloc, items, "Nushell", "nu");
 
     // Git Bash keeps its own home under Program Files; -i -l gives the
-    // login shell users expect from the Git Bash shortcut.
+    // login shell users expect from the Git Bash shortcut. The termio
+    // Windows spawn path splits shell commands on whitespace with no
+    // quote handling, so the space in "Program Files" must go: use the
+    // 8.3 short path. (PATH probing is wrong here: a bare bash.exe
+    // resolves to the WSL launcher in System32, not Git Bash.)
     git: {
         const pf = std.process.getEnvVarOwned(alloc, "ProgramFiles") catch
             break :git;
         const bash = std.fs.path.join(alloc, &.{ pf, "Git", "bin", "bash.exe" }) catch
             break :git;
         if (!fileExists(bash)) break :git;
-        const cmd = std.fmt.allocPrintSentinel(alloc, "\"{s}\" -i -l", .{bash}, 0) catch
+        const short = shortPath(alloc, bash) orelse break :git;
+        if (std.mem.indexOfAny(u8, short, " \t") != null) break :git;
+        const cmd = std.fmt.allocPrintSentinel(alloc, "{s} -i -l", .{short}, 0) catch
             break :git;
         addBuiltin(alloc, items, "Git Bash", cmd);
     }

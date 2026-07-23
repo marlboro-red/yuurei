@@ -503,6 +503,7 @@ pub extern "kernel32" fn CreateProcessW(
 pub extern "kernel32" fn ReadFile(HANDLE, [*]u8, DWORD, ?*DWORD, ?*anyopaque) callconv(.winapi) BOOL;
 pub extern "kernel32" fn TerminateProcess(HANDLE, UINT) callconv(.winapi) BOOL;
 pub extern "kernel32" fn SearchPathW(?[*:0]const u16, [*:0]const u16, ?[*:0]const u16, DWORD, [*]u16, ?*?[*:0]u16) callconv(.winapi) DWORD;
+pub extern "kernel32" fn GetShortPathNameW([*:0]const u16, [*]u16, DWORD) callconv(.winapi) DWORD;
 pub extern "kernel32" fn GlobalAlloc(UINT, usize) callconv(.winapi) ?HANDLE;
 pub extern "kernel32" fn GlobalLock(HANDLE) callconv(.winapi) ?*anyopaque;
 pub extern "kernel32" fn GlobalUnlock(HANDLE) callconv(.winapi) BOOL;
