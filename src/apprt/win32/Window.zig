@@ -203,8 +203,8 @@ const caption_button_width_logical: i32 = 46;
 /// grid size needs.
 pub const scrollbar_width_logical: i32 = 12;
 const tab_width_logical: i32 = 190;
-const new_tab_width_logical: i32 = 36;
-const new_tab_chevron_width_logical: i32 = 24;
+const new_tab_width_logical: i32 = 30;
+const new_tab_chevron_width_logical: i32 = 30;
 /// Default window size in logical (96-dpi) pixels, scaled to the
 /// monitor DPI at creation so the window isn't tiny on high-DPI
 /// displays (window-width/height config overrides via initial_size).
