@@ -32,6 +32,72 @@ pub const WAIT_FAILED = windows.WAIT_FAILED;
 pub const FALSE = windows.FALSE;
 pub const TRUE = windows.TRUE;
 
+// Toolhelp process snapshot, for the shell child-process check below.
+pub const TH32CS_SNAPPROCESS: DWORD = 0x2;
+pub const PROCESSENTRY32W = extern struct {
+    dwSize: DWORD = @sizeOf(PROCESSENTRY32W),
+    cntUsage: DWORD = 0,
+    th32ProcessID: DWORD = 0,
+    th32DefaultHeapID: usize = 0,
+    th32ModuleID: DWORD = 0,
+    cntThreads: DWORD = 0,
+    th32ParentProcessID: DWORD = 0,
+    pcPriClassBase: i32 = 0,
+    dwFlags: DWORD = 0,
+    szExeFile: [MAX_PATH]u16 = undefined,
+};
+pub extern "kernel32" fn CreateToolhelp32Snapshot(DWORD, DWORD) callconv(.winapi) HANDLE;
+pub extern "kernel32" fn Process32FirstW(HANDLE, *PROCESSENTRY32W) callconv(.winapi) windows.BOOL;
+pub extern "kernel32" fn Process32NextW(HANDLE, *PROCESSENTRY32W) callconv(.winapi) windows.BOOL;
+pub extern "kernel32" fn GetProcessId(HANDLE) callconv(.winapi) DWORD;
+
+/// Whether the given process has any live child processes. Used as the
+/// close-confirmation fallback for shells that can't report prompt
+/// state via OSC 133 (cmd has no integration mechanism; wsl.exe is an
+/// opaque launcher): an idle shell has no children, a running
+/// vim/ssh/build does. Same approach as Windows Terminal, with the
+/// same limits: processes inside a WSL VM are invisible, and an
+/// orphaned grandchild whose intermediate parent exited is missed.
+pub fn hasChildProcesses(root_pid: DWORD) bool {
+    if (root_pid == 0) return false;
+    const snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return false;
+    defer CloseHandle(snap);
+
+    var entry: PROCESSENTRY32W = .{};
+    if (Process32FirstW(snap, &entry) == 0) return false;
+    while (true) {
+        if (entry.th32ParentProcessID == root_pid and
+            entry.th32ProcessID != root_pid and
+            !infrastructureProcess(&entry.szExeFile)) return true;
+        if (Process32NextW(snap, &entry) == 0) return false;
+    }
+}
+
+/// Console/WSL plumbing that a shell process spawns as part of merely
+/// existing; their presence says nothing about user work in progress.
+/// wsl.exe in particular always parents a nested wsl.exe (and a
+/// conhost) even at an idle distro prompt.
+fn infrastructureProcess(exe_file: *const [MAX_PATH]u16) bool {
+    const len = std.mem.indexOfScalar(u16, exe_file, 0) orelse return false;
+    var buf: [32]u8 = undefined;
+    if (len > buf.len) return false;
+    for (exe_file[0..len], 0..) |unit, i| {
+        if (unit > 127) return false;
+        buf[i] = std.ascii.toLower(@intCast(unit));
+    }
+    const name = buf[0..len];
+    const ignored = [_][]const u8{
+        "conhost.exe",
+        "openconsole.exe",
+        "wsl.exe",
+        "wslhost.exe",
+        "wslrelay.exe",
+    };
+    for (ignored) |ig| if (std.mem.eql(u8, name, ig)) return true;
+    return false;
+}
+
 /// Attach to the parent process console, if any. The Ghostty exe is a
 /// GUI-subsystem binary (no console window on launch), so when it is
 /// run from a terminal it must attach to that terminal's console for

@@ -1252,6 +1252,25 @@ const Subprocess = struct {
     /// Returns `null` if there was an error getting the information or the
     /// information is not available on a particular platform.
     pub fn getProcessInfo(self: *Subprocess, comptime info: ProcessInfo) ?ProcessInfo.Type(info) {
+        // On Windows the pty tracks no processes; the direct child (the
+        // shell) is on the Command, whose `pid` field holds the process
+        // HANDLE there (see Command.startWindows).
+        if (comptime builtin.os.tag == .windows) {
+            return switch (info) {
+                .foreground_pid => pid: {
+                    const process = self.process orelse break :pid null;
+                    const command = switch (process) {
+                        .fork_exec => |*cmd| cmd,
+                        .flatpak => break :pid null,
+                    };
+                    const handle = command.pid orelse break :pid null;
+                    const pid = internal_os.windows.GetProcessId(handle);
+                    break :pid if (pid == 0) null else pid;
+                },
+                .tty_name => null,
+            };
+        }
+
         const pty = &(self.pty orelse return null);
         return pty.getProcessInfo(info);
     }

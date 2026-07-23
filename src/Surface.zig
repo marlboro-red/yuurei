@@ -950,7 +950,23 @@ pub fn needsConfirmQuit(self: *Surface) bool {
         .true => true: {
             self.renderer_state.mutex.lock();
             defer self.renderer_state.mutex.unlock();
-            break :true !self.io.terminal.cursorIsAtPrompt();
+            if (self.io.terminal.cursorIsAtPrompt()) break :true false;
+
+            // Windows: shells with no shell integration (cmd has no
+            // mechanism for it; wsl.exe is an opaque launcher) never
+            // report prompt state via OSC 133, which would make every
+            // close ask. Fall back to checking for live child
+            // processes of the shell, like Windows Terminal: an idle
+            // shell has none, a running vim/ssh/build does.
+            if (comptime builtin.os.tag == .windows) {
+                if (self.getProcessInfo(.foreground_pid)) |pid| {
+                    break :true internal_os.windows.hasChildProcesses(
+                        @intCast(pid),
+                    );
+                }
+            }
+
+            break :true true;
         },
     };
 }
