@@ -903,6 +903,32 @@ pub const GlProc = *const fn () callconv(.c) void;
 pub extern "opengl32" fn wglCreateContext(HDC) callconv(.winapi) ?HGLRC;
 pub extern "opengl32" fn wglDeleteContext(HGLRC) callconv(.winapi) BOOL;
 pub extern "opengl32" fn wglMakeCurrent(?HDC, ?HGLRC) callconv(.winapi) BOOL;
+// Memory-DC back buffer for the title strip (double buffering + the
+// direct pixel access the corner antialiasing needs).
+pub const BITMAPINFOHEADER = extern struct {
+    biSize: DWORD = @sizeOf(BITMAPINFOHEADER),
+    biWidth: i32 = 0,
+    biHeight: i32 = 0,
+    biPlanes: u16 = 1,
+    biBitCount: u16 = 32,
+    biCompression: DWORD = 0, // BI_RGB
+    biSizeImage: DWORD = 0,
+    biXPelsPerMeter: i32 = 0,
+    biYPelsPerMeter: i32 = 0,
+    biClrUsed: DWORD = 0,
+    biClrImportant: DWORD = 0,
+};
+pub const BITMAPINFO = extern struct {
+    bmiHeader: BITMAPINFOHEADER,
+    bmiColors: [1]u32 = .{0},
+};
+pub const DIB_RGB_COLORS: UINT = 0;
+pub const SRCCOPY: DWORD = 0x00CC0020;
+pub extern "gdi32" fn CreateCompatibleDC(?HDC) callconv(.winapi) ?HDC;
+pub extern "gdi32" fn DeleteDC(HDC) callconv(.winapi) BOOL;
+pub extern "gdi32" fn CreateDIBSection(?HDC, *const BITMAPINFO, UINT, *?[*]u8, ?HANDLE, DWORD) callconv(.winapi) ?*anyopaque;
+pub extern "gdi32" fn BitBlt(HDC, i32, i32, i32, i32, ?HDC, i32, i32, DWORD) callconv(.winapi) BOOL;
+
 pub extern "opengl32" fn wglGetProcAddress([*:0]const u8) callconv(.winapi) ?GlProc;
 pub extern "opengl32" fn wglGetCurrentDC() callconv(.winapi) ?HDC;
 

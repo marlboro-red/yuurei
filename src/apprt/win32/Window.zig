@@ -135,6 +135,12 @@ palette: ?*CommandPalette = null,
 /// The profile dropdown popup while it is open.
 profile_menu: ?*ProfileMenu = null,
 
+/// Back buffer for the title strip: double-buffers the repaint (no
+/// flicker) and exposes the pixels for the analytic corner
+/// antialiasing (roundCorners). Recreated when the strip size
+/// changes; ~1-2MB at 4K.
+strip_buf: ?StripBuf = null,
+
 /// When the dropdown last closed (std.time.milliTimestamp). Clicking
 /// the chevron while the menu is open dismisses it via WM_KILLFOCUS on
 /// the mouse-down; without this stamp the mouse-up would immediately
@@ -177,6 +183,21 @@ const Hover = union(enum) {
     tab_close: usize,
     new_tab,
     new_tab_chevron,
+};
+
+const StripBuf = struct {
+    dc: winapi.HDC,
+    bmp: *anyopaque,
+    old_bmp: ?*anyopaque,
+    bits: [*]u8,
+    w: i32,
+    h: i32,
+
+    fn deinit(self: *const StripBuf) void {
+        if (self.old_bmp) |o| _ = winapi.SelectObject(self.dc, o);
+        _ = winapi.DeleteObject(self.bmp);
+        _ = winapi.DeleteDC(self.dc);
+    }
 };
 
 const StripFonts = struct {
@@ -397,6 +418,7 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
 pub fn destroy(self: *Window) void {
     const alloc = self.app.core_app.alloc;
     self.rename_buf.deinit(alloc);
+    if (self.strip_buf) |*buf| buf.deinit();
     if (self.palette) |palette| palette.destroy();
     if (self.profile_menu) |menu| menu.destroy();
     if (self.search) |search| search.destroy();
@@ -1890,6 +1912,112 @@ fn systemAccentColor() u32 {
     return c;
 }
 
+/// Paint the strip into the back buffer, then blit once. Rounded-tab
+/// antialiasing writes pixels directly into the buffer, so all strip
+/// painting must go through here.
+fn paintTitlebarBuffered(self: *Window, hdc: winapi.HDC) void {
+    const w = self.clientWidth();
+    const h = self.titlebarHeight();
+    if (w <= 0 or h <= 0) return;
+
+    if (self.strip_buf) |*buf| {
+        if (buf.w != w or buf.h != h) {
+            buf.deinit();
+            self.strip_buf = null;
+        }
+    }
+    if (self.strip_buf == null) {
+        const dc = winapi.CreateCompatibleDC(null) orelse
+            return self.paintTitlebar(hdc); // degraded: direct paint
+        const bmi: winapi.BITMAPINFO = .{ .bmiHeader = .{
+            .biWidth = w,
+            .biHeight = -h, // top-down, so bits[0] is row 0
+        } };
+        var bits: ?[*]u8 = null;
+        const bmp = winapi.CreateDIBSection(
+            dc,
+            &bmi,
+            winapi.DIB_RGB_COLORS,
+            &bits,
+            null,
+            0,
+        ) orelse {
+            _ = winapi.DeleteDC(dc);
+            return self.paintTitlebar(hdc);
+        };
+        const old = winapi.SelectObject(dc, bmp);
+        self.strip_buf = .{
+            .dc = dc,
+            .bmp = bmp,
+            .old_bmp = old,
+            .bits = bits.?,
+            .w = w,
+            .h = h,
+        };
+    }
+
+    const buf = &self.strip_buf.?;
+    self.paintTitlebar(buf.dc);
+    _ = winapi.BitBlt(hdc, 0, 0, w, h, buf.dc, 0, 0, winapi.SRCCOPY);
+}
+
+/// Blend the corner pixels of `rect` in the strip back buffer toward
+/// `bg` with analytic circle coverage, producing antialiased rounded
+/// corners on whatever was just filled there. `corners` selects which
+/// (bit 0: top-left, 1: top-right, 2: bottom-left, 3: bottom-right).
+fn roundCorners(
+    self: *Window,
+    rect: winapi.RECT,
+    radius_logical: i32,
+    bg: u32,
+    corners: u4,
+) void {
+    const buf = &(self.strip_buf orelse return);
+    const r = self.scale(radius_logical);
+    if (r <= 0) return;
+    const rf: f32 = @floatFromInt(r);
+
+    const bg_b: f32 = @floatFromInt((bg >> 16) & 0xFF);
+    const bg_g: f32 = @floatFromInt((bg >> 8) & 0xFF);
+    const bg_r: f32 = @floatFromInt(bg & 0xFF);
+
+    // Each corner: circle center r pixels inside both edges.
+    const cs = [4][4]i32{
+        // x0, y0 (block origin), cx, cy (circle center, +0.5 centers)
+        .{ rect.left, rect.top, rect.left + r, rect.top + r },
+        .{ rect.right - r, rect.top, rect.right - r - 1, rect.top + r },
+        .{ rect.left, rect.bottom - r, rect.left + r, rect.bottom - r - 1 },
+        .{ rect.right - r, rect.bottom - r, rect.right - r - 1, rect.bottom - r - 1 },
+    };
+
+    inline for (0..4) |ci| {
+        if (corners & (@as(u4, 1) << @intCast(ci)) != 0) {
+            const c = cs[ci];
+            const cx: f32 = @floatFromInt(c[2]);
+            const cy: f32 = @floatFromInt(c[3]);
+            var y = c[1];
+            while (y < c[1] + r) : (y += 1) {
+                if (y < 0 or y >= buf.h) continue;
+                var x = c[0];
+                while (x < c[0] + r) : (x += 1) {
+                    if (x < 0 or x >= buf.w) continue;
+                    const dx = @as(f32, @floatFromInt(x)) - cx;
+                    const dy = @as(f32, @floatFromInt(y)) - cy;
+                    const dist = @sqrt(dx * dx + dy * dy);
+                    // Coverage ramps over one pixel at the radius.
+                    const cov = std.math.clamp(rf - dist + 0.5, 0.0, 1.0);
+                    if (cov >= 1.0) continue;
+                    const off: usize = @intCast((y * buf.w + x) * 4);
+                    const p = buf.bits + off;
+                    p[0] = @intFromFloat(bg_b + (@as(f32, @floatFromInt(p[0])) - bg_b) * cov);
+                    p[1] = @intFromFloat(bg_g + (@as(f32, @floatFromInt(p[1])) - bg_g) * cov);
+                    p[2] = @intFromFloat(bg_r + (@as(f32, @floatFromInt(p[2])) - bg_r) * cov);
+                }
+            }
+        }
+    }
+}
+
 fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
     const height = self.titlebarHeight();
     var strip: winapi.RECT = .{
@@ -1943,6 +2071,8 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
                 defer _ = winapi.DeleteObject(b);
                 _ = winapi.FillRect(hdc, &rect, b);
             }
+            // Antialiased rounded top corners (classic tab shape).
+            self.roundCorners(rect, 6, bg, 0b0011);
         }
 
         // Active tab: a slim accent underline in the system accent
@@ -2054,6 +2184,13 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
                     defer _ = winapi.DeleteObject(b);
                     _ = winapi.FillRect(hdc, &close_rect, b);
                 }
+                // Rounded against the tab fill beneath it.
+                self.roundCorners(
+                    close_rect,
+                    4,
+                    if (active) tab_active_bg else tab_hover_bg,
+                    0b1111,
+                );
             }
             _ = winapi.SetTextColor(hdc, if (active) fg else fg_dim);
             var glyph: [2:0]u16 = .{ 0xE8BB, 0 };
@@ -2075,11 +2212,17 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
         };
         var plus_rect = self.newTabRect();
         if (self.hover == .new_tab) {
+            var pill = plus_rect;
+            pill.left += self.scale(2);
+            pill.right -= self.scale(2);
+            pill.top += self.scale(6);
+            pill.bottom -= self.scale(6);
             const brush = winapi.CreateSolidBrush(tab_hover_bg);
             if (brush) |b| {
                 defer _ = winapi.DeleteObject(b);
-                _ = winapi.FillRect(hdc, &plus_rect, b);
+                _ = winapi.FillRect(hdc, &pill, b);
             }
+            self.roundCorners(pill, 5, bg, 0b1111);
         }
         _ = winapi.SetTextColor(hdc, fg_dim);
         var glyph: [2:0]u16 = .{ 0xE710, 0 }; // Add
@@ -2096,11 +2239,17 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
         // zone reads as a distinct target.
         var chev_rect = self.newTabChevronRect();
         if (self.hover == .new_tab_chevron) {
+            var pill = chev_rect;
+            pill.left += self.scale(2);
+            pill.right -= self.scale(2);
+            pill.top += self.scale(6);
+            pill.bottom -= self.scale(6);
             const brush = winapi.CreateSolidBrush(tab_hover_bg);
             if (brush) |b| {
                 defer _ = winapi.DeleteObject(b);
-                _ = winapi.FillRect(hdc, &chev_rect, b);
+                _ = winapi.FillRect(hdc, &pill, b);
             }
+            self.roundCorners(pill, 5, bg, 0b1111);
         }
         var chevron: [2:0]u16 = .{ 0xE70D, 0 }; // ChevronDown
         _ = winapi.DrawTextW(
@@ -2404,7 +2553,7 @@ pub fn wndProc(
                 const strip_h = self.titlebarHeight();
                 below_strip = ps.rcPaint.bottom > strip_h;
 
-                if (ps.rcPaint.top < strip_h) self.paintTitlebar(hdc);
+                if (ps.rcPaint.top < strip_h) self.paintTitlebarBuffered(hdc);
 
                 // Fill the terminal area background: visible only in
                 // the gaps between splits (children are clipped).
