@@ -294,16 +294,25 @@ fn onHandoff(h: defterm.Handoff) void {
     const app = handoff_app orelse {
         // No app to receive it: close the handles so conhost isn't left
         // waiting on a terminal that will never read.
-        _ = winapi.CloseHandle(h.our_read);
-        _ = winapi.CloseHandle(h.our_write);
-        if (h.signal) |s| _ = winapi.CloseHandle(s);
-        if (h.reference) |r| _ = winapi.CloseHandle(r);
-        if (h.client) |c| _ = winapi.CloseHandle(c);
+        closeHandoff(h);
         return;
     };
+    // On error receiveHandoff has already released the handles (or a
+    // surface now owns them); we only log here — do not double-close.
     app.receiveHandoff(h) catch |err| {
         log.err("handoff surface creation failed err={}", .{err});
     };
+}
+
+/// Decline a handoff by closing every handle it carried. Used when no
+/// app can receive it or window setup fails before a surface takes
+/// ownership.
+fn closeHandoff(h: defterm.Handoff) void {
+    _ = winapi.CloseHandle(h.our_read);
+    _ = winapi.CloseHandle(h.our_write);
+    if (h.signal) |s| _ = winapi.CloseHandle(s);
+    if (h.reference) |r| _ = winapi.CloseHandle(r);
+    if (h.client) |c| _ = winapi.CloseHandle(c);
 }
 
 pub fn terminate(self: *App) void {
@@ -323,21 +332,50 @@ pub fn terminate(self: *App) void {
     if (self.com_initialized) winapi.CoUninitialize();
 }
 
-/// Adopt a default-terminal handoff into a new surface. NOT YET
-/// IMPLEMENTED (increment 2b): the COM server and pipe handoff are in
-/// place, but wiring conhost's PTY into a surface (termio adoption of a
-/// pre-made pty + pre-existing client process) is the remaining work.
-/// Until then, decline by releasing the handles so conhost isn't left
-/// waiting. This path is unreachable in shipping builds because
-/// defterm.handoff_ready gates the server off entirely.
+/// Adopt a default-terminal handoff into a new surface: open a normal
+/// top-level window whose one surface drives conhost's ConPTY (via the
+/// SpawnOpts.handoff staged for takeHandoff) instead of spawning a shell.
+/// The window looks and behaves like any other terminal window.
+///
+/// Ownership: until `newTabWithOpts` moves the handoff into a surface, we
+/// own the handles and close them on early failure; afterwards the
+/// surface owns them and frees them in its own deinit path.
 fn receiveHandoff(self: *App, h: defterm.Handoff) !void {
-    _ = self;
-    _ = winapi.CloseHandle(h.our_read);
-    _ = winapi.CloseHandle(h.our_write);
-    if (h.signal) |s| _ = winapi.CloseHandle(s);
-    if (h.reference) |r| _ = winapi.CloseHandle(r);
-    if (h.client) |c| _ = winapi.CloseHandle(c);
-    return error.HandoffNotImplemented;
+    const alloc = self.core_app.alloc;
+
+    const window = Window.create(alloc, self, .{ .no_initial_tab = true }) catch |err| {
+        closeHandoff(h);
+        return err;
+    };
+    errdefer window.destroy();
+
+    self.windows.append(alloc, window) catch |err| {
+        closeHandoff(h);
+        return err;
+    };
+    errdefer _ = self.windows.pop();
+
+    // DPI-scale the default size before the surface spawns so its pty
+    // starts at the final grid. (The window drives a resize down the
+    // signal pipe shortly after, so any sane initial size works.)
+    window.applyDefaultSize();
+
+    // Moves the handoff into the new surface, which owns the handles from
+    // here: its init/deinit path releases them on any later failure.
+    const surface = try window.newTabWithOpts(.{ .handoff = h });
+
+    // Title from conhost's startup info, if any. `h.title` points into
+    // `h.title_buf` in this by-value copy, valid for this call.
+    if (h.title) |t| set_title: {
+        var buf: [512]u8 = undefined;
+        const n = std.unicode.utf16LeToUtf8(&buf, t) catch break :set_title;
+        const z = alloc.dupeZ(u8, buf[0..n]) catch break :set_title;
+        defer alloc.free(z);
+        surface.setTitle(z) catch {};
+    }
+
+    window.applyStartupShow();
+    _ = winapi.SetForegroundWindow(window.hwnd);
 }
 
 /// The profile list, scanned on first use. See profiles.zig.

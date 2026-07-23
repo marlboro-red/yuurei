@@ -645,10 +645,20 @@ pub fn init(
             std.fmt.bufPrint(&buf, "0x{x:0>16}", .{self.id}) catch unreachable,
         );
 
+        // Default-terminal handoff (win32 only): a runtime surface may
+        // carry a pre-made pty + client process handed to us by conhost.
+        // The @hasDecl guard keeps every other apprt compiling unchanged
+        // (this is comptime-null there, so `.handoff` stays null).
+        const handoff = if (@hasDecl(@TypeOf(rt_surface.*), "takeHandoff"))
+            rt_surface.takeHandoff()
+        else
+            null;
+
         // Initialize our IO backend
         var io_exec = try termio.Exec.init(alloc, .{
             .command = command,
             .env = env,
+            .handoff = handoff,
             .env_override = config.env,
             .shell_integration = config.@"shell-integration",
             .shell_integration_features = config.@"shell-integration-features",

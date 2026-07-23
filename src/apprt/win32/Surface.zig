@@ -9,6 +9,7 @@ const Allocator = std.mem.Allocator;
 const apprt = @import("../../apprt.zig");
 const internal_os = @import("../../os/main.zig");
 const terminal = @import("../../terminal/main.zig");
+const termio = @import("../../termio.zig");
 const CoreSurface = @import("../../Surface.zig");
 const configpkg = @import("../../config.zig");
 const App = @import("App.zig");
@@ -16,6 +17,7 @@ const Window = @import("Window.zig");
 const InspectorWindow = @import("InspectorWindow.zig");
 const profiles = @import("profiles.zig");
 const Scrollbar = @import("Scrollbar.zig");
+const defterm = @import("defterm.zig");
 const winapi = @import("winapi.zig");
 pub const dxgi = @import("dxgi.zig");
 
@@ -92,6 +94,17 @@ inspector: ?*InspectorWindow = null,
 /// surface (and transiently by tree operations). The surface
 /// deinitializes and frees itself when it reaches zero.
 refs: u32 = 1,
+
+/// A default-terminal handoff (defterm.zig) staged before core surface
+/// init. `takeHandoff` (called from core Surface.init) consumes it and
+/// hands its pipe/signal/client handles to termio so this surface drives
+/// conhost's ConPTY instead of spawning its own. Null for a normal tab.
+pending_handoff: ?defterm.Handoff = null,
+
+/// conhost's ConPTY "reference" handle from a handoff: holding it keeps
+/// conhost's ConPTY alive. Owned by us and closed on deinit. Null unless
+/// this surface came from a handoff.
+handoff_reference: ?winapi.HANDLE = null,
 
 /// Increase the reference count (SplitTree view contract).
 pub fn ref(self: *Self) *Self {
@@ -187,6 +200,12 @@ pub fn init(
         .host = host,
         .hdc = hdc,
         .gl_context = gl_context,
+        // Stash any handoff so core_surface.init's takeHandoff hook
+        // (below) can pull it into termio. The reference handle is held
+        // for the surface's lifetime (closed in deinit) to keep conhost's
+        // ConPTY alive.
+        .pending_handoff = spawn_opts.handoff,
+        .handoff_reference = if (spawn_opts.handoff) |h| h.reference else null,
     };
 
     // The renderer finds us from the host window (its only handle on
@@ -281,6 +300,18 @@ pub fn deinit(self: *Self) void {
     _ = winapi.SetWindowLongPtrW(self.host, winapi.GWLP_USERDATA, 0);
     _ = winapi.DestroyWindow(self.host);
     if (self.scrollbar) |sb| sb.destroy(self.app.core_app.alloc);
+
+    // Release conhost's ConPTY reference last: the core surface (and thus
+    // termio's pty) is already torn down above, so conhost's ConPTY can
+    // now be freed. A never-consumed handoff (pending_handoff still set,
+    // e.g. init failed before termio) also frees its handles here.
+    if (self.handoff_reference) |r| _ = winapi.CloseHandle(r);
+    if (self.pending_handoff) |h| {
+        _ = winapi.CloseHandle(h.our_read);
+        _ = winapi.CloseHandle(h.our_write);
+        if (h.signal) |s| _ = winapi.CloseHandle(s);
+        if (h.client) |c| _ = winapi.CloseHandle(c);
+    }
 }
 
 pub fn core(self: *Self) *CoreSurface {
@@ -549,6 +580,24 @@ pub fn setClipboard(
 
 pub fn defaultTermioEnv(self: *Self) !std.process.EnvMap {
     return try internal_os.getEnvMap(self.app.core_app.alloc);
+}
+
+/// Consume a staged default-terminal handoff, handing its
+/// pipe/signal/client handles to termio. Called once from core
+/// Surface.init (via @hasDecl) before termio starts; returns null for a
+/// normal surface. Ownership: the pipe/signal handles move to the pty
+/// (closed on pty deinit); the client handle is adopted by the exec
+/// backend for exit detection; the reference handle stays on the surface
+/// (handoff_reference) and is closed in deinit.
+pub fn takeHandoff(self: *Self) ?termio.Exec.HandoffHandles {
+    const h = self.pending_handoff orelse return null;
+    self.pending_handoff = null;
+    return .{
+        .our_read = h.our_read,
+        .our_write = h.our_write,
+        .signal = h.signal,
+        .client = h.client,
+    };
 }
 
 /// Set the initial window size from config (window-width/height). The

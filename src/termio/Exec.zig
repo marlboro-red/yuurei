@@ -561,6 +561,19 @@ pub const ThreadData = struct {
     }
 };
 
+/// A default-terminal handoff (win32 only): conhost handed us a live
+/// ConPTY and the console client process. When set on the Exec config,
+/// `start` adopts these instead of opening a pty and spawning a command.
+/// The pipe/signal handles are consumed by the pty (openHandoff) and
+/// closed on pty deinit; `client` is the pre-existing console process,
+/// adopted for exit detection (its exit == the shell exit).
+pub const HandoffHandles = struct {
+    our_read: windows.HANDLE,
+    our_write: windows.HANDLE,
+    signal: ?windows.HANDLE,
+    client: ?windows.HANDLE,
+};
+
 pub const Config = struct {
     command: ?configpkg.Command = null,
     env: EnvMap,
@@ -574,6 +587,11 @@ pub const Config = struct {
 
     rt_pre_exec_info: Command.RtPreExecInfo,
     rt_post_fork_info: Command.RtPostForkInfo,
+
+    /// Default-terminal handoff handles (win32 only). Null for a normal
+    /// spawn. When set, `start` adopts conhost's ConPTY instead of
+    /// opening its own and spawning a command.
+    handoff: ?HandoffHandles = null,
 };
 
 const Subprocess = struct {
@@ -591,6 +609,10 @@ const Subprocess = struct {
     screen_size: renderer.ScreenSize,
     pty: ?Pty = null,
     process: ?Process = null,
+
+    /// Default-terminal handoff handles (win32), carried from the config
+    /// so `start` can adopt conhost's ConPTY. Null for a normal spawn.
+    handoff: ?HandoffHandles = null,
 
     rt_pre_exec_info: Command.RtPreExecInfo,
     rt_post_fork_info: Command.RtPostForkInfo,
@@ -881,6 +903,7 @@ const Subprocess = struct {
             .env = env,
             .cwd = cwd,
             .args = args,
+            .handoff = cfg.handoff,
 
             .rt_pre_exec_info = cfg.rt_pre_exec_info,
             .rt_post_fork_info = cfg.rt_post_fork_info,
@@ -907,6 +930,52 @@ const Subprocess = struct {
         write: Pty.Fd,
     } {
         assert(self.pty == null and self.process == null);
+
+        // Default-terminal handoff: adopt conhost's live ConPTY and the
+        // pre-existing console client process instead of opening our own
+        // pty and spawning a command. (win32 only; handoff is always null
+        // elsewhere.) Inlined rather than a helper so it shares `start`'s
+        // exact anonymous return type.
+        if (comptime builtin.os.tag == .windows) {
+            if (self.handoff) |ho| {
+                const pty = Pty.openHandoff(ho.our_read, ho.our_write, ho.signal, .{
+                    .ws_row = @intCast(self.grid_size.rows),
+                    .ws_col = @intCast(self.grid_size.columns),
+                    .ws_xpixel = @intCast(self.screen_size.width),
+                    .ws_ypixel = @intCast(self.screen_size.height),
+                });
+                self.pty = pty;
+
+                // Adopt the console client process so the existing
+                // exit-detection path fires when it exits. On Windows
+                // `Command.pid` is the process HANDLE, and only that
+                // handle is used to wait on / kill the process
+                // (threadEnter's xev.Process.init, stop's killCommand), so
+                // a Command carrying just the client handle is all we
+                // need — we never spawned anything. If conhost handed no
+                // client, threadEnter's `cmd.pid orelse ProcessNoPid`
+                // surfaces it (real handoffs always include the client).
+                self.process = .{ .fork_exec = .{
+                    .path = "",
+                    .args = &.{},
+                    .os_pre_exec = null,
+                    .rt_pre_exec = null,
+                    .rt_pre_exec_info = self.rt_pre_exec_info,
+                    .rt_post_fork = null,
+                    .rt_post_fork_info = self.rt_post_fork_info,
+                    .pid = ho.client,
+                } };
+
+                // We won't spawn anything, so drop the prepared env now
+                // like the normal successful-start path does.
+                if (self.env) |*env| {
+                    env.deinit();
+                    self.env = null;
+                }
+
+                return .{ .read = pty.out_pipe, .write = pty.in_pipe };
+            }
+        }
 
         // This function is funny because on POSIX systems it can
         // fail in the forked process. This is flipped to true if

@@ -14,6 +14,7 @@ const Surface = @import("Surface.zig");
 const CommandPalette = @import("CommandPalette.zig");
 const ProfileMenu = @import("ProfileMenu.zig");
 const profiles = @import("profiles.zig");
+const defterm = @import("defterm.zig");
 const SearchBar = @import("SearchBar.zig");
 const winapi = @import("winapi.zig");
 const perf = @import("../../perf.zig");
@@ -426,6 +427,11 @@ fn closeAllTabs(self: *Window) void {
 pub const SpawnOpts = struct {
     profile: ?*const profiles.Profile = null,
     cwd: ?[]const u8 = null,
+
+    /// A default-terminal handoff (defterm.zig) to adopt into this
+    /// surface: it drives conhost's ConPTY instead of spawning a shell.
+    /// Consumed by the surface at init (stashed as pending_handoff).
+    handoff: ?defterm.Handoff = null,
 };
 
 /// Create a new surface (with its GL host) owned by a fresh
