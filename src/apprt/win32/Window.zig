@@ -226,6 +226,7 @@ const DividerHit = struct {
 
 /// Logical (96-dpi) metrics, scaled by the window DPI at use.
 const titlebar_height_logical: i32 = 36;
+const titlebar_thin_height_logical: i32 = 26;
 const caption_button_width_logical: i32 = 46;
 /// The scrollbar column each leaf reserves beside its GL host; also
 /// used by setInitialWindowSize to compute the client width a given
@@ -234,6 +235,11 @@ pub const scrollbar_width_logical: i32 = 12;
 const tab_width_logical: i32 = 190;
 const new_tab_width_logical: i32 = 30;
 const new_tab_chevron_width_logical: i32 = 30;
+/// Leading inset before the first tab and breathing room above the
+/// tab plates (Notepad-style floating tabs). Hit targets stay
+/// full-height; only the painted plate is inset.
+const strip_leading_logical: i32 = 8;
+const tab_top_pad_logical: i32 = 6;
 /// Default window size in logical (96-dpi) pixels, scaled to the
 /// monitor DPI at creation so the window isn't tiny on high-DPI
 /// displays (window-width/height config overrides via initial_size).
@@ -384,19 +390,8 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
 
     // Win11 Mica Alt backdrop for the title strip (Windows Terminal's
     // titlebar material). Requires 22H2+; on refusal we just keep the
-    // opaque strip. Mutually exclusive with the accent blur above.
-    if (!app.config.@"background-blur".enabled()) mica: {
-        const backdrop: u32 = winapi.DWMSBT_TABBEDWINDOW;
-        if (winapi.DwmSetWindowAttribute(
-            hwnd,
-            winapi.DWMWA_SYSTEMBACKDROP_TYPE,
-            &backdrop,
-            @sizeOf(u32),
-        ) != 0) break :mica;
-        const margins: winapi.MARGINS = .{ .cyTopHeight = self.titlebarHeight() };
-        if (winapi.DwmExtendFrameIntoClientArea(hwnd, &margins) != 0) break :mica;
-        self.mica = true;
-    }
+    // opaque strip.
+    self.applyBackdrop();
 
     // Startup geometry from config, for a normal (non-quick, non-
     // tear-off) window: a DPI-scaled default size, an explicit
@@ -1529,11 +1524,73 @@ pub fn isLight(self: *const Window) bool {
     };
 }
 
+/// Apply (or remove) the Mica Alt backdrop to match the current
+/// config: on unless background-blur (the accent blur and system
+/// backdrops fight over the surface) or the thin strip (DWM's native
+/// caption buttons need the full-height strip) is configured. Safe to
+/// call repeatedly; used at creation and on config reload.
+pub fn applyBackdrop(self: *Window) void {
+    const want = !self.app.config.@"background-blur".enabled() and
+        !self.app.config.@"windows-titlebar-thin";
+
+    if (want and !self.mica) mica: {
+        const backdrop: u32 = winapi.DWMSBT_TABBEDWINDOW;
+        if (winapi.DwmSetWindowAttribute(
+            self.hwnd,
+            winapi.DWMWA_SYSTEMBACKDROP_TYPE,
+            &backdrop,
+            @sizeOf(u32),
+        ) != 0) break :mica;
+        const margins: winapi.MARGINS = .{ .cyTopHeight = self.titlebarHeight() };
+        if (winapi.DwmExtendFrameIntoClientArea(self.hwnd, &margins) != 0)
+            break :mica;
+        self.mica = true;
+    } else if (!want and self.mica) {
+        const backdrop: u32 = 1; // DWMSBT_NONE
+        _ = winapi.DwmSetWindowAttribute(
+            self.hwnd,
+            winapi.DWMWA_SYSTEMBACKDROP_TYPE,
+            &backdrop,
+            @sizeOf(u32),
+        );
+        const margins: winapi.MARGINS = .{};
+        _ = winapi.DwmExtendFrameIntoClientArea(self.hwnd, &margins);
+        self.mica = false;
+    }
+}
+
+/// Re-resolve chrome that depends on config: strip height (thin
+/// toggle), backdrop, and layout. Called on config reload.
+pub fn refreshChrome(self: *Window) void {
+    self.applyBackdrop();
+    // Strip height may have changed: recalc the frame, re-anchor the
+    // Mica margins, and relayout the hosts below the strip.
+    _ = winapi.SetWindowPos(
+        self.hwnd,
+        null,
+        0,
+        0,
+        0,
+        0,
+        winapi.SWP_NOMOVE | winapi.SWP_NOSIZE | winapi.SWP_NOZORDER |
+            winapi.SWP_NOACTIVATE | winapi.SWP_FRAMECHANGED,
+    );
+    if (self.mica) {
+        const margins: winapi.MARGINS = .{ .cyTopHeight = self.titlebarHeight() };
+        _ = winapi.DwmExtendFrameIntoClientArea(self.hwnd, &margins);
+    }
+    self.layoutActiveTab();
+    _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+}
+
 /// The title strip height in physical pixels.
 pub fn titlebarHeight(self: *const Window) i32 {
     // Fullscreen hides the strip so the terminal owns the whole monitor.
     if (self.fullscreen) return 0;
-    return self.scale(titlebar_height_logical);
+    return self.scale(if (self.app.config.@"windows-titlebar-thin")
+        titlebar_thin_height_logical
+    else
+        titlebar_height_logical);
 }
 
 /// Toggle borderless fullscreen on the window's current monitor.
@@ -1661,7 +1718,8 @@ fn tabsRegionRight(self: *const Window) i32 {
 /// Total width of all tabs plus the split new-tab button, unscrolled.
 fn tabsContentWidth(self: *const Window) i32 {
     const n: i32 = @intCast(self.tabs.items.len);
-    return n * self.tabWidth() +
+    return self.scale(strip_leading_logical) +
+        n * self.tabWidth() +
         self.scale(new_tab_width_logical) +
         self.scale(new_tab_chevron_width_logical);
 }
@@ -1679,10 +1737,11 @@ fn clampTabScroll(self: *Window) void {
 fn tabRect(self: *const Window, idx: usize) winapi.RECT {
     const w = self.tabWidth();
     const i: i32 = @intCast(idx);
+    const lead = self.scale(strip_leading_logical);
     return .{
-        .left = i * w - self.tab_scroll,
+        .left = lead + i * w - self.tab_scroll,
         .top = 0,
-        .right = (i + 1) * w - self.tab_scroll,
+        .right = lead + (i + 1) * w - self.tab_scroll,
         .bottom = self.titlebarHeight(),
     };
 }
@@ -1704,10 +1763,11 @@ fn tabCloseRect(self: *const Window, idx: usize) winapi.RECT {
 fn newTabRect(self: *const Window) winapi.RECT {
     const w = self.tabWidth();
     const n: i32 = @intCast(self.tabs.items.len);
+    const lead = self.scale(strip_leading_logical);
     return .{
-        .left = n * w - self.tab_scroll,
+        .left = lead + n * w - self.tab_scroll,
         .top = 0,
-        .right = n * w + self.scale(new_tab_width_logical) - self.tab_scroll,
+        .right = lead + n * w + self.scale(new_tab_width_logical) - self.tab_scroll,
         .bottom = self.titlebarHeight(),
     };
 }
@@ -2144,7 +2204,14 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
 
     // Tabs
     for (self.tabs.items, 0..) |*tab, i| {
-        var rect = self.tabRect(i);
+        const rect = self.tabRect(i);
+        // The painted plate floats below a breathing-room gap
+        // (Notepad-style); the full rect stays the hit target. The
+        // thin strip shrinks the gap proportionally.
+        var plate = rect;
+        plate.top += self.scale(
+            if (self.app.config.@"windows-titlebar-thin") 2 else tab_top_pad_logical,
+        );
         const active = i == self.active_tab;
         const hovered = switch (self.hover) {
             .tab => |h| h == i,
@@ -2158,7 +2225,7 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
             );
             if (brush) |b| {
                 defer _ = winapi.DeleteObject(b);
-                _ = winapi.FillRect(hdc, &rect, b);
+                _ = winapi.FillRect(hdc, &plate, b);
             }
             // markOpaque + roundCorners happen after the tab's text
             // and close glyph, at the end of this loop body: text
@@ -2302,9 +2369,9 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
         // op inside the tab: opaque plate first, then the corner fade
         // (which needs the final alpha in place).
         if (active or hovered) {
-            self.markOpaque(rect);
+            self.markOpaque(plate);
             self.roundCorners(
-                rect,
+                plate,
                 6,
                 if (self.mica) 0x00000000 else bg,
                 0b0011,

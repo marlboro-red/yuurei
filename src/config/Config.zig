@@ -2031,6 +2031,13 @@ keybind: Keybinds = .{},
 /// Changing this value at runtime will only affect new terminals.
 @"windows-flip-model": bool = false,
 
+/// Windows: use a compact title strip (a wezterm-style thin tab bar,
+/// 26 instead of 36 logical pixels) with correspondingly compact
+/// caption buttons. The Mica backdrop is skipped in this mode; the
+/// native caption buttons DWM renders with it need the full-height
+/// strip. Live-reloadable.
+@"windows-titlebar-thin": bool = false,
+
 /// If true, new windows will inherit the working directory of the
 /// previously focused window. If no window was previously focused, the default
 /// working directory will be used (the `working-directory` option).

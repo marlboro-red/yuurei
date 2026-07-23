@@ -1288,6 +1288,7 @@ fn reloadConfig(
     for (self.windows.items) |window| {
         window.reapplyTransparency();
         window.notifyColorScheme();
+        window.refreshChrome();
     }
 
     // Global hotkeys may have changed.
