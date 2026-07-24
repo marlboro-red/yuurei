@@ -267,7 +267,19 @@ pub fn build(b: *std.Build) !void {
     // Run step
     run: {
         if (config.app_runtime != .none) {
-            const run_cmd = b.addRunArtifact(exe.exe);
+            // On Windows, run the INSTALLED exe (zig-out/bin), not
+            // addRunArtifact's cache-dir copy. The vendored
+            // conpty.dll/OpenConsole.exe are installed beside the exe and
+            // loaded from the exe's own directory; the cache-dir artifact
+            // has no DLLs next to it and silently falls back to the system
+            // ConPTY (the Nushell-misrender dev trap fe66dcc93 fixed for
+            // packaged runs but that `zig build run` still hit).
+            const run_cmd = if (config.target.result.os.tag == .windows) win: {
+                const rc = std.Build.Step.Run.create(b, "run ghostty");
+                rc.addArg(b.getInstallPath(.bin, "ghostty.exe"));
+                rc.step.dependOn(b.getInstallStep());
+                break :win rc;
+            } else b.addRunArtifact(exe.exe);
             if (b.args) |args| run_cmd.addArgs(args);
 
             // Set the proper resources dir so things like shell integration

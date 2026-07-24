@@ -343,5 +343,17 @@ fn runCapture(
     var code: winapi.DWORD = 0;
     if (winapi.GetExitCodeProcess(pi.hProcess.?, &code) == 0 or code != 0) return null;
 
+    // Final drain: bytes the child wrote between our last Peek and its
+    // exit are still buffered in the pipe (the loop breaks on exit without
+    // re-reading), so pull whatever remains before returning.
+    while (out.items.len < 1 << 20) {
+        var avail: winapi.DWORD = 0;
+        if (winapi.PeekNamedPipe(read_h.?, null, 0, null, &avail, null) == 0 or avail == 0) break;
+        var n: winapi.DWORD = 0;
+        const want = @min(avail, @as(winapi.DWORD, buf.len));
+        if (winapi.ReadFile(read_h.?, &buf, want, &n, null) == 0 or n == 0) break;
+        out.appendSlice(alloc, buf[0..n]) catch break;
+    }
+
     return alloc.dupe(u8, out.items) catch null;
 }

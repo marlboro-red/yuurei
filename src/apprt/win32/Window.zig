@@ -242,6 +242,10 @@ const new_tab_chevron_width_logical: i32 = 30;
 /// full-height; only the painted plate is inset.
 const strip_leading_logical: i32 = 8;
 const tab_top_pad_logical: i32 = 6;
+/// Horizontal inset applied to each side of a tab's painted plate so
+/// adjacent tabs read as separate pills with a small gap between them.
+/// The full-width hit target (`rect`) is unaffected — no dead zones.
+const tab_side_gap_logical: i32 = 2;
 /// Default window size in logical (96-dpi) pixels, scaled to the
 /// monitor DPI at creation so the window isn't tiny on high-DPI
 /// displays (window-width/height config overrides via initial_size).
@@ -2307,6 +2311,12 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
         plate.top += self.scale(
             if (self.app.config.@"windows-titlebar-thin") 2 else tab_top_pad_logical,
         );
+        // Inset each side so neighbouring plates don't touch (the hit
+        // `rect` stays full-width). Applied to the fill, accent underline,
+        // rounded corners and Mica alpha below.
+        const side_gap = self.scale(tab_side_gap_logical);
+        plate.left += side_gap;
+        plate.right -= side_gap;
         const active = i == self.active_tab;
         const hovered = switch (self.hover) {
             .tab => |h| h == i,
@@ -2332,6 +2342,8 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
         // color ties the strip to the user's Windows personalization.
         if (active) {
             var line = rect;
+            line.left += side_gap;
+            line.right -= side_gap;
             line.top = line.bottom - self.scale(2);
             if (winapi.CreateSolidBrush(accent)) |b| {
                 defer _ = winapi.DeleteObject(b);

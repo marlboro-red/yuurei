@@ -933,6 +933,23 @@ const Subprocess = struct {
         self.stop();
         if (self.pty) |*pty| pty.deinit();
         if (self.env) |*env| env.deinit();
+
+        // A default-terminal handoff that start() never consumed into the
+        // pty (init failed after takeHandoff): release its pipes and the
+        // adopted ConPTY so conhost's session doesn't hang waiting on a
+        // terminal that will never read. closePseudoConsole tears the
+        // ConPTY down (the client then falls back / exits). The client
+        // bootstrap handle is left unclosed, matching start()'s path.
+        if (comptime builtin.os.tag == .windows) {
+            if (self.handoff) |ho| {
+                windows.CloseHandle(ho.our_read);
+                windows.CloseHandle(ho.our_write);
+                if (ho.signal) |s| windows.CloseHandle(s);
+                windows.conpty.closePseudoConsole(ho.hpc);
+                self.handoff = null;
+            }
+        }
+
         self.arena.deinit();
         self.* = undefined;
     }
@@ -991,6 +1008,11 @@ const Subprocess = struct {
                     env.deinit();
                     self.env = null;
                 }
+
+                // Consumed: the pipes and HPCON now live in the pty (its
+                // deinit closes them). Clear so deinit doesn't also try to
+                // release an already-adopted handoff.
+                self.handoff = null;
 
                 return .{ .read = pty.out_pipe, .write = pty.in_pipe };
             }

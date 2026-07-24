@@ -51,6 +51,40 @@ pub extern "kernel32" fn Process32FirstW(HANDLE, *PROCESSENTRY32W) callconv(.win
 pub extern "kernel32" fn Process32NextW(HANDLE, *PROCESSENTRY32W) callconv(.winapi) windows.BOOL;
 pub extern "kernel32" fn GetProcessId(HANDLE) callconv(.winapi) DWORD;
 
+// Process creation-time lookup, to reject Toolhelp PID-reuse false
+// positives in hasChildProcesses (a recycled parent PID can make an
+// unrelated orphan look like a child).
+pub const PROCESS_QUERY_LIMITED_INFORMATION: DWORD = 0x1000;
+pub const FILETIME = extern struct {
+    dwLowDateTime: DWORD = 0,
+    dwHighDateTime: DWORD = 0,
+};
+pub extern "kernel32" fn OpenProcess(DWORD, windows.BOOL, DWORD) callconv(.winapi) ?HANDLE;
+pub extern "kernel32" fn GetProcessTimes(HANDLE, *FILETIME, *FILETIME, *FILETIME, *FILETIME) callconv(.winapi) windows.BOOL;
+
+/// A process's creation time as a raw 100ns tick count, or null if it
+/// can't be opened/queried.
+fn processCreationTime(pid: DWORD) ?u64 {
+    const h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, windows.FALSE, pid) orelse return null;
+    defer CloseHandle(h);
+    var creation: FILETIME = .{};
+    var exit_t: FILETIME = .{};
+    var kernel_t: FILETIME = .{};
+    var user_t: FILETIME = .{};
+    if (GetProcessTimes(h, &creation, &exit_t, &kernel_t, &user_t) == 0) return null;
+    return (@as(u64, creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
+}
+
+/// Whether `child_pid` looks like a PID-reuse ghost of `root_created`: a
+/// genuine child is created no earlier than its parent, so a "child" that
+/// predates root means root's PID was recycled onto an unrelated tree.
+/// Conservative: if either timestamp is unavailable, not treated as reuse.
+fn pidReused(root_created: ?u64, child_pid: DWORD) bool {
+    const rc = root_created orelse return false;
+    const cc = processCreationTime(child_pid) orelse return false;
+    return cc < rc;
+}
+
 /// Whether the given process has any live child processes. Used as the
 /// close-confirmation fallback for shells that can't report prompt
 /// state via OSC 133 (cmd has no integration mechanism; wsl.exe is an
@@ -81,11 +115,15 @@ pub fn hasChildProcesses(root_pid: DWORD) bool {
     }
 
     // Second pass: any non-infrastructure child means work in progress.
+    // Guard against PID reuse (a recycled root_pid attracting an unrelated
+    // orphan) by rejecting any "child" created before root.
+    const root_created = processCreationTime(root_pid);
     if (Process32FirstW(snap, &entry) == 0) return false;
     while (true) {
         if (entry.th32ParentProcessID == root_pid and
             entry.th32ProcessID != root_pid and
-            !infrastructureProcess(&entry.szExeFile, root_is_wsl)) return true;
+            !infrastructureProcess(&entry.szExeFile, root_is_wsl) and
+            !pidReused(root_created, entry.th32ProcessID)) return true;
         if (Process32NextW(snap, &entry) == 0) return false;
     }
 }

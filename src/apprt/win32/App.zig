@@ -104,6 +104,12 @@ com_initialized: bool = false,
 /// Flips to true to quit on the next event loop tick.
 quit: bool = false,
 
+/// Whether we've already attempted session restore. Restore fires on the
+/// launch window, but `windows.len == 0` is also true during the
+/// quit-after-last-window-closed linger, so without this a `global:`
+/// new_window during the linger would re-open the entire session.
+session_restored: bool = false,
+
 /// Default-terminal handoffs received from the COM server but not yet
 /// turned into windows. EstablishPtyHandoff enqueues here and returns
 /// S_OK *immediately* — it must not build a window inline, because
@@ -820,7 +826,10 @@ pub fn performAction(
             };
             // The launch window: restore the previous session when
             // configured; fall through to the default on any failure.
-            if (parent == null and self.windows.items.len == 0) {
+            // Attempted at most once (see session_restored) so a
+            // new_window during the quit linger doesn't re-restore.
+            if (parent == null and !self.session_restored and self.windows.items.len == 0) {
+                self.session_restored = true;
                 if (session.restore(self) != null) return true;
             }
             _ = try self.newSurface(parent);

@@ -82,14 +82,16 @@ ARM64. See [`WINDOWS_PORT_PLAN.md`](WINDOWS_PORT_PLAN.md) for the live list.
 The fork is deliberately **additive**: new files for the Windows layer, small
 surgical changes to shared files, so tracking upstream stays cheap.
 
-**Shared, unchanged, with upstream Ghostty** — consumed as-is:
+**Shared with upstream Ghostty** — used as-is, or with small surgical
+Windows-specific changes so tracking upstream stays cheap:
 [`src/terminal/`](src/terminal/) (VT parsing/emulation),
-[`src/termio/`](src/termio/) (I/O threading; upstream already carried the
-ConPTY scaffolding, which the fork completed end-to-end),
-[`src/font/`](src/font/) (shaping, rasterization, `freetype_windows`
-discovery), [`src/renderer/`](src/renderer/) (OpenGL renderer),
-[`src/config/`](src/config/) and [`src/input/`](src/input/) (config + key
-encoder), and the split tree behind Windows splits.
+[`src/termio/`](src/termio/) (I/O threading — the fork completed upstream's
+ConPTY scaffolding end-to-end and adds Windows `TERM`/pwd/exit-detection
+tweaks), [`src/font/`](src/font/) (shaping, rasterization,
+`freetype_windows` discovery), [`src/renderer/`](src/renderer/) (OpenGL
+renderer), [`src/config/`](src/config/) (plus the fork's Windows config
+keys) and [`src/input/`](src/input/) (config + key encoder), and the split
+tree behind Windows splits.
 
 **New in this fork:**
 - [`src/apprt/win32/`](src/apprt/win32/) — **the entire Windows app runtime**,
