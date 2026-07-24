@@ -50,6 +50,10 @@ pub const StreamHandler = struct {
     /// The clipboard write access configuration.
     clipboard_write: configpkg.ClipboardAccess,
 
+    /// Whether ConPTY's win32-input-mode request (DECSET 9001) is
+    /// honored. See the `win32-input-mode` config option.
+    win32_input_allowed: bool,
+
     //---------------------------------------------------------------
     // Internal state
 
@@ -109,6 +113,7 @@ pub const StreamHandler = struct {
         self.enquiry_response = config.enquiry_response;
         self.terminal.setDefaultCursorStyle(config.cursor_style);
         self.terminal.setDefaultCursorBlink(config.cursor_blink);
+        self.win32_input_allowed = config.win32_input_mode;
 
         // The config could have changed any of our colors so update mode 2031
         self.messageWriter(.{ .color_scheme_report = .{ .force = false } });
@@ -683,6 +688,10 @@ pub const StreamHandler = struct {
         {
             return;
         }
+
+        // Users can refuse ConPTY's win32-input-mode request; see the
+        // `win32-input-mode` config option.
+        if (mode == .win32_input and !self.win32_input_allowed) return;
 
         // We first always set the raw mode on our mode state.
         self.terminal.modes.set(mode, enabled);

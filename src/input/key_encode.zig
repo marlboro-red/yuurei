@@ -37,6 +37,10 @@ pub const Options = struct {
     /// Kitty keyboard protocol flags.
     kitty_flags: KittyFlags = .disabled,
 
+    /// ConPTY win32-input-mode (DEC mode 9001). Windows only in
+    /// practice; conhost is the only known requester.
+    win32_input_mode: bool = false,
+
     /// Determines whether the "option" key on macOS is treated
     /// as "alt" or not. See the Ghostty `macos_option-as-alt` config
     /// docs for a more detailed description of why this is needed.
@@ -49,6 +53,7 @@ pub const Options = struct {
         .alt_esc_prefix = false,
         .modify_other_keys_state_2 = false,
         .kitty_flags = .disabled,
+        .win32_input_mode = false,
         .macos_option_as_alt = .false,
     };
 
@@ -65,6 +70,7 @@ pub const Options = struct {
             .ignore_keypad_with_numlock = t.modes.get(.ignore_keypad_with_numlock),
             .modify_other_keys_state_2 = t.flags.modify_other_keys_2,
             .kitty_flags = t.screens.active.kitty_keyboard.current(),
+            .win32_input_mode = t.modes.get(.win32_input),
 
             // These can't be known from the terminal state.
             .macos_option_as_alt = .false,
@@ -85,6 +91,16 @@ pub fn encode(
     opts: Options,
 ) std.Io.Writer.Error!void {
     //std.log.warn("KEYENCODER event={} opts={}", .{ event, opts });
+
+    // ConPTY win32-input-mode wins over everything else: conhost itself
+    // requested it (mode 9001) and the kitty protocol cannot legitimately
+    // be active behind ConPTY (conhost consumes the app's negotiation).
+    if (opts.win32_input_mode) return try win32InputMode(
+        writer,
+        event,
+        opts,
+    );
+
     return if (opts.kitty_flags.int() != 0) try kitty(
         writer,
         event,
@@ -314,6 +330,157 @@ fn kitty(
     };
 
     return try seq.encode(writer);
+}
+
+/// Perform ConPTY win32-input-mode encoding of the key event.
+///
+/// While DEC mode 9001 is set (requested by conhost at session start),
+/// every key event is sent as `CSI Vk;Sc;Uc;Kd;Cs;Rc _` so conhost can
+/// reconstruct complete Win32 INPUT_RECORDs -- including modifier state
+/// and key releases -- for console API clients such as crossterm TUIs.
+/// Reference: microsoft/terminal doc/specs/#4999 (improved keyboard
+/// handling in ConPTY).
+fn win32InputMode(
+    writer: *std.Io.Writer,
+    event: key.KeyEvent,
+    opts: Options,
+) std.Io.Writer.Error!void {
+    // Never encode mid dead-key composition; committed text arrives
+    // in a later event.
+    if (event.composing) return;
+
+    const kd: u16 = switch (event.action) {
+        .press, .repeat => 1,
+        .release => 0,
+    };
+    const cs = win32ControlKeyState(event);
+
+    // Without a virtual key we cannot produce a faithful record.
+    if (event.windows_vk == 0) {
+        // Text-only events (IME commits, non-Windows apprts): emit
+        // char-only records. Conhost synthesizes full key events from
+        // the character alone, the same way Windows Terminal encodes
+        // pasted text.
+        if (event.utf8.len > 0) return try win32TextRecords(
+            writer,
+            event.utf8,
+            0,
+            0,
+            kd,
+            cs,
+        );
+
+        // No key data and no text: legacy VT, which conhost continues
+        // to parse while the mode is active.
+        return try legacy(writer, event, opts);
+    }
+
+    // Keystroke with text: one record per UTF-16 code unit. A single
+    // codepoint keeps the real Vk/Sc (a non-BMP character becomes two
+    // records, high then low surrogate); multi-codepoint IME commits
+    // are sent as char-only records.
+    if (event.utf8.len > 0) {
+        const n = std.unicode.utf8CountCodepoints(event.utf8) catch return;
+        return try win32TextRecords(
+            writer,
+            event.utf8,
+            if (n == 1) event.windows_vk else 0,
+            if (n == 1) event.windows_scancode else 0,
+            kd,
+            cs,
+        );
+    }
+
+    // No text: derive the code unit a Win32 KEY_EVENT_RECORD would carry.
+    const uc: u16 = uc: {
+        // Ctrl chords carry their C0 byte (Ctrl+C => 3).
+        if (ctrlSeq(
+            event.key,
+            event.utf8,
+            event.unshifted_codepoint,
+            event.mods,
+        )) |byte| break :uc byte;
+
+        // Control keys whose WM_CHAR is a control character and thus
+        // never arrives as text (the load-bearing case: Shift+Enter).
+        switch (event.key) {
+            .enter, .numpad_enter => break :uc 0x0D,
+            .tab => break :uc 0x09,
+            .backspace => break :uc 0x08,
+            .escape => break :uc 0x1B,
+            else => {},
+        }
+
+        // Best effort: the unshifted codepoint (alt chords, key-ups).
+        const cp = event.unshifted_codepoint;
+        if (cp > 0 and cp <= 0xFFFF and !(cp >= 0xD800 and cp <= 0xDFFF)) {
+            break :uc @intCast(cp);
+        }
+
+        break :uc 0;
+    };
+
+    try win32Record(
+        writer,
+        event.windows_vk,
+        event.windows_scancode,
+        uc,
+        kd,
+        cs,
+    );
+}
+
+/// Write a single win32-input-mode record. The repeat count is always 1;
+/// Windows key repeat arrives as discrete repeat events.
+fn win32Record(
+    writer: *std.Io.Writer,
+    vk: u16,
+    sc: u16,
+    uc: u16,
+    kd: u16,
+    cs: u16,
+) std.Io.Writer.Error!void {
+    try writer.print("\x1b[{d};{d};{d};{d};{d};1_", .{ vk, sc, uc, kd, cs });
+}
+
+/// Write one record per UTF-16 code unit of the given UTF-8 text.
+/// Non-BMP codepoints produce a high surrogate record followed by a
+/// low surrogate record, per the ConPTY spec.
+fn win32TextRecords(
+    writer: *std.Io.Writer,
+    utf8: []const u8,
+    vk: u16,
+    sc: u16,
+    kd: u16,
+    cs: u16,
+) std.Io.Writer.Error!void {
+    const view = std.unicode.Utf8View.init(utf8) catch return;
+    var it = view.iterator();
+    while (it.nextCodepoint()) |cp| {
+        if (cp < 0x10000) {
+            try win32Record(writer, vk, sc, @intCast(cp), kd, cs);
+        } else {
+            const v: u21 = cp - 0x10000;
+            try win32Record(writer, vk, sc, @intCast(0xD800 + (v >> 10)), kd, cs);
+            try win32Record(writer, vk, sc, @intCast(0xDC00 + (v & 0x3FF)), kd, cs);
+        }
+    }
+}
+
+/// Build the Win32 dwControlKeyState bitmask for the event. Uses the
+/// raw (not effective) mods: the receiving application decides what a
+/// modifier means. Scroll lock is not tracked by Mods and is always 0.
+fn win32ControlKeyState(event: key.KeyEvent) u16 {
+    var cs: u16 = 0;
+    if (event.mods.alt)
+        cs |= if (event.mods.sides.alt == .right) 0x0001 else 0x0002;
+    if (event.mods.ctrl)
+        cs |= if (event.mods.sides.ctrl == .right) 0x0004 else 0x0008;
+    if (event.mods.shift) cs |= 0x0010;
+    if (event.mods.num_lock) cs |= 0x0020;
+    if (event.mods.caps_lock) cs |= 0x0080;
+    if (event.windows_extended) cs |= 0x0100;
+    return cs;
 }
 
 /// Perform legacy encoding of the key event. "Legacy" in this case
@@ -2279,6 +2446,135 @@ test "legacy: keypad enter" {
         .consumed_mods = .{},
     }, .{});
     try testing.expectEqualStrings("\r", writer.buffered());
+}
+
+test "win32: shift+enter press" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try win32InputMode(&writer, .{
+        .key = .enter,
+        .mods = .{ .shift = true },
+        .windows_vk = 0x0D,
+        .windows_scancode = 0x1C,
+    }, .{ .win32_input_mode = true });
+    try testing.expectEqualStrings("\x1b[13;28;13;1;16;1_", writer.buffered());
+}
+
+test "win32: shift+enter release" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try win32InputMode(&writer, .{
+        .action = .release,
+        .key = .enter,
+        .mods = .{ .shift = true },
+        .windows_vk = 0x0D,
+        .windows_scancode = 0x1C,
+    }, .{ .win32_input_mode = true });
+    try testing.expectEqualStrings("\x1b[13;28;13;0;16;1_", writer.buffered());
+}
+
+test "win32: plain 'a' with text" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try win32InputMode(&writer, .{
+        .key = .key_a,
+        .utf8 = "a",
+        .unshifted_codepoint = 'a',
+        .windows_vk = 0x41,
+        .windows_scancode = 0x1E,
+    }, .{ .win32_input_mode = true });
+    try testing.expectEqualStrings("\x1b[65;30;97;1;0;1_", writer.buffered());
+}
+
+test "win32: ctrl+c carries C0 byte" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try win32InputMode(&writer, .{
+        .key = .key_c,
+        .mods = .{ .ctrl = true },
+        .unshifted_codepoint = 'c',
+        .windows_vk = 0x43,
+        .windows_scancode = 0x2E,
+    }, .{ .win32_input_mode = true });
+    try testing.expectEqualStrings("\x1b[67;46;3;1;8;1_", writer.buffered());
+}
+
+test "win32: left arrow sets enhanced flag" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try win32InputMode(&writer, .{
+        .key = .arrow_left,
+        .windows_vk = 0x25,
+        .windows_scancode = 0x4B,
+        .windows_extended = true,
+    }, .{ .win32_input_mode = true });
+    try testing.expectEqualStrings("\x1b[37;75;0;1;256;1_", writer.buffered());
+}
+
+test "win32: non-BMP text emits surrogate pair records" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try win32InputMode(&writer, .{
+        .utf8 = "\u{1F600}",
+    }, .{ .win32_input_mode = true });
+    try testing.expectEqualStrings(
+        "\x1b[0;0;55357;1;0;1_\x1b[0;0;56832;1;0;1_",
+        writer.buffered(),
+    );
+}
+
+test "win32: no vk and no text falls back to legacy" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try win32InputMode(&writer, .{
+        .key = .enter,
+    }, .{ .win32_input_mode = true });
+    try testing.expectEqualStrings("\r", writer.buffered());
+}
+
+test "win32: right-side modifiers use right control key state bits" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try win32InputMode(&writer, .{
+        .key = .enter,
+        .mods = .{
+            .ctrl = true,
+            .alt = true,
+            .sides = .{ .ctrl = .right, .alt = .right },
+        },
+        .windows_vk = 0x0D,
+        .windows_scancode = 0x1C,
+    }, .{ .win32_input_mode = true });
+    // RIGHT_ALT (0x1) | RIGHT_CTRL (0x4) = 5. Ctrl+Enter has no C0
+    // mapping via ctrlSeq so the key table provides Uc=13.
+    try testing.expectEqualStrings("\x1b[13;28;13;1;5;1_", writer.buffered());
+}
+
+test "win32: takes precedence over kitty flags in encode" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try encode(&writer, .{
+        .key = .enter,
+        .mods = .{ .shift = true },
+        .windows_vk = 0x0D,
+        .windows_scancode = 0x1C,
+    }, .{
+        .win32_input_mode = true,
+        .kitty_flags = .{ .disambiguate = true },
+    });
+    try testing.expectEqualStrings("\x1b[13;28;13;1;16;1_", writer.buffered());
+}
+
+test "win32: bare modifier press encodes with zero code unit" {
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try win32InputMode(&writer, .{
+        .key = .shift_left,
+        .mods = .{ .shift = true },
+        .windows_vk = 0x10,
+        .windows_scancode = 0x2A,
+    }, .{ .win32_input_mode = true });
+    try testing.expectEqualStrings("\x1b[16;42;0;1;16;1_", writer.buffered());
 }
 
 test "legacy: keypad 1" {

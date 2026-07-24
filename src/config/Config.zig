@@ -2063,6 +2063,20 @@ keybind: Keybinds = .{},
 /// as its focused pane).
 @"windows-restore-session": bool = false,
 
+/// Windows only (yuurei): honor ConPTY's win32-input-mode request
+/// (DECSET 9001). When enabled (the default), keyboard input is encoded
+/// as full-fidelity Win32 key records (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`) so
+/// console applications that read INPUT_RECORDs — e.g. Rust/crossterm
+/// TUIs like the Codex CLI — receive real modifier state such as
+/// Shift+Enter. Requires a ConPTY new enough to translate key records
+/// to the kitty keyboard protocol (bundled) for VT-reading applications
+/// to keep full key fidelity as well.
+///
+/// Set to false to refuse the request and keep legacy VT key encoding.
+///
+/// Changing this value at runtime will only affect new terminals.
+@"win32-input-mode": bool = true,
+
 /// If true, new windows will inherit the working directory of the
 /// previously focused window. If no window was previously focused, the default
 /// working directory will be used (the `working-directory` option).
