@@ -97,14 +97,11 @@ refs: u32 = 1,
 
 /// A default-terminal handoff (defterm.zig) staged before core surface
 /// init. `takeHandoff` (called from core Surface.init) consumes it and
-/// hands its pipe/signal/client handles to termio so this surface drives
+/// hands its pipe/HPCON/client handles to termio so this surface drives
 /// conhost's ConPTY instead of spawning its own. Null for a normal tab.
+/// The adopted HPCON keeps conhost's ConPTY alive; it is released when the
+/// pty (or, if never consumed, deinit via `defterm.closeHandoff`) closes.
 pending_handoff: ?defterm.Handoff = null,
-
-/// conhost's ConPTY "reference" handle from a handoff: holding it keeps
-/// conhost's ConPTY alive. Owned by us and closed on deinit. Null unless
-/// this surface came from a handoff.
-handoff_reference: ?winapi.HANDLE = null,
 
 /// Increase the reference count (SplitTree view contract).
 pub fn ref(self: *Self) *Self {
@@ -201,11 +198,9 @@ pub fn init(
         .hdc = hdc,
         .gl_context = gl_context,
         // Stash any handoff so core_surface.init's takeHandoff hook
-        // (below) can pull it into termio. The reference handle is held
-        // for the surface's lifetime (closed in deinit) to keep conhost's
-        // ConPTY alive.
+        // (below) can pull it into termio (the adopted HPCON moves into the
+        // pty, which keeps conhost's ConPTY alive and releases it on close).
         .pending_handoff = spawn_opts.handoff,
-        .handoff_reference = if (spawn_opts.handoff) |h| h.reference else null,
     };
 
     // The renderer finds us from the host window (its only handle on
@@ -256,11 +251,12 @@ pub fn init(
     // surface's pwd.
     var config = if (spawn_opts.cwd != null and profile_base != null)
         profile_base.?.shallowClone(app.core_app.alloc)
-    else try apprt.surface.newConfig(
-        app.core_app,
-        if (profile_base) |*c| c else &app.config,
-        .window,
-    );
+    else
+        try apprt.surface.newConfig(
+            app.core_app,
+            if (profile_base) |*c| c else &app.config,
+            .window,
+        );
     defer config.deinit();
 
     // Initialize our surface now that we have the stable pointer.
@@ -301,17 +297,11 @@ pub fn deinit(self: *Self) void {
     _ = winapi.DestroyWindow(self.host);
     if (self.scrollbar) |sb| sb.destroy(self.app.core_app.alloc);
 
-    // Release conhost's ConPTY reference last: the core surface (and thus
-    // termio's pty) is already torn down above, so conhost's ConPTY can
-    // now be freed. A never-consumed handoff (pending_handoff still set,
-    // e.g. init failed before termio) also frees its handles here.
-    if (self.handoff_reference) |r| _ = winapi.CloseHandle(r);
-    if (self.pending_handoff) |h| {
-        _ = winapi.CloseHandle(h.our_read);
-        _ = winapi.CloseHandle(h.our_write);
-        if (h.signal) |s| _ = winapi.CloseHandle(s);
-        if (h.client) |c| _ = winapi.CloseHandle(c);
-    }
+    // A never-consumed handoff (pending_handoff still set, e.g. init failed
+    // before termio took it) frees its handles here. A consumed handoff's
+    // HPCON and pipes are owned by termio's pty and released on its deinit
+    // (above), which also frees conhost's ConPTY.
+    if (self.pending_handoff) |h| defterm.closeHandoff(h);
 }
 
 pub fn core(self: *Self) *CoreSurface {
@@ -583,18 +573,20 @@ pub fn defaultTermioEnv(self: *Self) !std.process.EnvMap {
 }
 
 /// Consume a staged default-terminal handoff, handing its
-/// pipe/signal/client handles to termio. Called once from core
+/// pipe/HPCON/client handles to termio. Called once from core
 /// Surface.init (via @hasDecl) before termio starts; returns null for a
-/// normal surface. Ownership: the pipe/signal handles move to the pty
-/// (closed on pty deinit); the client handle is adopted by the exec
-/// backend for exit detection; the reference handle stays on the surface
-/// (handoff_reference) and is closed in deinit.
+/// normal surface. Ownership: the pipes, the adopted HPCON, and the
+/// signal move to the pty (released on pty deinit, which frees conhost's
+/// ConPTY). The client handle (conhost's short-lived bootstrap) is
+/// deliberately released by nobody on this path — see the ownership note
+/// in termio/Exec.zig's handoff branch.
 pub fn takeHandoff(self: *Self) ?termio.Exec.HandoffHandles {
     const h = self.pending_handoff orelse return null;
     self.pending_handoff = null;
     return .{
         .our_read = h.our_read,
         .our_write = h.our_write,
+        .hpc = h.hpc,
         .signal = h.signal,
         .client = h.client,
     };

@@ -514,6 +514,9 @@ pub extern "kernel32" fn CreateNamedPipeW([*:0]const u16, DWORD, DWORD, DWORD, D
 pub extern "kernel32" fn CreateFileW([*:0]const u16, DWORD, DWORD, ?*SECURITY_ATTRIBUTES, DWORD, DWORD, ?HANDLE) callconv(.winapi) HANDLE;
 pub extern "kernel32" fn WriteFile(HANDLE, [*]const u8, DWORD, ?*DWORD, ?*anyopaque) callconv(.winapi) BOOL;
 pub extern "kernel32" fn PeekNamedPipe(HANDLE, ?[*]u8, DWORD, ?*DWORD, ?*DWORD, ?*DWORD) callconv(.winapi) BOOL;
+pub extern "kernel32" fn GetCurrentProcess() callconv(.winapi) HANDLE;
+pub extern "kernel32" fn DuplicateHandle(HANDLE, HANDLE, HANDLE, *HANDLE, DWORD, BOOL, DWORD) callconv(.winapi) BOOL;
+pub const DUPLICATE_SAME_ACCESS: DWORD = 0x2;
 pub const GetCurrentProcessId = windows.GetCurrentProcessId;
 pub const PIPE_ACCESS_INBOUND: DWORD = 0x1;
 pub const PIPE_ACCESS_OUTBOUND: DWORD = 0x2;

@@ -20,6 +20,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const winapi = @import("winapi.zig");
+const internal_os = @import("../../os/main.zig");
+const conpty = internal_os.windows.conpty;
+const HPCON = internal_os.windows.exp.HPCON;
 
 const log = std.log.scoped(.win32);
 
@@ -337,19 +340,46 @@ const IClassFactory = extern struct {
 };
 
 /// A received handoff, owned by the callback once delivered: the
-/// terminal's pipe ends (drive them exactly like a self-created PTY),
-/// the signal pipe (resize), the reference handle (keeps conhost's
-/// ConPTY alive; hold until teardown), and the client process (its exit
-/// is the shell exit). `title` is the console app's window title, if any.
+/// terminal's pipe ends (drive them exactly like a self-created PTY) and
+/// the adopted ConPTY (`hpc`, from ConptyPackPseudoConsole — it owns the
+/// packed server/reference/signal handles; closing it tears the ConPTY
+/// down and ends the session). Free an undelivered/undrained handoff with
+/// `closeHandoff`.
+///
+/// `client` is conhost's console *bootstrap* process, NOT the interactive
+/// shell — it exits within tens of milliseconds while the shell lives on,
+/// so it is useless for exit detection. It's carried only so a declined
+/// handoff can release it.
 pub const Handoff = struct {
     our_read: HANDLE, // app output (== pty.out_pipe)
     our_write: HANDLE, // user input (== pty.in_pipe)
+    hpc: HPCON,
+    /// Reserved for the resize follow-up: a duplicate of conhost's signal
+    /// pipe. Always null today — resize-reflow is not yet supported for a
+    /// handoff (ResizePseudoConsole rejects a packed HPCON, and raw
+    /// signal-pipe writes desynced the ConPTY). Plumbed through so the
+    /// eventual fix won't need to re-thread it.
     signal: ?HANDLE,
-    reference: ?HANDLE,
     client: ?HANDLE,
-    title: ?[]const u16,
+    /// The console app's window title (from conhost's startup info):
+    /// `title_buf[0..title_len]`, empty when none. Stored as buffer+length
+    /// rather than a slice so copying the struct by value (COM callback →
+    /// queue → drain) can never leave a dangling interior pointer.
     title_buf: [256]u16,
+    title_len: usize,
 };
+
+/// Release a handoff that never reached a surface (declined, or the app
+/// quit with it still queued). Closes our pipe ends, the signal dup, the
+/// client, and the HPCON — which releases the packed server/reference/
+/// signal.
+pub fn closeHandoff(h: Handoff) void {
+    _ = winapi.CloseHandle(h.our_read);
+    _ = winapi.CloseHandle(h.our_write);
+    if (h.signal) |s| _ = winapi.CloseHandle(s);
+    if (h.client) |c| _ = winapi.CloseHandle(c);
+    conpty.closePseudoConsole(h.hpc);
+}
 
 /// Set by App.startHandoffServer; invoked on the UI thread when a
 /// handoff arrives. Null means no app is ready to receive (the handoff
@@ -399,21 +429,61 @@ fn establishPtyHandoff(
     client: ?HANDLE,
     startup: *const TERMINAL_STARTUP_INFO,
 ) callconv(.winapi) HRESULT {
-    // The server (conhost) handle is not needed once we have the pipes.
-    if (server) |s| _ = winapi.CloseHandle(s);
+    // COM hygiene: initialize the [out] params so no path ever leaves
+    // them undefined (the stub won't marshal them on failure, but a
+    // defined null costs nothing).
+    in_out.* = null;
+    out_out.* = null;
 
-    // The proxy already duplicated signal/reference/client into this
-    // process; on any early return we must close them or they leak.
-    // On success they move into the Handoff (the callback owns them).
+    // The proxy already duplicated signal/reference/server/client into
+    // this process; each early return must close them or they leak. On
+    // success server/reference/signal are consumed by the packed HPCON and
+    // the rest move into the Handoff (the callback owns them).
     const cb = on_handoff orelse {
-        closeInHandles(signal, reference, client);
+        declineHandles(signal, reference, server, client);
         return E_FAIL;
     };
+
+    // conhost always supplies all three ConPTY handles; without them we
+    // can't adopt the pseudoconsole.
+    if (signal == null or reference == null or server == null) {
+        declineHandles(signal, reference, server, client);
+        return E_FAIL;
+    }
 
     const pipes = createHandoffPipes() catch {
-        closeInHandles(signal, reference, client);
+        declineHandles(signal, reference, server, client);
         return E_FAIL;
     };
+
+    // NOTE (resize follow-up): window-resize reflow is not yet wired for a
+    // handoff. ResizePseudoConsole rejects a *packed* HPCON (E_HANDLE), and
+    // writing resize packets to a duplicate of conhost's signal pipe
+    // desynced the ConPTY. The `signal` field is plumbed through (null for
+    // now) so a future fix can drive resizes without re-threading it.
+    const signal_dup: ?HANDLE = null;
+
+    // Adopt conhost's ConPTY: ConptyPackPseudoConsole folds the
+    // server/reference/signal handles into an HPCON we drive normally
+    // (close, and — for a normal pty — resize). This is the step that
+    // actually accepts the handoff; without it the client's console never
+    // becomes functional. It consumes those three handles on success.
+    var hpc: HPCON = undefined;
+    const prc = conpty.packPseudoConsole(server.?, reference.?, signal.?, &hpc) catch {
+        log.warn("defterm: conpty.dll has no pack entry point; cannot adopt handoff", .{});
+        if (signal_dup) |s| _ = winapi.CloseHandle(s);
+        closePipeEnds(pipes);
+        declineHandles(signal, reference, server, client);
+        return E_FAIL;
+    };
+    if (prc != S_OK) {
+        log.warn("defterm: ConptyPackPseudoConsole failed hr={x}", .{@as(u32, @bitCast(prc))});
+        if (signal_dup) |s| _ = winapi.CloseHandle(s);
+        closePipeEnds(pipes);
+        declineHandles(signal, reference, server, client);
+        return E_FAIL;
+    }
+
     // Return conhost's ends (the proxy duplicates them cross-process).
     in_out.* = pipes.conhost_in;
     out_out.* = pipes.conhost_out;
@@ -421,27 +491,39 @@ fn establishPtyHandoff(
     var h: Handoff = .{
         .our_read = pipes.our_read,
         .our_write = pipes.our_write,
-        .signal = signal,
-        .reference = reference,
+        .hpc = hpc,
+        .signal = signal_dup,
         .client = client,
-        .title = null,
         .title_buf = undefined,
+        .title_len = 0,
     };
     if (startup.pszTitle) |t| {
         const src = std.mem.sliceTo(t, 0);
         const n = @min(src.len, h.title_buf.len);
         @memcpy(h.title_buf[0..n], src[0..n]);
-        h.title = h.title_buf[0..n];
+        h.title_len = n;
     }
 
-    cb(h);
+    cb(h); // enqueues + returns fast; must NOT build a window inline
     return S_OK;
 }
 
-fn closeInHandles(signal: ?HANDLE, reference: ?HANDLE, client: ?HANDLE) void {
+/// Decline a handoff before it is adopted: close the raw handles conhost
+/// passed us (still ours until ConptyPackPseudoConsole consumes them).
+fn declineHandles(signal: ?HANDLE, reference: ?HANDLE, server: ?HANDLE, client: ?HANDLE) void {
     if (signal) |s| _ = winapi.CloseHandle(s);
     if (reference) |r| _ = winapi.CloseHandle(r);
+    if (server) |s| _ = winapi.CloseHandle(s);
     if (client) |c| _ = winapi.CloseHandle(c);
+}
+
+/// Close every end of a just-created pipe pair (used when adoption fails
+/// after the pipes exist).
+fn closePipeEnds(pipes: HandoffPipes) void {
+    _ = winapi.CloseHandle(pipes.our_read);
+    _ = winapi.CloseHandle(pipes.our_write);
+    _ = winapi.CloseHandle(pipes.conhost_in);
+    _ = winapi.CloseHandle(pipes.conhost_out);
 }
 
 const HandoffPipes = struct {
@@ -453,64 +535,105 @@ const HandoffPipes = struct {
 
 var pipe_counter: std.atomic.Value(u32) = .init(1);
 
-/// Create the two pipes for a handoff, mirroring pty.WindowsPty.open:
-/// an overlapped named pipe for user input (our write / conhost read)
-/// and an anonymous pipe for app output (our read / conhost write). The
-/// named pipe is required for libxev's IOCP path. Returns our ends plus
-/// conhost's ends (the latter marshaled back over the proxy).
-fn createHandoffPipes() !HandoffPipes {
-    var name_a: [128]u8 = undefined;
-    const name = std.fmt.bufPrintZ(
-        &name_a,
-        "\\\\.\\pipe\\LOCAL\\yuurei-handoff-{d}-{d}",
-        .{ winapi.GetCurrentProcessId(), pipe_counter.fetchAdd(1, .monotonic) },
+/// Build a `\\.\pipe\LOCAL\...` name (unique per pid+seq+direction) into
+/// `buf`, NUL-terminated.
+fn pipeName(buf: *[160:0]u16, seq: u32, comptime dir: []const u8) ![:0]const u16 {
+    var a: [160]u8 = undefined;
+    const s = std.fmt.bufPrintZ(
+        &a,
+        "\\\\.\\pipe\\LOCAL\\yuurei-handoff-{d}-{d}-" ++ dir,
+        .{ winapi.GetCurrentProcessId(), seq },
     ) catch return error.NameTooLong;
-    var name_w: [128:0]u16 = undefined;
-    const nlen = std.unicode.utf8ToUtf16Le(&name_w, name) catch return error.Encode;
-    name_w[nlen] = 0;
+    const n = std.unicode.utf8ToUtf16Le(buf, s) catch return error.Encode;
+    buf[n] = 0;
+    return buf[0..n :0];
+}
 
+/// Create the two VT data pipes for a handoff. conhost drives its ends
+/// with overlapped I/O (like Microsoft's own handoff, which hands the
+/// inbox a single 128 KiB overlapped duplex pipe), so both conhost-facing
+/// client ends MUST be overlapped-capable named pipes — an anonymous pipe
+/// (no overlapped support) leaves conhost's ConPTY unable to pump the
+/// client, which then fails its console init (STATUS_DLL_INIT_FAILED /
+/// 0xc0000142). Our own server ends match ghostty's pty model: the input
+/// end is overlapped (libxev IOCP writes user input), the output end is
+/// synchronous (the io-reader thread does blocking ReadFile). Returns our
+/// two ends plus conhost's, the latter marshaled back over the proxy.
+fn createHandoffPipes() !HandoffPipes {
+    const seq = pipe_counter.fetchAdd(1, .monotonic);
     var sa: winapi.SECURITY_ATTRIBUTES = .{ .bInheritHandle = winapi.FALSE };
+    const buf_size: winapi.DWORD = 128 * 1024;
 
+    // Input: terminal writes user input (overlapped server) -> conhost
+    // reads it (overlapped client).
+    var in_name: [160:0]u16 = undefined;
+    const in_w = try pipeName(&in_name, seq, "in");
     const our_write = winapi.CreateNamedPipeW(
-        name_w[0..nlen :0].ptr,
+        in_w.ptr,
         winapi.PIPE_ACCESS_OUTBOUND |
             winapi.FILE_FLAG_FIRST_PIPE_INSTANCE |
             winapi.FILE_FLAG_OVERLAPPED,
         winapi.PIPE_TYPE_BYTE,
         1,
-        4096,
-        4096,
+        buf_size,
+        buf_size,
         0,
         &sa,
     );
     if (our_write == winapi.INVALID_HANDLE_VALUE) return error.CreatePipe;
     errdefer _ = winapi.CloseHandle(our_write);
-
     const conhost_in = winapi.CreateFileW(
-        name_w[0..nlen :0].ptr,
+        in_w.ptr,
         winapi.GENERIC_READ,
         0,
         &sa,
         winapi.OPEN_EXISTING,
-        winapi.FILE_ATTRIBUTE_NORMAL,
+        winapi.FILE_FLAG_OVERLAPPED,
         null,
     );
     if (conhost_in == winapi.INVALID_HANDLE_VALUE) return error.OpenPipe;
     errdefer _ = winapi.CloseHandle(conhost_in);
 
-    var our_read: ?HANDLE = null;
-    var conhost_out: ?HANDLE = null;
-    if (winapi.CreatePipe(&our_read, &conhost_out, &sa, 0) == 0) return error.CreatePipe;
+    // Output: conhost writes app output (overlapped client) -> terminal
+    // reads it. Our server end is synchronous (blocking ReadFile on the
+    // io-reader thread; a FILE_FLAG_OVERLAPPED handle would make that
+    // ReadFile misreport completion).
+    var out_name: [160:0]u16 = undefined;
+    const out_w = try pipeName(&out_name, seq, "out");
+    const our_read = winapi.CreateNamedPipeW(
+        out_w.ptr,
+        winapi.PIPE_ACCESS_INBOUND |
+            winapi.FILE_FLAG_FIRST_PIPE_INSTANCE,
+        winapi.PIPE_TYPE_BYTE,
+        1,
+        buf_size,
+        buf_size,
+        0,
+        &sa,
+    );
+    if (our_read == winapi.INVALID_HANDLE_VALUE) return error.CreatePipe;
+    errdefer _ = winapi.CloseHandle(our_read);
+    const conhost_out = winapi.CreateFileW(
+        out_w.ptr,
+        winapi.GENERIC_WRITE,
+        0,
+        &sa,
+        winapi.OPEN_EXISTING,
+        winapi.FILE_FLAG_OVERLAPPED,
+        null,
+    );
+    if (conhost_out == winapi.INVALID_HANDLE_VALUE) return error.OpenPipe;
+    errdefer _ = winapi.CloseHandle(conhost_out);
 
     // Our ends must not leak into any child we later spawn.
     _ = winapi.SetHandleInformation(our_write, HANDLE_FLAG_INHERIT, 0);
-    _ = winapi.SetHandleInformation(our_read.?, HANDLE_FLAG_INHERIT, 0);
+    _ = winapi.SetHandleInformation(our_read, HANDLE_FLAG_INHERIT, 0);
 
     return .{
-        .our_read = our_read.?,
+        .our_read = our_read,
         .our_write = our_write,
         .conhost_in = conhost_in,
-        .conhost_out = conhost_out.?,
+        .conhost_out = conhost_out,
     };
 }
 
@@ -600,50 +723,41 @@ test "class factory and handoff vtables answer QueryInterface" {
     try testing.expect(obj != null);
 }
 
-test "EstablishPtyHandoff creates pipes and delivers to the callback" {
+test "EstablishPtyHandoff declines when conhost's ConPTY handles are absent" {
     if (comptime builtin.os.tag != .windows) return error.SkipZigTest;
     const testing = std.testing;
 
+    // A real handoff needs the server/reference/signal handles to adopt
+    // the pseudoconsole (ConptyPackPseudoConsole), which a unit test can't
+    // fabricate. Verify the guard instead: null handles ⇒ E_FAIL and the
+    // callback is never invoked (so no half-built surface leaks).
     const Captured = struct {
-        var got: ?Handoff = null;
-        fn cb(h: Handoff) void {
-            got = h;
+        var called: bool = false;
+        fn cb(_: Handoff) void {
+            called = true;
         }
     };
-    Captured.got = null;
+    Captured.called = false;
     on_handoff = Captured.cb;
     defer on_handoff = null;
 
     var in_h: ?HANDLE = null;
     var out_h: ?HANDLE = null;
     var startup: TERMINAL_STARTUP_INFO = std.mem.zeroes(TERMINAL_STARTUP_INFO);
-    const title = std.unicode.utf8ToUtf16LeStringLiteral("cmd.exe");
-    startup.pszTitle = @constCast(title.ptr);
 
     const rc = handoff_obj.vtable.EstablishPtyHandoff(
         &handoff_obj,
         &in_h,
         &out_h,
-        null,
-        null,
-        null,
-        null,
+        null, // signal
+        null, // reference
+        null, // server
+        null, // client
         &startup,
     );
-    try testing.expectEqual(S_OK, rc);
-    // conhost's two ends were produced...
-    try testing.expect(in_h != null and out_h != null);
-    // ...and the callback received our ends + the title.
-    try testing.expect(Captured.got != null);
-    const h = Captured.got.?;
-    try testing.expect(h.title != null);
-    try testing.expectEqualSlices(u16, title, h.title.?);
-
-    // Clean up every handle the test produced.
-    _ = winapi.CloseHandle(in_h.?);
-    _ = winapi.CloseHandle(out_h.?);
-    _ = winapi.CloseHandle(h.our_read);
-    _ = winapi.CloseHandle(h.our_write);
+    try testing.expectEqual(E_FAIL, rc);
+    try testing.expect(!Captured.called);
+    try testing.expect(in_h == null and out_h == null);
 }
 
 test "guidString formats the canonical registry form" {

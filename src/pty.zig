@@ -337,10 +337,17 @@ const WindowsPty = struct {
     pseudo_console: windows.exp.HPCON,
     size: winsize,
 
-    /// Set only for a default-terminal handoff pty (openHandoff): conhost
-    /// owns the ConPTY, so resizes go to this signal pipe instead of
-    /// ResizePseudoConsole, and teardown closes only the handles we own.
-    /// Null for a normal (self-created) pty.
+    /// True for a default-terminal handoff pty (openHandoff). The ConPTY
+    /// was created by conhost and adopted via ConptyPackPseudoConsole, so
+    /// `pseudo_console` is a real HPCON (close works normally) but the
+    /// ConPTY-side pipe ends (`*_pipe_pty`) belong to conhost and must not
+    /// be closed by us. False for a normal (self-created) pty.
+    handoff: bool = false,
+
+    /// Handoff only: reserved for the resize follow-up (a duplicate of
+    /// conhost's signal pipe). Always null today — see setSize for why
+    /// resize-reflow is unsupported. Closed on deinit if ever set. Null
+    /// for a normal pty.
     signal: ?windows.HANDLE = null,
 
     pub const OpenError = error{Unexpected};
@@ -447,20 +454,21 @@ const WindowsPty = struct {
         if (result != windows.S_OK) return error.Unexpected;
 
         pty.size = size;
-        pty.signal = null;
+        pty.handoff = false;
         return pty;
     }
 
     /// Adopt a ConPTY handed to us by conhost (default-terminal handoff)
     /// instead of creating our own. `our_read` is the pipe we read app
     /// output from (== out_pipe) and `our_write` the pipe we write user
-    /// input to (== in_pipe); `signal` is conhost's resize signal pipe.
-    /// The ConPTY lives in conhost, so there is no HPCON on our side and
-    /// the ConPTY pipe ends belong to conhost — we hold only our two
-    /// pipes and the signal pipe, and those are all deinit closes.
+    /// input to (== in_pipe); `hpc` is the HPCON produced by
+    /// ConptyPackPseudoConsole from conhost's server/reference/signal
+    /// handles (it owns those now). The ConPTY-side pipe ends live in
+    /// conhost, so we hold only our two pipes and the HPCON.
     pub fn openHandoff(
         our_read: windows.HANDLE,
         our_write: windows.HANDLE,
+        hpc: windows.exp.HPCON,
         signal: ?windows.HANDLE,
         size: winsize,
     ) Pty {
@@ -468,25 +476,27 @@ const WindowsPty = struct {
             .out_pipe = our_read,
             .in_pipe = our_write,
             // conhost owns its ConPTY pipe ends; we never received them.
-            // Mark them invalid so deinit never closes a handle we don't
-            // own (the handoff deinit path skips them regardless).
             .out_pipe_pty = windows.INVALID_HANDLE_VALUE,
             .in_pipe_pty = windows.INVALID_HANDLE_VALUE,
-            // No HPCON on our side; never read while signal != null.
-            .pseudo_console = undefined,
+            // A real adopted HPCON, used for teardown (resize-reflow is
+            // not yet supported for a handoff; see setSize).
+            .pseudo_console = hpc,
+            .handoff = true,
             .signal = signal,
             .size = size,
         };
     }
 
     pub fn deinit(self: *Pty) void {
-        // Handoff pty: we own only the two pipes we read/write plus the
-        // signal pipe. conhost owns the ConPTY and its pipe ends, so we
-        // must not close those or call closePseudoConsole.
-        if (self.signal) |sig| {
+        // Handoff pty: we own only the two pipes we read/write and the
+        // adopted HPCON. conhost owns the ConPTY-side pipe ends, so we
+        // must not close those; closePseudoConsole releases the packed
+        // server/reference/signal handles.
+        if (self.handoff) {
             _ = windows.CloseHandle(self.in_pipe);
             _ = windows.CloseHandle(self.out_pipe);
-            _ = windows.CloseHandle(sig);
+            if (self.signal) |sig| _ = windows.CloseHandle(sig);
+            windows.conpty.closePseudoConsole(self.pseudo_console);
             self.* = undefined;
             return;
         }
@@ -510,20 +520,13 @@ const WindowsPty = struct {
 
     /// Set the size of the pty.
     pub fn setSize(self: *Pty, size: winsize) SetSizeError!void {
-        // Handoff pty: conhost owns the ConPTY, so we can't
-        // ResizePseudoConsole. Send a resize packet down conhost's signal
-        // pipe instead: three little-endian u16s
-        // [PTY_SIGNAL_RESIZE_WINDOW (8), cols, rows].
-        if (self.signal) |sig| {
-            var packet = [3]u16{ 8, size.ws_col, size.ws_row };
-            var written: windows.DWORD = 0;
-            if (windows.kernel32.WriteFile(
-                sig,
-                std.mem.asBytes(&packet),
-                @sizeOf(@TypeOf(packet)),
-                &written,
-                null,
-            ) == 0) return error.ResizeFailed;
+        // Handoff pty: resize-reflow is not yet supported. Both obvious
+        // mechanisms fail — ResizePseudoConsole rejects a packed HPCON
+        // (E_HANDLE), and writing resize packets to a duplicate of
+        // conhost's signal pipe desynced the ConPTY. Accept the new size
+        // without propagating it (the ConPTY keeps conhost's initial
+        // size). Tracked as a follow-up; see defterm.zig.
+        if (self.handoff) {
             self.size = size;
             return;
         }

@@ -173,10 +173,22 @@ pub const conpty = struct {
         size: windows.COORD,
     ) callconv(.winapi) windows.HRESULT;
     const CloseFn = *const fn (hPC: exp.HPCON) callconv(.winapi) void;
+    // Adopt a ConPTY handed to us by conhost (default-terminal handoff):
+    // packs the handed-off server/reference/signal handles into a real
+    // HPCON we can resize/close normally. Only the vendored OpenConsole
+    // conpty.dll exports this (ConptyPackPseudoConsole); the OS kernel32
+    // ConPTY does not, so it stays optional.
+    const PackFn = *const fn (
+        hServerProcess: windows.HANDLE,
+        hRef: windows.HANDLE,
+        hSignal: windows.HANDLE,
+        phPC: *exp.HPCON,
+    ) callconv(.winapi) windows.HRESULT;
 
     var create_fn: CreateFn = undefined;
     var resize_fn: ResizeFn = undefined;
     var close_fn: CloseFn = undefined;
+    var pack_fn: ?PackFn = null;
     var once = std.once(resolve);
 
     fn resolve() void {
@@ -202,6 +214,11 @@ pub const conpty = struct {
             create_fn = @ptrCast(create);
             resize_fn = @ptrCast(resize);
             close_fn = @ptrCast(close);
+            // Optional: only present in the vendored OpenConsole DLL, used
+            // for default-terminal handoff adoption.
+            if (windows.kernel32.GetProcAddress(module, "ConptyPackPseudoConsole")) |pack| {
+                pack_fn = @ptrCast(pack);
+            }
             log.info("using vendored conpty.dll", .{});
             return;
         }
@@ -234,6 +251,22 @@ pub const conpty = struct {
     pub fn closePseudoConsole(hPC: exp.HPCON) void {
         once.call();
         close_fn(hPC);
+    }
+
+    /// Adopt a handed-off ConPTY. Consumes the server/reference/signal
+    /// handles into the returned HPCON (released by closePseudoConsole),
+    /// so the caller must not close them separately on success. Errors if
+    /// the running conpty.dll doesn't export the pack entry point (the OS
+    /// ConPTY doesn't); default-terminal handoff requires the vendored DLL.
+    pub fn packPseudoConsole(
+        hServerProcess: windows.HANDLE,
+        hRef: windows.HANDLE,
+        hSignal: windows.HANDLE,
+        phPC: *exp.HPCON,
+    ) error{Unsupported}!windows.HRESULT {
+        once.call();
+        const f = pack_fn orelse return error.Unsupported;
+        return f(hServerProcess, hRef, hSignal, phPC);
     }
 };
 

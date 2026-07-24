@@ -83,6 +83,17 @@ pub fn initTerminal(self: *Exec, term: *terminal.Terminal) void {
     }) catch unreachable;
 }
 
+/// Build the standard subprocess-exit watcher (POSIX/Windows job object).
+/// Not used for a win32 default-terminal handoff — see threadEnter.
+fn initProcessWatcher(proc: ?Subprocess.Process) !?xev.Process {
+    const v = proc orelse return error.ProcessNotStarted;
+    return switch (v) {
+        .fork_exec => |cmd| try xev.Process.init(cmd.pid orelse return error.ProcessNoPid),
+        // Flatpak commands run on the host; watched specially, not here.
+        .flatpak => null,
+    };
+}
+
 pub fn threadEnter(
     self: *Exec,
     alloc: Allocator,
@@ -103,18 +114,19 @@ pub fn threadEnter(
     };
     errdefer self.subprocess.stop();
 
-    // Watcher to detect subprocess exit
-    var process: ?xev.Process = if (self.subprocess.process) |v| switch (v) {
-        .fork_exec => |cmd| try xev.Process.init(
-            cmd.pid orelse return error.ProcessNoPid,
-        ),
-
-        // If we're executing via Flatpak then we can't do
-        // traditional process watching (its implemented
-        // as a special case in os/flatpak.zig) since the
-        // command is on the host.
-        .flatpak => null,
-    } else return error.ProcessNotStarted;
+    // Watcher to detect subprocess exit.
+    var process: ?xev.Process = if (comptime builtin.os.tag == .windows) win: {
+        // Default-terminal handoff: no process watcher. conhost's client
+        // handle carries only SYNCHRONIZE (too few rights for libxev's
+        // job-object watcher), and the process it names is a short-lived
+        // bootstrap — not the interactive shell — so watching it would
+        // report a bogus early exit anyway. There is currently NO exit
+        // detection for a handoff surface (the tab must be closed
+        // manually); finding a reliable exit signal is a tracked
+        // follow-up.
+        if (self.subprocess.handoff != null) break :win null;
+        break :win try initProcessWatcher(self.subprocess.process);
+    } else try initProcessWatcher(self.subprocess.process);
     errdefer if (process) |*p| p.deinit();
 
     // Track our process start time for abnormal exits
@@ -562,14 +574,16 @@ pub const ThreadData = struct {
 };
 
 /// A default-terminal handoff (win32 only): conhost handed us a live
-/// ConPTY and the console client process. When set on the Exec config,
-/// `start` adopts these instead of opening a pty and spawning a command.
-/// The pipe/signal handles are consumed by the pty (openHandoff) and
-/// closed on pty deinit; `client` is the pre-existing console process,
-/// adopted for exit detection (its exit == the shell exit).
+/// ConPTY. When set on the Exec config, `start` adopts these instead of
+/// opening a pty and spawning a command. The pipes, the adopted HPCON
+/// (`hpc`, from ConptyPackPseudoConsole), and `signal` are consumed by
+/// the pty (openHandoff) and released on pty deinit. `client` is
+/// conhost's short-lived bootstrap process handle — useless for exit
+/// detection; see the ownership note in `start`'s handoff branch.
 pub const HandoffHandles = struct {
     our_read: windows.HANDLE,
     our_write: windows.HANDLE,
+    hpc: windows.exp.HPCON,
     signal: ?windows.HANDLE,
     client: ?windows.HANDLE,
 };
@@ -938,7 +952,7 @@ const Subprocess = struct {
         // exact anonymous return type.
         if (comptime builtin.os.tag == .windows) {
             if (self.handoff) |ho| {
-                const pty = Pty.openHandoff(ho.our_read, ho.our_write, ho.signal, .{
+                const pty = Pty.openHandoff(ho.our_read, ho.our_write, ho.hpc, ho.signal, .{
                     .ws_row = @intCast(self.grid_size.rows),
                     .ws_col = @intCast(self.grid_size.columns),
                     .ws_xpixel = @intCast(self.screen_size.width),
@@ -946,15 +960,20 @@ const Subprocess = struct {
                 });
                 self.pty = pty;
 
-                // Adopt the console client process so the existing
-                // exit-detection path fires when it exits. On Windows
-                // `Command.pid` is the process HANDLE, and only that
-                // handle is used to wait on / kill the process
-                // (threadEnter's xev.Process.init, stop's killCommand), so
-                // a Command carrying just the client handle is all we
-                // need — we never spawned anything. If conhost handed no
-                // client, threadEnter's `cmd.pid orelse ProcessNoPid`
-                // surfaces it (real handoffs always include the client).
+                // conhost's `client` handle is a short-lived bootstrap, not
+                // the interactive shell (it exits within tens of ms while
+                // the shell keeps running), so it's useless for exit
+                // detection. Carry no pid: threadEnter skips the process
+                // watcher for a handoff, and killCommand no-ops on a null
+                // pid (the shell exits when we close the HPCON at
+                // teardown).
+                //
+                // OWNERSHIP NOTE: nothing closes ho.client on this
+                // (successful) path — one handle per handoff is leaked
+                // DELIBERATELY. Closing it here once corrupted the handle
+                // table (an unrelated libxev IOCP handle went invalid →
+                // teardown panic) for reasons not yet understood. Do not
+                // add a close without re-running the live handoff test.
                 self.process = .{ .fork_exec = .{
                     .path = "",
                     .args = &.{},
@@ -963,7 +982,7 @@ const Subprocess = struct {
                     .rt_pre_exec_info = self.rt_pre_exec_info,
                     .rt_post_fork = null,
                     .rt_post_fork_info = self.rt_post_fork_info,
-                    .pid = ho.client,
+                    .pid = null,
                 } };
 
                 // We won't spawn anything, so drop the prepared env now

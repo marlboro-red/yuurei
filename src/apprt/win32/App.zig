@@ -104,6 +104,18 @@ com_initialized: bool = false,
 /// Flips to true to quit on the next event loop tick.
 quit: bool = false,
 
+/// Default-terminal handoffs received from the COM server but not yet
+/// turned into windows. EstablishPtyHandoff enqueues here and returns
+/// S_OK *immediately* — it must not build a window inline, because
+/// conhost blocks inside that COM call and can't service the console
+/// client (cmd) until it returns; a slow inline window+GL init stalls
+/// the client's console init past its timeout (STATUS_DLL_INIT_FAILED /
+/// 0xc0000142). The run loop drains this on its next iteration, after
+/// S_OK has already reached conhost. Guarded by a mutex only in case a
+/// future COM config delivers the call off the UI thread.
+pending_handoffs: std.ArrayList(defterm.Handoff) = .empty,
+handoff_mutex: std.Thread.Mutex = .{},
+
 pub fn init(
     self: *App,
     core_app: *CoreApp,
@@ -287,9 +299,12 @@ pub fn init(
     defterm.startServer();
 }
 
-/// Receive a default-terminal handoff (defterm.zig): open a window
-/// whose surface adopts conhost's PTY instead of spawning one. Runs on
-/// the UI thread (COM marshals it onto our message loop).
+/// Receive a default-terminal handoff (defterm.zig). Called from inside
+/// EstablishPtyHandoff, which conhost blocks on — so this only *enqueues*
+/// the handoff and returns; the run loop builds the window later, after
+/// S_OK has reached conhost. Building a window inline would keep conhost
+/// blocked long enough for the console client's init to time out
+/// (0xc0000142). See App.pending_handoffs.
 fn onHandoff(h: defterm.Handoff) void {
     const app = handoff_app orelse {
         // No app to receive it: close the handles so conhost isn't left
@@ -297,25 +312,57 @@ fn onHandoff(h: defterm.Handoff) void {
         closeHandoff(h);
         return;
     };
-    // On error receiveHandoff has already released the handles (or a
-    // surface now owns them); we only log here — do not double-close.
-    app.receiveHandoff(h) catch |err| {
-        log.err("handoff surface creation failed err={}", .{err});
+    app.handoff_mutex.lock();
+    app.pending_handoffs.append(app.core_app.alloc, h) catch {
+        app.handoff_mutex.unlock();
+        closeHandoff(h);
+        return;
     };
+    app.handoff_mutex.unlock();
+
+    // Wake the run loop so it drains the queue promptly. If the call
+    // arrived on the UI thread (the STA case) the loop is currently
+    // blocked inside this COM call and will see the queue as soon as it
+    // unwinds; the posted WM_NULL guarantees GetMessageW returns then.
+    app.wakeup();
 }
 
-/// Decline a handoff by closing every handle it carried. Used when no
-/// app can receive it or window setup fails before a surface takes
-/// ownership.
-fn closeHandoff(h: defterm.Handoff) void {
-    _ = winapi.CloseHandle(h.our_read);
-    _ = winapi.CloseHandle(h.our_write);
-    if (h.signal) |s| _ = winapi.CloseHandle(s);
-    if (h.reference) |r| _ = winapi.CloseHandle(r);
-    if (h.client) |c| _ = winapi.CloseHandle(c);
+/// Turn any queued handoffs into windows, in arrival order. Runs on the
+/// UI thread from the run loop, after EstablishPtyHandoff has returned
+/// S_OK to conhost.
+fn drainHandoffs(self: *App) void {
+    while (true) {
+        self.handoff_mutex.lock();
+        if (self.pending_handoffs.items.len == 0) {
+            self.handoff_mutex.unlock();
+            return;
+        }
+        const h = self.pending_handoffs.orderedRemove(0);
+        self.handoff_mutex.unlock();
+        self.receiveHandoff(h) catch |err| {
+            log.err("handoff surface creation failed err={}", .{err});
+        };
+    }
 }
+
+/// Decline a handoff by releasing everything it carried (pipes, client,
+/// and the adopted HPCON). Used when no app can receive it or window setup
+/// fails before a surface takes ownership.
+const closeHandoff = defterm.closeHandoff;
 
 pub fn terminate(self: *App) void {
+    // Stop accepting default-terminal handoffs FIRST — revoke the COM
+    // class object and detach the hooks — and only then release anything
+    // still queued. The reverse order would leave a window where a newly
+    // delivered handoff appends to a list we're about to free. (With the
+    // current STA delivery this can't preempt us mid-terminate; the order
+    // matters if delivery ever moves off the UI thread.)
+    defterm.stopServer();
+    defterm.on_handoff = null;
+    handoff_app = null;
+    for (self.pending_handoffs.items) |h| closeHandoff(h);
+    self.pending_handoffs.deinit(self.core_app.alloc);
+
     if (self.tray_hwnd) |hwnd| {
         var nid: winapi.NOTIFYICONDATAW = .{ .hWnd = hwnd, .uID = 1 };
         _ = winapi.Shell_NotifyIconW(winapi.NIM_DELETE, &nid);
@@ -328,7 +375,6 @@ pub fn terminate(self: *App) void {
     self.windows.deinit(self.core_app.alloc);
     if (self.profiles_list) |*l| l.deinit();
     self.config.deinit();
-    defterm.stopServer();
     if (self.com_initialized) winapi.CoUninitialize();
 }
 
@@ -364,9 +410,9 @@ fn receiveHandoff(self: *App, h: defterm.Handoff) !void {
     // here: its init/deinit path releases them on any later failure.
     const surface = try window.newTabWithOpts(.{ .handoff = h });
 
-    // Title from conhost's startup info, if any. `h.title` points into
-    // `h.title_buf` in this by-value copy, valid for this call.
-    if (h.title) |t| set_title: {
+    // Title from conhost's startup info, if any.
+    if (h.title_len > 0) set_title: {
+        const t = h.title_buf[0..h.title_len];
         var buf: [512]u8 = undefined;
         const n = std.unicode.utf16LeToUtf8(&buf, t) catch break :set_title;
         const z = alloc.dupeZ(u8, buf[0..n]) catch break :set_title;
@@ -593,6 +639,11 @@ pub fn run(self: *App) !void {
             _ = winapi.TranslateMessage(&msg);
             _ = winapi.DispatchMessageW(&msg);
         }
+
+        // Build windows for any handoffs the COM server queued. Done
+        // here (not inline in EstablishPtyHandoff) so that call returns
+        // to conhost immediately; see App.pending_handoffs.
+        self.drainHandoffs();
 
         // Tick the terminal app
         try self.core_app.tick(self);
