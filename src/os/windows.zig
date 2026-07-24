@@ -253,11 +253,20 @@ pub const conpty = struct {
         hSignal: windows.HANDLE,
         phPC: *exp.HPCON,
     ) callconv(.winapi) windows.HRESULT;
+    // Reparent a (packed) ConPTY's pseudo-window to a real terminal
+    // window. Microsoft's handoff receiver does this after packing so the
+    // ConPTY is bound to the terminal HWND; also the step that appears to
+    // let ResizePseudoConsole accept a packed HPCON. Vendored-DLL only.
+    const ReparentFn = *const fn (
+        hPC: exp.HPCON,
+        hwnd: windows.HWND,
+    ) callconv(.winapi) windows.HRESULT;
 
     var create_fn: CreateFn = undefined;
     var resize_fn: ResizeFn = undefined;
     var close_fn: CloseFn = undefined;
     var pack_fn: ?PackFn = null;
+    var reparent_fn: ?ReparentFn = null;
     var once = std.once(resolve);
 
     fn resolve() void {
@@ -287,6 +296,9 @@ pub const conpty = struct {
             // for default-terminal handoff adoption.
             if (windows.kernel32.GetProcAddress(module, "ConptyPackPseudoConsole")) |pack| {
                 pack_fn = @ptrCast(pack);
+            }
+            if (windows.kernel32.GetProcAddress(module, "ConptyReparentPseudoConsole")) |reparent| {
+                reparent_fn = @ptrCast(reparent);
             }
             log.info("using vendored conpty.dll", .{});
             return;
@@ -336,6 +348,17 @@ pub const conpty = struct {
         once.call();
         const f = pack_fn orelse return error.Unsupported;
         return f(hServerProcess, hRef, hSignal, phPC);
+    }
+
+    /// Bind a (packed) handoff HPCON to a real terminal window. Errors if
+    /// the running conpty.dll lacks the entry point.
+    pub fn reparentPseudoConsole(
+        hPC: exp.HPCON,
+        hwnd: windows.HWND,
+    ) error{Unsupported}!windows.HRESULT {
+        once.call();
+        const f = reparent_fn orelse return error.Unsupported;
+        return f(hPC, hwnd);
     }
 };
 

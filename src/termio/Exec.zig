@@ -124,7 +124,12 @@ pub fn threadEnter(
         // detection for a handoff surface (the tab must be closed
         // manually); finding a reliable exit signal is a tracked
         // follow-up.
-        if (self.subprocess.handoff != null) break :win null;
+        //
+        // Detect the handoff from the adopted pty, not self.handoff:
+        // start() (already run above) clears self.handoff once it moves
+        // the handles into the pty, so reading it here would miss the
+        // handoff and hit initProcessWatcher's ProcessNoPid on the stub.
+        if (self.subprocess.pty) |*p| if (p.handoff) break :win null;
         break :win try initProcessWatcher(self.subprocess.process);
     } else try initProcessWatcher(self.subprocess.process);
     errdefer if (process) |*p| p.deinit();
@@ -148,11 +153,20 @@ pub fn threadEnter(
     var termios_timer = try xev.Timer.init();
     errdefer termios_timer.deinit();
 
+    // A default-terminal handoff has no process watcher (above), so its
+    // sole exit signal is the pty output pipe closing when the shell
+    // exits — the reader reports that. Keyed on the pty (start() clears
+    // self.handoff once it adopts the handles).
+    const reader_handoff = if (comptime builtin.os.tag == .windows)
+        (if (self.subprocess.pty) |*p| p.handoff else false)
+    else
+        false;
+
     // Start our read thread
     const read_thread = try std.Thread.spawn(
         .{},
         if (builtin.os.tag == .windows) ReadThread.threadMainWindows else ReadThread.threadMainPosix,
-        .{ pty_fds.read, io, pipe[0] },
+        .{ pty_fds.read, io, pipe[0], reader_handoff },
     );
     read_thread.setName("io-reader") catch {};
 
@@ -1529,7 +1543,9 @@ pub const ReadThread = struct {
         bufs: [buffer_count][buffer_capacity]u8 = undefined,
     };
 
-    fn threadMainPosix(fd: posix.fd_t, io: *termio.Termio, quit: posix.fd_t) void {
+    fn threadMainPosix(fd: posix.fd_t, io: *termio.Termio, quit: posix.fd_t, handoff: bool) void {
+        _ = handoff; // handoff exit detection is win32-only
+
         // Always close our end of the pipe when we exit.
         defer posix.close(quit);
 
@@ -1897,7 +1913,7 @@ pub const ReadThread = struct {
         return true;
     }
 
-    fn threadMainWindows(fd: posix.fd_t, io: *termio.Termio, quit: posix.fd_t) void {
+    fn threadMainWindows(fd: posix.fd_t, io: *termio.Termio, quit: posix.fd_t, handoff: bool) void {
         // Always close our end of the pipe when we exit.
         defer posix.close(quit);
 
@@ -1932,18 +1948,25 @@ pub const ReadThread = struct {
                         // Check for a quit signal
                         .OPERATION_ABORTED => break,
 
-                        // The pipe is closed or closing. BROKEN_PIPE is the
-                        // documented result of reading a pipe whose write
-                        // side (held by the pseudoconsole) has closed, e.g.
-                        // after the child exits and the HPCON is closed.
-                        // INVALID_HANDLE can happen if our read handle is
-                        // closed by shutdown while we're blocked here. These
-                        // mirror NotOpenForReading/InputOutput in the POSIX
-                        // branch: we're done, exit gracefully.
+                        // BROKEN_PIPE/HANDLE_EOF: the write side (the
+                        // pseudoconsole) closed — the child exited. For a
+                        // handoff surface (no process watcher) this is the
+                        // one reliable exit signal, so report child_exited
+                        // so the tab closes like any other shell exit.
                         .BROKEN_PIPE,
                         .HANDLE_EOF,
-                        .INVALID_HANDLE,
                         => {
+                            log.info("io reader exiting", .{});
+                            if (handoff) _ = io.surface_mailbox.push(.{
+                                .child_exited = .{ .exit_code = 0, .runtime_ms = 0 },
+                            }, .{ .forever = {} });
+                            return;
+                        },
+
+                        // Our own read handle closed by shutdown while
+                        // blocked here — we're already tearing down, so
+                        // don't report an exit.
+                        .INVALID_HANDLE => {
                             log.info("io reader exiting", .{});
                             return;
                         },

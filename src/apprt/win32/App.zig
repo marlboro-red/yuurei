@@ -436,9 +436,12 @@ fn receiveHandoff(self: *App, h: defterm.Handoff) !void {
     errdefer _ = self.windows.pop();
 
     // DPI-scale the default size before the surface spawns so its pty
-    // starts at the final grid. (The window drives a resize down the
-    // signal pipe shortly after, so any sane initial size works.)
+    // starts at the final grid.
     window.applyDefaultSize();
+
+    // (ConptyReparentPseudoConsole was tried here to unlock resize; it
+    // rejects a packed HPCON with E_HANDLE just like ResizePseudoConsole,
+    // so it's not wired in. See defterm.reparent / pty.setSize.)
 
     // Moves the handoff into the new surface, which owns the handles from
     // here: its init/deinit path releases them on any later failure.

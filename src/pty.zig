@@ -520,12 +520,11 @@ const WindowsPty = struct {
 
     /// Set the size of the pty.
     pub fn setSize(self: *Pty, size: winsize) SetSizeError!void {
-        // Handoff pty: resize-reflow is not yet supported. Both obvious
-        // mechanisms fail — ResizePseudoConsole rejects a packed HPCON
-        // (E_HANDLE), and writing resize packets to a duplicate of
-        // conhost's signal pipe desynced the ConPTY. Accept the new size
-        // without propagating it (the ConPTY keeps conhost's initial
-        // size). Tracked as a follow-up; see defterm.zig.
+        // Handoff pty: resize-reflow is unsupported. ResizePseudoConsole
+        // AND ConptyReparentPseudoConsole both reject a *packed* HPCON with
+        // E_HANDLE, and a signal-pipe-write workaround desynced the ConPTY.
+        // Accept the size without propagating it (the ConPTY keeps
+        // conhost's initial size). Tracked follow-up; see defterm.zig.
         if (self.handoff) {
             self.size = size;
             return;
