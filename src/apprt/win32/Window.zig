@@ -3618,6 +3618,9 @@ fn keyEvent(
         .composing = false,
         .utf8 = "",
         .unshifted_codepoint = unshifted,
+        .windows_vk = vk,
+        .windows_scancode = @truncate(@as(usize, @bitCast(lparam)) >> 16 & 0xFF),
+        .windows_extended = (lparam & (1 << 24)) != 0,
     };
 
     // A dead key: TranslateMessage queued WM_DEADCHAR, not WM_CHAR.
@@ -3820,6 +3823,14 @@ fn currentMods() input.Mods {
         .alt = winapi.GetKeyState(winapi.VK_MENU) < 0,
         .super = winapi.GetKeyState(winapi.VK_LWIN) < 0 or
             winapi.GetKeyState(winapi.VK_RWIN) < 0,
+        .caps_lock = (winapi.GetKeyState(winapi.VK_CAPITAL) & 1) != 0,
+        .num_lock = (winapi.GetKeyState(winapi.VK_NUMLOCK) & 1) != 0,
+        .sides = .{
+            .shift = if (winapi.GetKeyState(winapi.VK_RSHIFT) < 0) .right else .left,
+            .ctrl = if (winapi.GetKeyState(winapi.VK_RCONTROL) < 0) .right else .left,
+            .alt = if (winapi.GetKeyState(winapi.VK_RMENU) < 0) .right else .left,
+            .super = if (winapi.GetKeyState(winapi.VK_RWIN) < 0) .right else .left,
+        },
     };
 }
 

@@ -4,10 +4,12 @@
 [microsoft/terminal](https://github.com/microsoft/terminal) project and
 are licensed under the MIT License (Copyright (c) Microsoft Corporation).
 
-These copies were obtained from the
-[WezTerm](https://github.com/wez/wezterm) project's vendored
-distribution (`assets/windows/conhost/`), which redistributes the same
-binaries under the same license.
+These copies come from the official NuGet package
+[`Microsoft.Windows.Console.ConPTY`](https://www.nuget.org/packages/Microsoft.Windows.Console.ConPTY)
+version `1.25.260710002-preview` (`runtimes/win-x64/native/conpty.dll` +
+`build/native/runtimes/x64/OpenConsole.exe`). The two files are a
+matched pair from the same source tree — never mix versions, and never
+downgrade below the 1.25 line (see below).
 
 ## Why they're here
 
@@ -17,6 +19,14 @@ conhost lags the microsoft/terminal project by years; the vendored pair
 provides newer, faster pseudoconsole behavior and is the same approach
 Windows Terminal itself and WezTerm use. If these files are removed,
 yuurei falls back to the OS ConPTY automatically.
+
+The 1.25 line is required (not merely preferred): it contains the
+TerminalInput rewrite that translates Win32 key records into the kitty
+keyboard protocol for hosted VT applications. yuurei honors ConPTY's
+win32-input-mode request (DECSET 9001) and hands conhost full-fidelity
+key records; kitty-aware clients (Claude Code and other agent CLIs)
+depend on this conhost to get modifier detail such as Shift+Enter back.
+An older pair would silently degrade those clients to plain `\r`.
 
 ## MIT License (microsoft/terminal)
 

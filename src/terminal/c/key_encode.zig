@@ -58,6 +58,9 @@ pub const Option = enum(c_int) {
     /// If `true`, `backspace` emits 0x08
     backarrow_key_mode = 7,
 
+    /// DEC mode 9001: ConPTY win32-input-mode.
+    win32_input_mode = 8,
+
     /// Input type expected for setting the option.
     pub fn InType(comptime self: Option) type {
         return switch (self) {
@@ -67,6 +70,7 @@ pub const Option = enum(c_int) {
             .alt_esc_prefix,
             .modify_other_keys_state_2,
             .backarrow_key_mode,
+            .win32_input_mode,
             => bool,
             .kitty_flags => u8,
             .macos_option_as_alt => OptionAsAlt,
@@ -121,6 +125,7 @@ fn setoptTyped(
             opts.macos_option_as_alt = value.*;
         },
         .backarrow_key_mode => opts.backarrow_key_mode = value.*,
+        .win32_input_mode => opts.win32_input_mode = value.*,
     }
 }
 

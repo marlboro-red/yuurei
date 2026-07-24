@@ -47,6 +47,14 @@ pub const KeyEvent = struct {
     /// shift+a is "A" in UTF-8 but unshifted would provide 'a'.
     unshifted_codepoint: u21 = 0,
 
+    /// Win32 key data for ConPTY win32-input-mode encoding (yuurei).
+    /// Populated only by the win32 apprt; zero elsewhere. windows_extended
+    /// is the "extended key" bit (lparam bit 24) which maps to the
+    /// ENHANCED_KEY flag in a Win32 KEY_EVENT_RECORD.
+    windows_vk: u8 = 0,
+    windows_scancode: u16 = 0,
+    windows_extended: bool = false,
+
     /// Returns the effective modifiers for this event. The effective
     /// modifiers are the mods that should be considered for keybindings.
     pub fn effectiveMods(self: KeyEvent) Mods {

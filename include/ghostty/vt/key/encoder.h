@@ -113,6 +113,9 @@ typedef enum GHOSTTY_ENUM_TYPED {
      */
     GHOSTTY_KEY_ENCODER_OPT_BACKARROW_KEY_MODE = 7,
 
+    /** Terminal DEC mode 9001: ConPTY win32-input-mode (value: bool) */
+    GHOSTTY_KEY_ENCODER_OPT_WIN32_INPUT_MODE = 8,
+
     GHOSTTY_KEY_ENCODER_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
 } GhosttyKeyEncoderOption;
 

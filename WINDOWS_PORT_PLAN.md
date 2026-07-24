@@ -566,14 +566,22 @@ user-facing gaps they exposed:
   owns matching/lifecycle (search, navigate_search, end_search in;
   start_search, search_total, search_selected out). Verified live
   with highlighted matches, live counts, and selection navigation.
-- [ ] **win32-input-mode (mode 9001)** — conhost requests
+- [x] **win32-input-mode (mode 9001) (2026-07-23)** — conhost requests
   full-fidelity key encoding (CSI Vk;Sc;Uc;Kd;Cs;Rc _) when a client
-  uses ReadConsoleInput. We currently log "unimplemented mode: 9001"
-  and conhost falls back to synthesizing input from plain VT, which
-  works for everything tested so far. Implementing means plumbing a
-  terminal mode + a Windows arm in the shared key encoder (VK +
-  scancode recovery from the key event) — a focused arc of its own.
-  InsipidPoint's port proves it's tractable.
+  uses ReadConsoleInput. Implemented as a terminal mode (modes.zig
+  9001, refusable via the `win32-input-mode` config) plus a Windows
+  arm in the shared key encoder (key_encode.zig win32InputMode); the
+  win32 apprt carries VK/scancode/extended-bit on KeyEvent and the
+  lock/side modifier state in currentMods. Shipped together with the
+  vendored ConPTY bump to the 1.25 line (kitty TerminalInput), which
+  keeps kitty-negotiating VT clients (Claude Code) at full fidelity
+  while INPUT_RECORD clients (crossterm TUIs like Codex) now see real
+  modifiers — the motivating bug was Shift+Enter doing nothing in
+  Codex. Unit tests cover the encoder (shift+enter press/release,
+  ctrl chords, enhanced keys, surrogate pairs, legacy fallback); the
+  live matrix (pwsh ReadKey shows `Enter [Shift]`, Codex newline,
+  Claude Code unchanged, `win32-input-mode = false` escape hatch) is
+  tracked in the PR.
 - Deliberately skipped from the survey: session restore (large,
   winghostty has it), signed installers/winget/Scoop (distribution
   stays GitHub-only by choice), WinUI/DX12 rearchitecture (wintty's
@@ -591,7 +599,11 @@ signing, no winget/Scoop, no installer — by choice. Landed:
 - [x] vendor/conpty: conpty.dll + OpenConsole.exe from
   microsoft/terminal (MIT, NOTICE.md), shipped beside the exe in
   releases. Best 10MB burst with it: 885 ms vs 1.25–1.5 s in-box
-  baseline (noisy machine, but the best time recorded).
+  baseline (noisy machine, but the best time recorded). Bumped
+  2026-07-23 to the NuGet `Microsoft.Windows.Console.ConPTY`
+  `1.25.260710002-preview` pair — the 1.25 line's kitty TerminalInput
+  is load-bearing for win32-input-mode (see Phase 3b); bump to the
+  stable 1.25 nupkg when it ships.
 - [x] .github/workflows/release.yml: v* tag → ReleaseFast build +
   suite → portable zip (bin/, share/, LICENSE, README,
   THIRD_PARTY_NOTICES) + SHA256 → GitHub Release.
