@@ -14,6 +14,7 @@ const Surface = @import("Surface.zig");
 const CommandPalette = @import("CommandPalette.zig");
 const ProfileMenu = @import("ProfileMenu.zig");
 const profiles = @import("profiles.zig");
+const session = @import("session.zig");
 const defterm = @import("defterm.zig");
 const SearchBar = @import("SearchBar.zig");
 const winapi = @import("winapi.zig");
@@ -1709,6 +1710,15 @@ pub fn toggleFullscreen(self: *Window) void {
                 winapi.SWP_NOZORDER | winapi.SWP_FRAMECHANGED,
         );
     }
+    // Keep the Mica extended-frame band in sync with the strip. Fullscreen
+    // drops the strip (titlebarHeight()==0), so without retracting the
+    // margins its top strip-height rows would stay backdrop "glass" drawn
+    // over the terminal (a wrong-colored notch above splits); exiting
+    // re-extends to the strip height.
+    if (self.mica) {
+        const margins: winapi.MARGINS = .{ .cyTopHeight = self.titlebarHeight() };
+        _ = winapi.DwmExtendFrameIntoClientArea(self.hwnd, &margins);
+    }
     self.layoutActiveTab();
 }
 
@@ -1849,8 +1859,13 @@ fn scrollTabIntoView(self: *Window, idx: usize) void {
     self.clampTabScroll();
     const w = self.tabWidth();
     const i: i32 = @intCast(idx);
-    const left = i * w;
-    const right = (i + 1) * w;
+    // Tab i's un-scrolled span is [lead + i*w, lead + (i+1)*w) — the same
+    // leading inset tabRect() applies. Omitting it left the last tab
+    // `lead` px (16 at 200% DPI) short of visible, clipping its close
+    // glyph and, under Mica, manufacturing the caption-zone artifact.
+    const lead = self.scale(strip_leading_logical);
+    const left = lead + i * w;
+    const right = lead + (i + 1) * w;
     const region = self.tabsRegionRight();
     if (left - self.tab_scroll < 0) {
         self.tab_scroll = left;
@@ -2132,8 +2147,12 @@ fn paintTitlebarBuffered(self: *Window, hdc: winapi.HDC) void {
 fn markOpaque(self: *Window, rect: winapi.RECT) void {
     if (!self.mica) return;
     const buf = &(self.strip_buf orelse return);
+    // Honor the same right-edge clip GDI painting uses (line ~2274): an
+    // overflowed/scrolled tab whose plate extends past tabsRegionRight is
+    // clipped away by GDI, but these raw-pixel writes bypass the DC clip
+    // and would stamp opaque alpha into the DWM caption-button zone.
     const x0 = @max(rect.left, 0);
-    const x1 = @min(rect.right, buf.w);
+    const x1 = @min(rect.right, @min(buf.w, self.tabsRegionRight()));
     const y0 = @max(rect.top, 0);
     const y1 = @min(rect.bottom, buf.h);
     var y = y0;
@@ -2158,8 +2177,9 @@ fn glassTextAlpha(self: *Window, rect: winapi.RECT, fg_color: u32) void {
         @max((fg_color >> 8) & 0xFF, fg_color & 0xFF),
     );
     if (fg_max == 0) return;
+    // Same caption-zone clip as markOpaque.
     const x0 = @max(rect.left, 0);
-    const x1 = @min(rect.right, buf.w);
+    const x1 = @min(rect.right, @min(buf.w, self.tabsRegionRight()));
     const y0 = @max(rect.top, 0);
     const y1 = @min(rect.bottom, buf.h);
     var y = y0;
@@ -2190,6 +2210,10 @@ fn roundCorners(
     const bg_g: f32 = @floatFromInt((bg >> 8) & 0xFF);
     const bg_r: f32 = @floatFromInt(bg & 0xFF);
 
+    // Same caption-zone clip as markOpaque: never fade corner pixels past
+    // the tab region's right edge (would bleed alpha under Mica).
+    const clip_r = @min(buf.w, self.tabsRegionRight());
+
     // Each corner: circle center r pixels inside both edges.
     const cs = [4][4]i32{
         // x0, y0 (block origin), cx, cy (circle center, +0.5 centers)
@@ -2209,7 +2233,7 @@ fn roundCorners(
                 if (y < 0 or y >= buf.h) continue;
                 var x = c[0];
                 while (x < c[0] + r) : (x += 1) {
-                    if (x < 0 or x >= buf.w) continue;
+                    if (x < 0 or x >= clip_r) continue;
                     const dx = @as(f32, @floatFromInt(x)) - cx;
                     const dy = @as(f32, @floatFromInt(y)) - cy;
                     const dist = @sqrt(dx * dx + dy * dy);
@@ -2718,6 +2742,15 @@ pub fn wndProc(
             return 0;
         },
 
+        // Logoff / shutdown / Windows Update restart: the OS sends
+        // WM_ENDSESSION (never WM_CLOSE) and then terminates us, so this
+        // is the only chance to persist the session. save() records the
+        // whole app; a redundant call per window at shutdown is harmless.
+        winapi.WM_ENDSESSION => {
+            if (wparam != 0) session.save(self.app);
+            return 0;
+        },
+
         winapi.WM_ERASEBKGND => return 1,
 
         // Custom frame: remove the standard title bar but keep the
@@ -3008,6 +3041,19 @@ pub fn wndProc(
                 };
             }
 
+            if (msg == winapi.WM_KILLFOCUS) {
+                // Drop any half-finished key state: its completing event
+                // goes to the window that now has focus, so we'd otherwise
+                // keep it forever. altgr_down is the important one — AltGr
+                // is Ctrl+Alt, so AltGr+Tab (or a click away) loses focus
+                // while it is "down", and the right-alt WM_KEYUP that
+                // clears it never arrives here, leaving ctrl+alt stripped
+                // from every subsequent chord. (high_surrogate is the same
+                // class: a WM_CHAR pair split by a focus switch.)
+                self.altgr_down = false;
+                self.high_surrogate = null;
+            }
+
             // Quick terminals hide when they lose focus — except to one
             // of their own popups (command palette, search bar,
             // settings, dropdowns), which all trace back to this window
@@ -3295,8 +3341,12 @@ pub fn wndProc(
                     self.tab_drag_engaged = true;
                 }
                 const n = self.tabs.items.len;
+                // Tab i spans [lead + i*w - scroll, ...), so the slot under
+                // the cursor is (x - lead + scroll) / w; the leading inset
+                // must be subtracted or every crossover fires `lead` px early.
+                const lead = self.scale(strip_leading_logical);
                 const target: usize = @intCast(std.math.clamp(
-                    @divTrunc(@as(i32, x) + self.tab_scroll, @max(1, self.tabWidth())),
+                    @divTrunc(@as(i32, x) - lead + self.tab_scroll, @max(1, self.tabWidth())),
                     0,
                     @as(i32, @intCast(n - 1)),
                 ));

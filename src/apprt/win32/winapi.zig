@@ -144,7 +144,9 @@ pub const WM_SETFOCUS: UINT = 0x0007;
 pub const WM_KILLFOCUS: UINT = 0x0008;
 pub const WM_PAINT: UINT = 0x000F;
 pub const WM_CLOSE: UINT = 0x0010;
+pub const WM_QUERYENDSESSION: UINT = 0x0011;
 pub const WM_QUIT: UINT = 0x0012;
+pub const WM_ENDSESSION: UINT = 0x0016;
 pub const WM_ERASEBKGND: UINT = 0x0014;
 pub const WM_KEYDOWN: UINT = 0x0100;
 pub const WM_KEYUP: UINT = 0x0101;
@@ -471,7 +473,9 @@ pub extern "user32" fn GetClipboardData(UINT) callconv(.winapi) ?HANDLE;
 pub extern "user32" fn SetClipboardData(UINT, HANDLE) callconv(.winapi) ?HANDLE;
 
 pub extern "kernel32" fn WaitForSingleObject(HANDLE, DWORD) callconv(.winapi) DWORD;
+pub extern "kernel32" fn GetExitCodeProcess(HANDLE, *DWORD) callconv(.winapi) BOOL;
 pub extern "kernel32" fn CloseHandle(HANDLE) callconv(.winapi) BOOL;
+pub const INFINITE: DWORD = 0xFFFFFFFF;
 
 // Minimal process/pipe surface for capturing a child's stdout without
 // a console window (profile discovery runs `wsl -l -q`).

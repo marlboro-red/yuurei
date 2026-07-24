@@ -251,10 +251,29 @@ fn runCapture(
     };
     cmd_w_buf[cmd_len] = 0;
 
+    // Send the child's stderr to NUL rather than merging it into the
+    // captured stdout: `wsl -l -q` on a machine with no distro installed
+    // prints its multi-line "no distributions / --install" help, which
+    // must never be parsed as distro names. (The exit-code check below is
+    // the real guard; this keeps the output clean even on exit 0.)
+    const nul = winapi.CreateFileW(
+        std.unicode.utf8ToUtf16LeStringLiteral("NUL"),
+        winapi.GENERIC_WRITE,
+        0,
+        &sa,
+        winapi.OPEN_EXISTING,
+        0,
+        null,
+    );
+    const have_nul = nul != winapi.INVALID_HANDLE_VALUE;
+    defer if (have_nul) {
+        _ = winapi.CloseHandle(nul);
+    };
+
     var si: winapi.STARTUPINFOW = .{
         .dwFlags = winapi.STARTF_USESTDHANDLES,
         .hStdOutput = write_h,
-        .hStdError = write_h,
+        .hStdError = if (have_nul) nul else write_h,
     };
     var pi: winapi.PROCESS_INFORMATION = .{};
     const ok = winapi.CreateProcessW(
@@ -286,6 +305,7 @@ fn runCapture(
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(alloc);
     var buf: [4096]u8 = undefined;
+    var timed_out = false;
     const deadline = std.time.milliTimestamp() + @as(i64, timeout_ms);
     while (true) {
         var avail: winapi.DWORD = 0;
@@ -304,10 +324,24 @@ fn runCapture(
         if (winapi.WaitForSingleObject(pi.hProcess.?, 0) == 0) break;
         if (std.time.milliTimestamp() >= deadline) {
             _ = winapi.TerminateProcess(pi.hProcess.?, 1);
+            timed_out = true;
             break;
         }
         std.Thread.sleep(5 * std.time.ns_per_ms);
     }
+
+    // Only a clean, complete run yields usable output. A wedged child we
+    // had to kill, or one that exited non-zero (e.g. `wsl -l -q` with no
+    // distro installed exits with a failure code), produced only
+    // diagnostics/partial data — return null so the caller discards it
+    // rather than turning error text into profiles.
+    if (timed_out) return null;
+    if (winapi.WaitForSingleObject(pi.hProcess.?, 2000) != 0) {
+        _ = winapi.TerminateProcess(pi.hProcess.?, 1);
+        return null;
+    }
+    var code: winapi.DWORD = 0;
+    if (winapi.GetExitCodeProcess(pi.hProcess.?, &code) == 0 or code != 0) return null;
 
     return alloc.dupe(u8, out.items) catch null;
 }

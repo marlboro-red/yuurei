@@ -64,37 +64,68 @@ pub fn hasChildProcesses(root_pid: DWORD) bool {
     if (snap == INVALID_HANDLE_VALUE) return false;
     defer CloseHandle(snap);
 
+    // First pass: identify the root's own image so we can tell a WSL
+    // *profile* tab (root is wsl.exe, whose nested wsl.exe/wslhost/relay
+    // are plumbing) from an ordinary shell in which the user ran `wsl`
+    // (that child wsl.exe is a real interactive session and must block a
+    // silent close).
     var entry: PROCESSENTRY32W = .{};
+    if (Process32FirstW(snap, &entry) == 0) return false;
+    var root_is_wsl = false;
+    while (true) {
+        if (entry.th32ProcessID == root_pid) {
+            root_is_wsl = exeNameIs(&entry.szExeFile, "wsl.exe");
+            break;
+        }
+        if (Process32NextW(snap, &entry) == 0) break;
+    }
+
+    // Second pass: any non-infrastructure child means work in progress.
     if (Process32FirstW(snap, &entry) == 0) return false;
     while (true) {
         if (entry.th32ParentProcessID == root_pid and
             entry.th32ProcessID != root_pid and
-            !infrastructureProcess(&entry.szExeFile)) return true;
+            !infrastructureProcess(&entry.szExeFile, root_is_wsl)) return true;
         if (Process32NextW(snap, &entry) == 0) return false;
     }
 }
 
-/// Console/WSL plumbing that a shell process spawns as part of merely
-/// existing; their presence says nothing about user work in progress.
-/// wsl.exe in particular always parents a nested wsl.exe (and a
-/// conhost) even at an idle distro prompt.
-fn infrastructureProcess(exe_file: *const [MAX_PATH]u16) bool {
-    const len = std.mem.indexOfScalar(u16, exe_file, 0) orelse return false;
-    var buf: [32]u8 = undefined;
-    if (len > buf.len) return false;
+/// Lowercased ASCII image name of a PROCESSENTRY32W, into `buf`. Null if
+/// the name is non-ASCII or longer than `buf`.
+fn exeNameLower(exe_file: *const [MAX_PATH]u16, buf: []u8) ?[]const u8 {
+    const len = std.mem.indexOfScalar(u16, exe_file, 0) orelse return null;
+    if (len > buf.len) return null;
     for (exe_file[0..len], 0..) |unit, i| {
-        if (unit > 127) return false;
+        if (unit > 127) return null;
         buf[i] = std.ascii.toLower(@intCast(unit));
     }
-    const name = buf[0..len];
-    const ignored = [_][]const u8{
-        "conhost.exe",
-        "openconsole.exe",
-        "wsl.exe",
-        "wslhost.exe",
-        "wslrelay.exe",
-    };
-    for (ignored) |ig| if (std.mem.eql(u8, name, ig)) return true;
+    return buf[0..len];
+}
+
+fn exeNameIs(exe_file: *const [MAX_PATH]u16, comptime name: []const u8) bool {
+    var buf: [32]u8 = undefined;
+    const got = exeNameLower(exe_file, &buf) orelse return false;
+    return std.mem.eql(u8, got, name);
+}
+
+/// Console/WSL plumbing whose presence says nothing about user work.
+/// conhost/OpenConsole are console hosts under any shell. The wsl.exe
+/// launcher processes are plumbing ONLY inside a WSL-profile tab
+/// (`root_is_wsl`): a WSL shell always parents a nested wsl.exe (and a
+/// conhost) even at an idle prompt. Under an ordinary shell, a wsl.exe
+/// child IS the user's interactive session, so it is not ignored.
+fn infrastructureProcess(exe_file: *const [MAX_PATH]u16, root_is_wsl: bool) bool {
+    var buf: [32]u8 = undefined;
+    const name = exeNameLower(exe_file, &buf) orelse return false;
+
+    if (std.mem.eql(u8, name, "conhost.exe")) return true;
+    if (std.mem.eql(u8, name, "openconsole.exe")) return true;
+
+    if (root_is_wsl) {
+        if (std.mem.eql(u8, name, "wsl.exe")) return true;
+        if (std.mem.eql(u8, name, "wslhost.exe")) return true;
+        if (std.mem.eql(u8, name, "wslrelay.exe")) return true;
+    }
     return false;
 }
 

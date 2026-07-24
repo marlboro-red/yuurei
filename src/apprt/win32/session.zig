@@ -52,10 +52,12 @@ pub fn save(app: *App) void {
     const w = &buf.writer;
 
     w.writeAll(header ++ "\n") catch return;
+    var recorded: usize = 0;
     for (app.windows.items) |window| {
         // The quick terminal is summoned, not restored.
         if (window.quick) continue;
         if (window.tabs.items.len == 0) continue;
+        recorded += 1;
         w.writeAll("window\n") catch return;
         for (window.tabs.items) |*tab| {
             const surface = tab.focused;
@@ -72,9 +74,37 @@ pub fn save(app: *App) void {
         w.print("active\t{d}\n", .{window.active_tab}) catch return;
     }
 
-    const file = std.fs.createFileAbsolute(path, .{ .truncate = true }) catch return;
-    defer file.close();
-    file.writeAll(buf.written()) catch {};
+    // Nothing restorable is open — e.g. quitting from a lingering quick
+    // terminal after the real windows already closed (their good snapshot
+    // was written when they closed). Overwriting now with a header-only
+    // file would silently destroy that snapshot, so leave it untouched:
+    // restoring the last real layout beats restoring nothing.
+    if (recorded == 0) return;
+
+    writeAtomic(alloc, path, buf.written());
+}
+
+/// Replace the session file atomically: write a sibling temp and rename
+/// it over the target. A crash or power loss mid-write then leaves the
+/// previous good file intact rather than a truncated/empty one.
+fn writeAtomic(alloc: std.mem.Allocator, path: []const u8, data: []const u8) void {
+    // The parent (%LOCALAPPDATA%\ghostty) may not exist yet.
+    if (std.fs.path.dirname(path)) |dir| std.fs.makeDirAbsolute(dir) catch {};
+
+    const tmp = std.fmt.allocPrint(alloc, "{s}.tmp", .{path}) catch return;
+    defer alloc.free(tmp);
+
+    write: {
+        const file = std.fs.createFileAbsolute(tmp, .{ .truncate = true }) catch break :write;
+        defer file.close();
+        file.writeAll(data) catch break :write;
+        // Rename over the target (atomic replace on NTFS). Only on a
+        // fully-written temp do we touch the real file.
+        std.fs.renameAbsolute(tmp, path) catch break :write;
+        return;
+    }
+    // Something failed; don't leave a stray temp or the stale target.
+    std.fs.deleteFileAbsolute(tmp) catch {};
 }
 
 /// Restore the recorded session, returning the surface of the last

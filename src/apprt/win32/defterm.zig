@@ -104,11 +104,31 @@ fn L(comptime s: []const u8) [:0]const u16 {
     return std.unicode.utf8ToUtf16LeStringLiteral(s);
 }
 
-/// Path to this executable as a NUL-terminated UTF-16 slice.
-fn exePath(buf: *[winapi.MAX_PATH:0]u16) [:0]const u16 {
+/// Path to this executable as a NUL-terminated UTF-16 slice, or null if
+/// GetModuleFileNameW failed or truncated (mirrors proxyPath): a bad path
+/// here would register a broken/empty LocalServer32.
+fn exePath(buf: *[winapi.MAX_PATH:0]u16) ?[:0]const u16 {
     const n = winapi.GetModuleFileNameW(null, buf, buf.len);
-    buf[@min(n, buf.len - 1)] = 0;
-    return buf[0..@min(n, buf.len - 1) :0];
+    if (n == 0 or n >= buf.len) return null;
+    buf[n] = 0;
+    return buf[0..n :0];
+}
+
+/// Read a REG_SZ value under HKCU\<subkey>\<name> into `buf` (name null =
+/// the key's default value). Returns the value (a slice of `buf`, NUL
+/// excluded) or null if absent / not a string.
+fn regGetSz(subkey: [:0]const u16, name: ?[:0]const u16, buf: []u16) ?[]const u16 {
+    var size: winapi.DWORD = @intCast(buf.len * 2);
+    if (winapi.RegGetValueW(
+        HKCU,
+        subkey.ptr,
+        if (name) |nm| nm.ptr else null,
+        0x2, // RRF_RT_REG_SZ
+        null,
+        buf.ptr,
+        &size,
+    ) != 0) return null;
+    return std.mem.sliceTo(buf, 0);
 }
 
 /// Set a string value under HKCU\<subkey>. Returns success.
@@ -131,7 +151,7 @@ pub fn register() bool {
     if (comptime builtin.os.tag != .windows) return false;
 
     var path_buf: [winapi.MAX_PATH:0]u16 = undefined;
-    const exe = exePath(&path_buf);
+    const exe = exePath(&path_buf) orelse return false;
 
     // "\"<exe>\"" — quoted so a spaced path survives COM's launch.
     var cmd_buf: [winapi.MAX_PATH + 4:0]u16 = undefined;
@@ -150,30 +170,56 @@ pub fn register() bool {
     const console_clsid = guidString(CLSID_DelegationConsole, &cb);
     const proxy_clsid = guidString(CLSID_Proxy, &pb);
 
+    // First the class-object plumbing (CLSID / proxy / Interface). None
+    // of this flips the OS default terminal, so a failure here can be
+    // rolled back by deleting only our own keys.
     var ok = true;
-
-    // 1. LocalServer32 for our terminal CLSID -> this exe.
     ok = keyClsidLocalServer(term_clsid, cmd) and ok;
-
-    // 2. Proxy/stub InprocServer32 + threading model.
     ok = keyProxyInproc(proxy_clsid, proxy) and ok;
-
-    // 3. Interface -> proxy for all three handoff IIDs.
     inline for (.{ IID_ITerminalHandoff, IID_ITerminalHandoff2, IID_ITerminalHandoff3 }) |iid| {
         var ib: GuidBuf = undefined;
         const iid_str = guidString(iid, &ib);
         ok = keyInterfaceProxy(iid_str, proxy_clsid) and ok;
     }
-
-    // 4. The delegation itself (this is what flips the OS setting).
-    ok = setString(L("Console\\%%Startup"), L("DelegationConsole"), console_clsid) and ok;
-    ok = setString(L("Console\\%%Startup"), L("DelegationTerminal"), term_clsid) and ok;
-
     if (!ok) {
         log.warn("defterm registration incomplete; rolling back", .{});
-        unregister();
+        deleteOwnedClassKeys();
+        return false;
     }
-    return ok;
+
+    // Snapshot the prior delegation so a failed flip can restore it —
+    // register() overwrites these values, it does not append, so a naive
+    // rollback would wipe whatever terminal the user had set.
+    var prior_console_buf: [64]u16 = undefined;
+    var prior_terminal_buf: [64]u16 = undefined;
+    const prior_console = regGetSz(L("Console\\%%Startup"), L("DelegationConsole"), &prior_console_buf);
+    const prior_terminal = regGetSz(L("Console\\%%Startup"), L("DelegationTerminal"), &prior_terminal_buf);
+
+    // Flip the OS setting (this is what makes us the default terminal).
+    const flipped = setString(L("Console\\%%Startup"), L("DelegationConsole"), console_clsid) and
+        setString(L("Console\\%%Startup"), L("DelegationTerminal"), term_clsid);
+    if (!flipped) {
+        log.warn("defterm delegation write failed; restoring prior state", .{});
+        restoreDelegation(L("DelegationConsole"), prior_console);
+        restoreDelegation(L("DelegationTerminal"), prior_terminal);
+        deleteOwnedClassKeys();
+        return false;
+    }
+    return true;
+}
+
+/// Restore a delegation value to its pre-register() state: re-set the
+/// prior value, or delete the key if there was none.
+fn restoreDelegation(name: [:0]const u16, prior: ?[]const u16) void {
+    if (prior) |v| {
+        var buf: [64:0]u16 = undefined;
+        const n = @min(v.len, buf.len - 1);
+        @memcpy(buf[0..n], v[0..n]);
+        buf[n] = 0;
+        _ = setString(L("Console\\%%Startup"), name, buf[0..n :0]);
+    } else {
+        _ = winapi.RegDeleteKeyValueW(HKCU, L("Console\\%%Startup").ptr, name.ptr);
+    }
 }
 
 fn keyClsidLocalServer(clsid: [:0]const u16, cmd: [:0]const u16) bool {
@@ -206,30 +252,73 @@ fn keyInterfaceProxy(iid: [:0]const u16, proxy_clsid: [:0]const u16) bool {
     return setString(w.slice(), null, proxy_clsid);
 }
 
-/// Remove all registration. Idempotent; safe to call on partial state.
+/// Remove yuurei's registration, without ever disturbing another
+/// terminal's setup. The delegation values are cleared only if they still
+/// point at us (`isRegistered`), and the proxy CLSID + the three handoff
+/// Interface IIDs — which Windows Terminal and the inbox OpenConsole
+/// register under the SAME canonical GUIDs — are removed only if the proxy
+/// still points at our own DLL. Blindly deleting either (as the first
+/// version did) would silently reset a WT user's default terminal to
+/// conhost and break WT's handoff marshaling. Idempotent; safe on partial
+/// state.
 pub fn unregister() void {
     if (comptime builtin.os.tag != .windows) return;
 
-    _ = winapi.RegDeleteKeyValueW(HKCU, L("Console\\%%Startup").ptr, L("DelegationConsole").ptr);
-    _ = winapi.RegDeleteKeyValueW(HKCU, L("Console\\%%Startup").ptr, L("DelegationTerminal").ptr);
-
-    inline for (.{ CLSID_YuureiTerminal, CLSID_Proxy }) |clsid| {
-        var gb: GuidBuf = undefined;
-        const s = guidString(clsid, &gb);
-        var sub: [96:0]u16 = undefined;
-        var w: Utf16Builder = .{ .buf = &sub };
-        w.add("Software\\Classes\\CLSID\\");
-        w.addRaw(s);
-        _ = winapi.RegDeleteTreeW(HKCU, w.slice().ptr);
+    if (isRegistered()) {
+        _ = winapi.RegDeleteKeyValueW(HKCU, L("Console\\%%Startup").ptr, L("DelegationConsole").ptr);
+        _ = winapi.RegDeleteKeyValueW(HKCU, L("Console\\%%Startup").ptr, L("DelegationTerminal").ptr);
     }
-    inline for (.{ IID_ITerminalHandoff, IID_ITerminalHandoff2, IID_ITerminalHandoff3 }) |iid| {
-        var gb: GuidBuf = undefined;
-        const s = guidString(iid, &gb);
-        var sub: [96:0]u16 = undefined;
-        var w: Utf16Builder = .{ .buf = &sub };
-        w.add("Software\\Classes\\Interface\\");
-        w.addRaw(s);
-        _ = winapi.RegDeleteTreeW(HKCU, w.slice().ptr);
+    deleteOwnedClassKeys();
+}
+
+/// Delete `Software\Classes\CLSID\{clsid}` under HKCU.
+fn deleteClsidTree(clsid: winapi.GUID) void {
+    var gb: GuidBuf = undefined;
+    const s = guidString(clsid, &gb);
+    var sub: [96:0]u16 = undefined;
+    var w: Utf16Builder = .{ .buf = &sub };
+    w.add("Software\\Classes\\CLSID\\");
+    w.addRaw(s);
+    _ = winapi.RegDeleteTreeW(HKCU, w.slice().ptr);
+}
+
+/// Whether the shared proxy CLSID's InprocServer32 still points at our
+/// DLL — i.e. we own it, rather than Windows Terminal / the inbox host
+/// (which register the same canonical CLSID_Proxy).
+fn proxyIsOurs() bool {
+    var path_buf: [winapi.MAX_PATH:0]u16 = undefined;
+    const proxy = proxyPath(&path_buf) orelse return false;
+
+    var pb: GuidBuf = undefined;
+    const proxy_clsid = guidString(CLSID_Proxy, &pb);
+    var sub: [96:0]u16 = undefined;
+    var w: Utf16Builder = .{ .buf = &sub };
+    w.add("Software\\Classes\\CLSID\\");
+    w.addRaw(proxy_clsid);
+    w.add("\\InprocServer32");
+
+    var val_buf: [winapi.MAX_PATH]u16 = undefined;
+    const val = regGetSz(w.slice(), null, &val_buf) orelse return false;
+    return std.mem.eql(u16, val, proxy);
+}
+
+/// Delete every class-object key we register: our own terminal CLSID
+/// (uniquely ours, always safe) and — only when we still own the proxy —
+/// the shared proxy CLSID and the three handoff Interface IIDs.
+fn deleteOwnedClassKeys() void {
+    deleteClsidTree(CLSID_YuureiTerminal);
+
+    if (proxyIsOurs()) {
+        deleteClsidTree(CLSID_Proxy);
+        inline for (.{ IID_ITerminalHandoff, IID_ITerminalHandoff2, IID_ITerminalHandoff3 }) |iid| {
+            var gb: GuidBuf = undefined;
+            const s = guidString(iid, &gb);
+            var sub: [96:0]u16 = undefined;
+            var w: Utf16Builder = .{ .buf = &sub };
+            w.add("Software\\Classes\\Interface\\");
+            w.addRaw(s);
+            _ = winapi.RegDeleteTreeW(HKCU, w.slice().ptr);
+        }
     }
 }
 
