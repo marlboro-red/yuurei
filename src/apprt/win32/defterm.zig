@@ -470,10 +470,12 @@ pub fn closeHandoff(h: Handoff) void {
     conpty.closePseudoConsole(h.hpc);
 }
 
-/// Set by App.startHandoffServer; invoked on the UI thread when a
-/// handoff arrives. Null means no app is ready to receive (the handoff
-/// is then declined and conhost falls back).
-pub var on_handoff: ?*const fn (Handoff) void = null;
+/// Set by App at startup; invoked when a handoff arrives. Returns true if
+/// the app took ownership of the handoff (it will build a window and close
+/// the handles), false if it could not accept it — in which case
+/// establishPtyHandoff closes everything and declines to conhost, which
+/// then hosts the session itself. Null (no app) is treated as false.
+pub var on_handoff: ?*const fn (Handoff) bool = null;
 
 fn guidEql(a: *const winapi.GUID, b: *const winapi.GUID) bool {
     return std.mem.eql(u8, std.mem.asBytes(a), std.mem.asBytes(b));
@@ -490,9 +492,16 @@ var handoff_vtable: ITerminalHandoff3.Vtbl = .{
 var handoff_obj: ITerminalHandoff3 = .{ .vtable = &handoff_vtable };
 
 fn handoffQI(self: *ITerminalHandoff3, riid: *const winapi.GUID, ppv: *?*anyopaque) callconv(.winapi) HRESULT {
+    // ONLY v3 (+ IUnknown). Our single vtable slot is v3-shaped
+    // ([out] HANDLE* in/out first), but v1/v2 EstablishPtyHandoff pass
+    // those handles [in] BY VALUE — an older delegation host (pre-v3
+    // OpenConsole / an older Windows Terminal acting as host) that QI'd
+    // v1/v2 and called through would hit our v3 body with a raw pipe
+    // handle where it expects an out-pointer, dereferencing it as an
+    // address (crash). Decline them: the host then falls back to hosting
+    // the session itself. The v1/v2 Interface->proxy registry keys stay
+    // (they describe marshaling, not what we implement).
     if (guidEql(riid, &winapi.IID_IUnknown) or
-        guidEql(riid, &IID_ITerminalHandoff) or
-        guidEql(riid, &IID_ITerminalHandoff2) or
         guidEql(riid, &IID_ITerminalHandoff3))
     {
         ppv.* = self;
@@ -573,10 +582,8 @@ fn establishPtyHandoff(
         return E_FAIL;
     }
 
-    // Return conhost's ends (the proxy duplicates them cross-process).
-    in_out.* = pipes.conhost_in;
-    out_out.* = pipes.conhost_out;
-
+    // From here the HPCON owns server/reference/signal; our pipe ends and
+    // client belong to `h`. `closeHandoff` releases all of that.
     var h: Handoff = .{
         .our_read = pipes.our_read,
         .our_write = pipes.our_write,
@@ -593,7 +600,22 @@ fn establishPtyHandoff(
         h.title_len = n;
     }
 
-    cb(h); // enqueues + returns fast; must NOT build a window inline
+    // Offer it to the app. It only enqueues + returns fast (it must NOT
+    // build a window inline). If it can't accept (no receiver / OOM),
+    // decline cleanly: close everything and return E_FAIL *without*
+    // staging the out-params, so conhost is never told success for a
+    // session we just tore down — it hosts the session itself instead.
+    if (!cb(h)) {
+        closeHandoff(h);
+        _ = winapi.CloseHandle(pipes.conhost_in);
+        _ = winapi.CloseHandle(pipes.conhost_out);
+        return E_FAIL;
+    }
+
+    // Accepted: hand conhost its ends (the proxy duplicates them
+    // cross-process) and report success.
+    in_out.* = pipes.conhost_in;
+    out_out.* = pipes.conhost_out;
     return S_OK;
 }
 
@@ -822,8 +844,9 @@ test "EstablishPtyHandoff declines when conhost's ConPTY handles are absent" {
     // callback is never invoked (so no half-built surface leaks).
     const Captured = struct {
         var called: bool = false;
-        fn cb(_: Handoff) void {
+        fn cb(_: Handoff) bool {
             called = true;
+            return true;
         }
     };
     Captured.called = false;

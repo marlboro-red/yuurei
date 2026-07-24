@@ -243,6 +243,17 @@ pub fn init(
     var config = try Config.load(core_app.alloc);
     errdefer config.deinit();
 
+    // Whether COM cold-started us as a local server: when yuurei is the
+    // default terminal and no instance is running, conhost activates our
+    // LocalServer32 command, which COM invokes with a trailing
+    // `-Embedding`. Such an instance must NOT treat that unrecognized arg
+    // as a fatal CLI error (below) nor open a shell window (further down):
+    // it exists only to register the handoff class object and receive the
+    // console session conhost marshals in. Gated on handoff_ready — while
+    // the server is off, register() refuses, so COM never launches us this
+    // way and `-Embedding` should behave like any other bad arg.
+    const embedding = defterm.handoff_ready and launchedForEmbedding(core_app.alloc);
+
     // If we had configuration errors, then log them.
     if (!config._diagnostics.empty()) {
         var buf: [4096]u8 = undefined;
@@ -253,8 +264,10 @@ pub fn init(
             log.warn("configuration error: {s}", .{writer.buffered()});
         }
 
-        // If we have any CLI errors, exit.
-        if (config._diagnostics.containsLocation(.cli)) {
+        // If we have any CLI errors, exit — unless we were COM-launched,
+        // where the only such "error" is -Embedding and quitting would
+        // kill every cold-start console handoff.
+        if (config._diagnostics.containsLocation(.cli) and !embedding) {
             log.warn("CLI errors detected, exiting", .{});
             _ = core_app.mailbox.push(.{ .quit = {} }, .{ .forever = {} });
         }
@@ -271,9 +284,14 @@ pub fn init(
         probeFlipCapable(hinstance);
     log.info("flip-model capable={}", .{flip_capable});
 
-    // Queue a single new window that starts on launch.
-    // Note: above we may send a quit so this may never happen.
-    _ = core_app.mailbox.push(.{ .new_window = .{} }, .{ .forever = {} });
+    // Queue a single new window that starts on launch (this also drives
+    // session restore). Note: above we may send a quit so this may never
+    // happen. A COM-launched (-Embedding) instance skips it entirely — it
+    // opens a window only when conhost hands off a session, and must not
+    // restore the user's whole session onto a bare console launch.
+    if (!embedding) {
+        _ = core_app.mailbox.push(.{ .new_window = .{} }, .{ .forever = {} });
+    }
 
     self.* = .{
         .core_app = core_app,
@@ -299,24 +317,33 @@ pub fn init(
     defterm.startServer();
 }
 
+/// Whether COM invoked our LocalServer32 command (it appends
+/// `-Embedding`). Matches WT's cold-start detection; see the use in init.
+fn launchedForEmbedding(alloc: std.mem.Allocator) bool {
+    var it = std.process.argsWithAllocator(alloc) catch return false;
+    defer it.deinit();
+    _ = it.next(); // skip argv[0]
+    while (it.next()) |arg| {
+        if (std.ascii.eqlIgnoreCase(arg, "-Embedding") or
+            std.ascii.eqlIgnoreCase(arg, "/Embedding")) return true;
+    }
+    return false;
+}
+
 /// Receive a default-terminal handoff (defterm.zig). Called from inside
 /// EstablishPtyHandoff, which conhost blocks on — so this only *enqueues*
 /// the handoff and returns; the run loop builds the window later, after
 /// S_OK has reached conhost. Building a window inline would keep conhost
 /// blocked long enough for the console client's init to time out
-/// (0xc0000142). See App.pending_handoffs.
-fn onHandoff(h: defterm.Handoff) void {
-    const app = handoff_app orelse {
-        // No app to receive it: close the handles so conhost isn't left
-        // waiting on a terminal that will never read.
-        closeHandoff(h);
-        return;
-    };
+/// (0xc0000142). See App.pending_handoffs. Returns whether we took
+/// ownership; on false, establishPtyHandoff closes the handoff and
+/// declines to conhost (we must NOT close it here — no double-free).
+fn onHandoff(h: defterm.Handoff) bool {
+    const app = handoff_app orelse return false;
     app.handoff_mutex.lock();
     app.pending_handoffs.append(app.core_app.alloc, h) catch {
         app.handoff_mutex.unlock();
-        closeHandoff(h);
-        return;
+        return false;
     };
     app.handoff_mutex.unlock();
 
@@ -325,6 +352,7 @@ fn onHandoff(h: defterm.Handoff) void {
     // blocked inside this COM call and will see the queue as soon as it
     // unwinds; the posted WM_NULL guarantees GetMessageW returns then.
     app.wakeup();
+    return true;
 }
 
 /// Turn any queued handoffs into windows, in arrival order. Runs on the
