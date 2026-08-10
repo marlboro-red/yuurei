@@ -134,6 +134,11 @@ handoff_mutex: std.Io.Mutex = .init,
 prewarm_thread: ?std.Thread = null,
 prewarm_font: ?PrewarmFont = null,
 
+/// URLs waiting to be opened after the core action callback releases
+/// renderer state locks.
+pending_urls: std.ArrayList([]u8) = .empty,
+url_mutex: std.Io.Mutex = .init,
+
 const PrewarmFont = struct {
     config: font.SharedGridSet.DerivedConfig,
     size: font.face.DesiredSize,
@@ -439,6 +444,56 @@ fn drainHandoffs(self: *App) void {
     }
 }
 
+/// Max URL byte length accepted by queueUrl. drainUrls sizes its UTF-16
+/// buffer to match: UTF-16 never needs more code units than UTF-8 bytes,
+/// so the byte-length check at queue time guarantees the conversion fits.
+const max_url_bytes = 2047;
+
+fn queueUrl(self: *App, url: []const u8) !void {
+    const alloc = self.core_app.alloc;
+    const owned = try alloc.dupe(u8, url);
+    errdefer alloc.free(owned);
+
+    {
+        self.url_mutex.lockUncancelable(global.io());
+        defer self.url_mutex.unlock(global.io());
+        try self.pending_urls.append(alloc, owned);
+    }
+    self.wakeup();
+}
+
+fn drainUrls(self: *App) void {
+    const alloc = self.core_app.alloc;
+
+    // Take the whole batch under one lock, then launch unlocked:
+    // ShellExecuteW can pump messages back into us, so no lock may be
+    // held across it (that deferral is the entire point; see queueUrl).
+    self.url_mutex.lockUncancelable(global.io());
+    var urls = self.pending_urls;
+    self.pending_urls = .empty;
+    self.url_mutex.unlock(global.io());
+    defer urls.deinit(alloc);
+
+    for (urls.items) |url| {
+        defer alloc.free(url);
+
+        var url_w: [max_url_bytes:0]u16 = undefined;
+        const len = std.unicode.utf8ToUtf16Le(&url_w, url) catch {
+            log.warn("invalid utf-8 in url, not opening", .{});
+            continue;
+        };
+        url_w[len] = 0;
+        _ = winapi.ShellExecuteW(
+            null,
+            std.unicode.utf8ToUtf16LeStringLiteral("open"),
+            url_w[0..len :0],
+            null,
+            null,
+            winapi.SW_SHOWDEFAULT,
+        );
+    }
+}
+
 /// Decline a handoff by releasing everything it carried (pipes, client,
 /// and the adopted HPCON). Used when no app can receive it or window setup
 /// fails before a surface takes ownership.
@@ -510,6 +565,10 @@ pub fn terminate(self: *App) void {
     handoff_app = null;
     for (self.pending_handoffs.items) |h| closeHandoff(h);
     self.pending_handoffs.deinit(self.core_app.alloc);
+    // URLs queued in the final tick are dropped unopened: quitting wins
+    // over a click still in flight.
+    for (self.pending_urls.items) |url| self.core_app.alloc.free(url);
+    self.pending_urls.deinit(self.core_app.alloc);
 
     if (self.tray_hwnd) |hwnd| {
         var nid: winapi.NOTIFYICONDATAW = .{ .hWnd = hwnd, .uID = 1 };
@@ -795,6 +854,8 @@ pub fn run(self: *App) !void {
         // here (not inline in EstablishPtyHandoff) so that call returns
         // to conhost immediately; see App.pending_handoffs.
         self.drainHandoffs();
+
+        self.drainUrls();
 
         // Tick the terminal app
         try self.core_app.tick(self);
@@ -1230,29 +1291,15 @@ pub fn performAction(
                 return false;
             }
 
-            var url_w: [2048:0]u16 = undefined;
-            // UTF-16 never needs more units than UTF-8 bytes, so a
-            // byte-length check guarantees the buffer fits.
-            if (url.len > url_w.len - 1) {
+            if (url.len > max_url_bytes) {
                 log.warn("url too long, not opening", .{});
                 return false;
             }
-            const len = std.unicode.utf8ToUtf16Le(
-                url_w[0 .. url_w.len - 1],
-                url,
-            ) catch {
+            if (!std.unicode.utf8ValidateSlice(url)) {
                 log.warn("invalid utf-8 in url, not opening", .{});
                 return false;
-            };
-            url_w[len] = 0;
-            _ = winapi.ShellExecuteW(
-                null,
-                std.unicode.utf8ToUtf16LeStringLiteral("open"),
-                url_w[0..len :0],
-                null,
-                null,
-                winapi.SW_SHOWDEFAULT,
-            );
+            }
+            try self.queueUrl(url);
         },
 
         .inspector => switch (target) {
