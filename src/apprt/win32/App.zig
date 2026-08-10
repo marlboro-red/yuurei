@@ -444,6 +444,11 @@ fn drainHandoffs(self: *App) void {
     }
 }
 
+/// Max URL byte length accepted by queueUrl. drainUrls sizes its UTF-16
+/// buffer to match: UTF-16 never needs more code units than UTF-8 bytes,
+/// so the byte-length check at queue time guarantees the conversion fits.
+const max_url_bytes = 2047;
+
 fn queueUrl(self: *App, url: []const u8) !void {
     const alloc = self.core_app.alloc;
     const owned = try alloc.dupe(u8, url);
@@ -459,22 +464,22 @@ fn queueUrl(self: *App, url: []const u8) !void {
 
 fn drainUrls(self: *App) void {
     const alloc = self.core_app.alloc;
-    while (true) {
-        self.url_mutex.lockUncancelable(global.io());
-        if (self.pending_urls.items.len == 0) {
-            self.url_mutex.unlock(global.io());
-            return;
-        }
-        const url = self.pending_urls.orderedRemove(0);
-        self.url_mutex.unlock(global.io());
 
-        var url_w: [2048:0]u16 = undefined;
-        const len = std.unicode.utf8ToUtf16Le(
-            url_w[0 .. url_w.len - 1],
-            url,
-        ) catch {
+    // Take the whole batch under one lock, then launch unlocked:
+    // ShellExecuteW can pump messages back into us, so no lock may be
+    // held across it (that deferral is the entire point; see queueUrl).
+    self.url_mutex.lockUncancelable(global.io());
+    var urls = self.pending_urls;
+    self.pending_urls = .empty;
+    self.url_mutex.unlock(global.io());
+    defer urls.deinit(alloc);
+
+    for (urls.items) |url| {
+        defer alloc.free(url);
+
+        var url_w: [max_url_bytes:0]u16 = undefined;
+        const len = std.unicode.utf8ToUtf16Le(&url_w, url) catch {
             log.warn("invalid utf-8 in url, not opening", .{});
-            alloc.free(url);
             continue;
         };
         url_w[len] = 0;
@@ -486,7 +491,6 @@ fn drainUrls(self: *App) void {
             null,
             winapi.SW_SHOWDEFAULT,
         );
-        alloc.free(url);
     }
 }
 
@@ -561,6 +565,8 @@ pub fn terminate(self: *App) void {
     handoff_app = null;
     for (self.pending_handoffs.items) |h| closeHandoff(h);
     self.pending_handoffs.deinit(self.core_app.alloc);
+    // URLs queued in the final tick are dropped unopened: quitting wins
+    // over a click still in flight.
     for (self.pending_urls.items) |url| self.core_app.alloc.free(url);
     self.pending_urls.deinit(self.core_app.alloc);
 
@@ -1285,7 +1291,7 @@ pub fn performAction(
                 return false;
             }
 
-            if (url.len > 2047) {
+            if (url.len > max_url_bytes) {
                 log.warn("url too long, not opening", .{});
                 return false;
             }
