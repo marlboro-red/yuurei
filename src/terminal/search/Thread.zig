@@ -243,16 +243,28 @@ fn threadMain_(self: *Thread) !void {
 
 /// Drain the mailbox.
 fn drainMailbox(self: *Thread) !void {
+    var pending: ?Message.WriteReq = null;
+    defer if (pending) |v| v.deinit();
     while (self.mailbox.pop(global.io())) |message| {
         log.debug("mailbox message={}", .{message});
         switch (message) {
             .change_needle => |v| {
-                defer v.deinit();
-                try self.changeNeedle(v.slice());
+                if (pending) |old| old.deinit();
+                pending = v;
             },
-            .select => |v| try self.select(v),
+            .select => |v| {
+                // Selection belongs to the preceding query, so it is a
+                // barrier to coalescing rather than something we can reorder.
+                if (pending) |needle| {
+                    try self.changeNeedle(needle.slice());
+                    needle.deinit();
+                    pending = null;
+                }
+                try self.select(v);
+            },
         }
     }
+    if (pending) |v| try self.changeNeedle(v.slice());
 }
 
 fn select(self: *Thread, sel: ScreenSearch.Select) !void {
@@ -974,4 +986,40 @@ test "select after active screen removal" {
     try thread.select(.next);
     try testing.expectEqual(ScreenSet.Key.primary, thread.search.?.last_screen.key);
     try testing.expect(!thread.search.?.screens.contains(.alternate));
+}
+
+test "search coalesces needles without crossing selection barriers" {
+    const alloc = testing.allocator;
+    var mutex: std.Io.Mutex = .init;
+    var terminal: Terminal = try .init(testing.io, alloc, .{ .cols = 20, .rows = 2 });
+    defer terminal.deinit(alloc);
+    const Counter = struct {
+        fn callback(event: Event, userdata: ?*anyopaque) void {
+            const count: *usize = @ptrCast(@alignCast(userdata.?));
+            if (event == .total_matches) count.* += 1;
+        }
+    };
+    var resets: usize = 0;
+    var thread = try Thread.init(alloc, .{
+        .mutex = &mutex,
+        .terminal = &terminal,
+        .event_cb = Counter.callback,
+        .event_userdata = &resets,
+    });
+    defer thread.deinit();
+    try thread.changeNeedle("initial");
+    const long = "x" ** 300;
+    _ = thread.mailbox.push(testing.io, .{ .change_needle = try .init(alloc, @as([]const u8, long)) }, .forever);
+    _ = thread.mailbox.push(testing.io, .{ .change_needle = try .init(alloc, @as([]const u8, "final")) }, .forever);
+    try thread.drainMailbox();
+    try testing.expectEqual(@as(usize, 1), resets);
+    try testing.expectEqualStrings("final", thread.search.?.viewport.needle());
+
+    resets = 0;
+    _ = thread.mailbox.push(testing.io, .{ .change_needle = try .init(alloc, @as([]const u8, "alpha")) }, .forever);
+    _ = thread.mailbox.push(testing.io, .{ .select = .next }, .forever);
+    _ = thread.mailbox.push(testing.io, .{ .change_needle = try .init(alloc, @as([]const u8, "beta")) }, .forever);
+    try thread.drainMailbox();
+    try testing.expectEqual(@as(usize, 2), resets);
+    try testing.expectEqualStrings("beta", thread.search.?.viewport.needle());
 }
