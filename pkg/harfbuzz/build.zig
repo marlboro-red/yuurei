@@ -267,15 +267,8 @@ const HarfBuzzC = struct {
             try flag_builder.appendSlice(b.allocator, &.{
                 "-DHAVE_STDBOOL_H",
             });
-            // Disable ubsan for MSVC: Zig's ubsan runtime cannot be bundled
-            // on Windows (LNK4229), leaving __ubsan_handle_* unresolved when
-            // the static archive is consumed by an external linker.
-            if (options.target.result.abi == .msvc) {
-                try flag_builder.appendSlice(b.allocator, &.{
-                    "-fno-sanitize=undefined",
-                    "-fno-sanitize-trap=undefined",
-                });
-            }
+            // Sanitizer flags belong to C compilation, not header translation.
+            // The Aro-backed translator does not recognize Clang's flags.
             if (options.target.result.os.tag != .windows) {
                 try flag_builder.appendSlice(b.allocator, &.{
                     "-DHAVE_UNISTD_H",

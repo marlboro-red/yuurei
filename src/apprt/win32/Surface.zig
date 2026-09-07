@@ -443,13 +443,11 @@ pub fn clipboardRequest(
     self: *Self,
     clipboard_type: apprt.Clipboard,
     state: apprt.ClipboardRequest,
-) !bool {
-    switch (clipboard_type) {
-        .standard => {},
-        // Windows has no selection clipboard; we said so in
-        // supportsClipboard so this should not be reachable.
-        .selection, .primary => return false,
-    }
+) !apprt.ClipboardReadResult {
+    // The Windows adapter currently supports text paste and OSC 52 reads.
+    // Leave ownership of unsupported protocol requests with the core.
+    if (!clipboardRequestSupported(clipboard_type, std.meta.activeTag(state)))
+        return .unsupported;
 
     // Read CF_UNICODETEXT and complete the request synchronously,
     // like the GLFW apprt did.
@@ -485,7 +483,8 @@ pub fn clipboardRequest(
     // First attempt unconfirmed: the core rejects content it considers
     // unsafe (control characters in a paste, OSC 52 reads needing
     // authorization) and we ask the user with a native dialog.
-    self.core_surface.completeClipboardRequest(state, text, false) catch |err| switch (err) {
+    const contents: []const terminal.clipboard.Content = &.{.{ .mime = "text/plain", .data = text }};
+    self.core_surface.completeClipboardRequest(state, .{ .contents = contents }) catch |err| switch (err) {
         error.UnsafePaste, error.UnauthorizedPaste => {
             const allowed = switch (err) {
                 error.UnsafePaste => confirmDialog(
@@ -500,32 +499,55 @@ pub fn clipboardRequest(
                         "clipboard. Allow it?",
                 ),
             };
-            if (!allowed) return true;
-            try self.core_surface.completeClipboardRequest(state, text, true);
+            if (!allowed) {
+                self.core_surface.denyClipboardRequest(state);
+                return .started;
+            }
+            try self.core_surface.completeClipboardRequest(state, .{ .contents = contents, .confirmed = true });
         },
 
         else => return err,
     };
-    return true;
+    return .started;
 }
 
 /// Paste arbitrary text into this surface through the regular paste
 /// path, including the unsafe-paste confirmation (file drops).
 pub fn pasteText(self: *Self, text: [:0]const u8) void {
     if (text.len == 0) return;
-    self.core_surface.completeClipboardRequest(.paste, text, false) catch |err| switch (err) {
+    const contents: []const terminal.clipboard.Content = &.{.{ .mime = "text/plain", .data = text }};
+    self.core_surface.completeClipboardRequest(.{ .paste = .standard }, .{ .contents = contents }) catch |err| switch (err) {
         error.UnsafePaste, error.UnauthorizedPaste => {
             if (!confirmDialog(
                 self.window.hwnd,
                 "The dropped text may be unsafe to paste (it includes " ++
                     "control characters that could run commands). Paste anyway?",
             )) return;
-            self.core_surface.completeClipboardRequest(.paste, text, true) catch |err2| {
+            self.core_surface.completeClipboardRequest(.{ .paste = .standard }, .{ .contents = contents, .confirmed = true }) catch |err2| {
                 log.warn("failed to paste dropped text err={}", .{err2});
             };
         },
         else => log.warn("failed to paste dropped text err={}", .{err}),
     };
+}
+
+fn clipboardRequestSupported(clipboard: apprt.Clipboard, kind: apprt.ClipboardRequestType) bool {
+    if (clipboard != .standard) return false;
+    return switch (kind) {
+        .paste, .osc_52_read => true,
+        .kitty_read, .kitty_write, .list, .osc_52_write => false,
+    };
+}
+
+test "windows clipboard request capabilities preserve text-only support" {
+    const testing = std.testing;
+    try testing.expect(clipboardRequestSupported(.standard, .paste));
+    try testing.expect(clipboardRequestSupported(.standard, .osc_52_read));
+    try testing.expect(!clipboardRequestSupported(.selection, .paste));
+    try testing.expect(!clipboardRequestSupported(.primary, .osc_52_read));
+    inline for (.{ .kitty_read, .kitty_write, .list, .osc_52_write }) |kind| {
+        try testing.expect(!clipboardRequestSupported(.standard, kind));
+    }
 }
 
 /// A modal yes/no warning dialog. Returns true when the user accepts.

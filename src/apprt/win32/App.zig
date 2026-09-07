@@ -1384,6 +1384,9 @@ pub fn performAction(
         // most-changed options, with an "Open config file" button for
         // the raw-file escape hatch. Only one at a time.
         .open_config => {
+            // Keep the native settings window as our existing config action.
+            // The upstream editor-backed terminal window is not implemented.
+            if (value != .os_open) return false;
             if (self.settings) |s| {
                 _ = winapi.SetForegroundWindow(s.hwnd);
             } else if (self.activeWindow()) |window| {

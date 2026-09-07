@@ -857,7 +857,7 @@ fn showStripMenu(self: *Window, idx: ?usize) void {
         11 => _ = self.newSplit(.right) catch |err| log.err("menu split err={}", .{err}),
         12 => _ = self.newSplit(.down) catch |err| log.err("menu split err={}", .{err}),
         13 => self.togglePalette() catch |err| log.err("menu palette err={}", .{err}),
-        14 => _ = self.app.performAction(.app, .open_config, {}) catch |err|
+        14 => _ = self.app.performAction(.app, .open_config, .os_open) catch |err|
             log.err("menu settings err={}", .{err}),
         else => if (cmd >= 100) {
             const list = self.app.ensureProfiles();

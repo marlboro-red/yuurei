@@ -120,13 +120,15 @@ const ThreadEnterState = struct {
     ) (Allocator.Error || error{InputNotFound})![]const Input {
         const alloc = self.arena.allocator();
 
-        var input = try alloc.alloc(
-            Input,
+        var inputs: std.ArrayList(Input) = try .initCapacity(
+            alloc,
             self.input.list.items.len,
         );
-        for (self.input.list.items, 0..) |item, i| {
-            input[i] = switch (item) {
-                .raw => |v| .{ .string = try alloc.dupe(u8, v) },
+        errdefer for (inputs.items) |item| item.deinit();
+
+        for (self.input.list.items) |item| {
+            inputs.appendAssumeCapacity(switch (item) {
+                .raw => |v| .{ .string = v },
                 .path => |path| file: {
                     const f = std.Io.Dir.cwd().openFile(
                         global.io(),
@@ -142,15 +144,22 @@ const ThreadEnterState = struct {
 
                     break :file .{ .file = f };
                 },
-            };
+            });
         }
 
-        return input;
+        return inputs.items;
     }
 
     const Input = union(enum) {
         string: []const u8,
         file: std.Io.File,
+
+        fn deinit(self: Input) void {
+            switch (self) {
+                .string => {},
+                .file => |f| f.close(global.io()),
+            }
+        }
     };
 };
 
@@ -169,6 +178,7 @@ pub const DerivedConfig = struct {
     background: configpkg.Config.Color,
     osc_color_report_format: configpkg.Config.OSCColorReportFormat,
     clipboard_write: configpkg.ClipboardAccess,
+    clipboard_write_limit: usize,
     enquiry_response: []const u8,
     conditional_state: configpkg.ConditionalState,
     win32_input_mode: bool,
@@ -206,6 +216,7 @@ pub const DerivedConfig = struct {
             .background = config.background,
             .osc_color_report_format = config.@"osc-color-report-format",
             .clipboard_write = config.@"clipboard-write",
+            .clipboard_write_limit = config.@"clipboard-write-limit-bytes".value,
             .enquiry_response = try alloc.dupe(u8, config.@"enquiry-response"),
             .conditional_state = config._conditional_state,
             .win32_input_mode = config.@"win32-input-mode",
@@ -249,7 +260,8 @@ pub fn init(self: *Termio, alloc: Allocator, opts: termio.Options) !void {
         break :opts .{
             .cols = grid_size.columns,
             .rows = grid_size.rows,
-            .max_scrollback = opts.full_config.@"scrollback-limit",
+            .max_scrollback_bytes = opts.full_config.@"scrollback-limit-bytes".optional(),
+            .max_scrollback_lines = opts.full_config.@"scrollback-limit-lines".optional(),
             .default_modes = default_modes,
             .default_cursor_style = opts.config.cursor_style,
             .default_cursor_blink = opts.config.cursor_blink,
@@ -261,13 +273,17 @@ pub fn init(self: *Termio, alloc: Allocator, opts: termio.Options) !void {
                     const rgb = color.toTerminalRGB() orelse break :cursor .unset;
                     break :cursor .init(rgb);
                 },
-                .palette = .init(opts.config.palette),
+                .palette = .default,
             },
             .kitty_image_storage_limit = opts.config.image_storage_limit,
             .kitty_image_loading_limits = .allWithTempDir(global.tmpDirPath()),
         };
     });
     errdefer term.deinit(alloc);
+
+    // The default palette may be an allocator-owned copy, so it is set
+    // once the terminal owns its memory and can release it on deinit.
+    try term.colors.palette.changeDefault(alloc, opts.config.palette);
 
     // Setup our terminal size in pixels for certain requests.
     term.width_px = term.cols * opts.size.cell.width;
@@ -290,6 +306,7 @@ pub fn init(self: *Termio, alloc: Allocator, opts: termio.Options) !void {
         .terminal = &self.terminal,
         .osc_color_report_format = opts.config.osc_color_report_format,
         .clipboard_write = opts.config.clipboard_write,
+        .clipboard_write_limit = opts.config.clipboard_write_limit,
         .enquiry_response = opts.config.enquiry_response,
         .win32_input_allowed = opts.config.win32_input_mode,
     };
@@ -310,7 +327,10 @@ pub fn init(self: *Termio, alloc: Allocator, opts: termio.Options) !void {
         .size = opts.size,
         .backend = backend,
         .mailbox = opts.mailbox,
-        .terminal_stream = .initAlloc(alloc, handler),
+        .terminal_stream = .init(.{
+            .allocator = alloc,
+            .handler = handler,
+        }),
         .thread_enter_state = thread_enter_state,
     };
 }
@@ -346,6 +366,9 @@ pub fn threadEnter(
         try v.prepareInput()
     else
         null;
+    defer if (inputs) |items| {
+        for (items) |input| input.deinit();
+    };
 
     data.* = .{
         .alloc = self.alloc,
@@ -366,20 +389,21 @@ pub fn threadEnter(
             log.warn("failed to queue input string err={}", .{err});
             return error.InputFailed;
         },
-        .file => |f| self.queueWrite(
-            data,
-            compat_file.readToEndAlloc(
+        .file => |f| {
+            const contents = compat_file.readToEndAlloc(
                 f,
                 self.alloc,
                 10 * 1024 * 1024, // 10 MiB max
             ) catch |err| {
                 log.warn("failed to read input file err={}", .{err});
                 return error.InputFailed;
-            },
-            false,
-        ) catch |err| {
-            log.warn("failed to queue input file err={}", .{err});
-            return error.InputFailed;
+            };
+            defer self.alloc.free(contents);
+
+            self.queueWrite(data, contents, false) catch |err| {
+                log.warn("failed to queue input file err={}", .{err});
+                return error.InputFailed;
+            };
         },
     };
 }
@@ -447,8 +471,16 @@ pub fn changeConfig(self: *Termio, td: *ThreadData, config: *DerivedConfig) !voi
     //   - command, working-directory: we never restart the underlying
     //   process so we don't care or need to know about these.
 
-    // Update the default palette.
-    self.terminal.colors.palette.changeDefault(config.palette);
+    // Update the default palette. A config change must not fail here, so
+    // if we can't allocate the copy of the configured palette we fall back
+    // to the built-in default, which never allocates.
+    self.terminal.colors.palette.changeDefault(
+        self.alloc,
+        config.palette,
+    ) catch |err| {
+        log.warn("error changing default palette, using built-in default err={}", .{err});
+        self.terminal.colors.palette.resetDefault(self.alloc);
+    };
     self.terminal.flags.dirty.palette = true;
 
     // Update all our other colors
@@ -460,7 +492,7 @@ pub fn changeConfig(self: *Termio, td: *ThreadData, config: *DerivedConfig) !voi
     };
 
     // Set the image limits
-    try self.terminal.setKittyGraphicsSizeLimit(self.alloc, config.image_storage_limit);
+    self.terminal.setKittyGraphicsSizeLimit(self.alloc, config.image_storage_limit);
     self.terminal.setKittyGraphicsLoadingLimits(.allWithTempDir(global.tmpDirPath()));
 }
 
@@ -724,6 +756,19 @@ fn processOutputLocked(self: *Termio, buf: []const u8, timing: ?*OutputTiming) v
 }
 
 /// Sends a DSR response for the current color scheme to the pty.
+/// Record a Kitty clipboard protocol session grant so future requests
+/// carrying the password skip the permission prompt.
+pub fn kittyClipboardGrant(
+    self: *Termio,
+    pw: []const u8,
+    dir: terminalpkg.kitty.clipboard.Grants.Direction,
+) error{OutOfMemory}!void {
+    self.renderer_state.mutex.lockUncancelable(global.io());
+    defer self.renderer_state.mutex.unlock(global.io());
+
+    try self.terminal_stream.handler.kittyClipboardGrant(pw, dir);
+}
+
 pub fn colorSchemeReport(self: *Termio, td: *ThreadData, force: bool) !void {
     self.renderer_state.mutex.lockUncancelable(global.io());
     defer self.renderer_state.mutex.unlock(global.io());
@@ -743,6 +788,30 @@ pub fn colorSchemeReportLocked(self: *Termio, td: *ThreadData, force: bool) !voi
     var buf: [terminalpkg.device_status.max_color_scheme_report_encode_size]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buf);
     try terminalpkg.device_status.encodeColorSchemeReport(&writer, scheme);
+    try self.queueWrite(td, writer.buffered(), false);
+}
+
+/// Sends a visibility report to the pty. Unforced reports are only sent while
+/// DEC mode 2033 is enabled.
+pub fn visibilityReport(
+    self: *Termio,
+    td: *ThreadData,
+    visible: bool,
+    force: bool,
+) !void {
+    self.renderer_state.mutex.lockUncancelable(global.io());
+    defer self.renderer_state.mutex.unlock(global.io());
+
+    if (!force and !self.renderer_state.terminal.modes.get(.report_visibility)) {
+        return;
+    }
+
+    var buf: [terminalpkg.device_status.max_visibility_report_encode_size]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    try terminalpkg.device_status.encodeVisibilityReport(
+        &writer,
+        if (visible) .potentially_visible else .not_visible,
+    );
     try self.queueWrite(td, writer.buffered(), false);
 }
 

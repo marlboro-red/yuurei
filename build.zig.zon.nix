@@ -98,11 +98,11 @@
 in
   linkFarm name [
     {
-      name = "aro-0.0.0-JSD1Qk8rOQDnuVcD4jAwMpHitA6pADRKzQ7M7hKRwxvD";
+      name = "aro-0.0.0-JSD1Qk6lNgDdcDV4Vh7Sfy-34m2TluIVOdPzMmj_0BjX";
       path = fetchZigArtifact {
         name = "aro";
-        url = "https://github.com/vancluever/arocc/archive/ecbc5c799574e0da2758a961b12efa586007f03c.tar.gz";
-        hash = "sha256-rjNfhWjmA/1WR/xuHo4ls4fnDCbsI1VZSvb8SFRvwso=";
+        url = "https://github.com/vancluever/arocc/archive/f97cdfc3779aec4b242299e2fc9a1c828c3547c6.tar.gz";
+        hash = "sha256-G/NNgk7KhJSLdy17ip1igIzpYhAUlzO7ef8r3/iCv/s=";
         unpack = true;
       };
     }
@@ -125,11 +125,11 @@ in
       };
     }
     {
-      name = "N-V-__8AAIrfdwARSa-zMmxWwFuwpXf1T3asIN7s5jqi9c1v";
+      name = "N-V-__8AAOgqbADacob-q2_DMQlmgaG4xKHRuW-6PJ4oJzMZ";
       path = fetchZigArtifact {
         name = "fontconfig";
-        url = "https://deps.files.ghostty.org/fontconfig-2.14.2.tar.gz";
-        hash = "sha256-O6LdkhWHGKzsXKrxpxYEO1qgVcJ7CB2RSvPMtA3OilU=";
+        url = "https://gitlab.freedesktop.org/api/v4/projects/890/packages/generic/fontconfig/2.18.3/fontconfig-2.18.3.tar.xz";
+        hash = "sha256-T3tVSjjN94wDP2ZsiHHzdJ4UoJT2Wgf2MMke0LQ9NeM=";
         unpack = false;
       };
     }
@@ -161,11 +161,11 @@ in
       };
     }
     {
-      name = "gobject-0.3.1-Skun7E1KnwBGMX5nslHYG1yWHaSevywxQO8oM7tTOgIp";
+      name = "gobject-0.3.2-Skun7F6HogCMynX2JqeSHS7xr-8pK4ob-qRFIcEasVi3";
       path = fetchZigArtifact {
         name = "gobject";
-        url = "https://deps.files.ghostty.org/gobject-2026-04-23-26-1.tar.zst";
-        hash = "sha256-cZGf9a1+sDeORKWYIdzQ/5KLT7l/9pgPc2cIbqfBc4o=";
+        url = "https://deps.files.ghostty.org/gobject-2026-07-28-36-1.tar.zst";
+        hash = "sha256-dyCfm2XjiAk30zccjD6AgKFBdE7IRsJuoqnscfvnWSQ=";
         unpack = true;
       };
     }
@@ -206,11 +206,11 @@ in
       };
     }
     {
-      name = "N-V-__8AALZGBAAS5NLVH-c8eC-6VtCdcH-9nUvVfUSkWS__";
+      name = "N-V-__8AAEFmBABuDGOKxAI6VMg41b9euMZ-z7HS9EcUdaor";
       path = fetchZigArtifact {
         name = "iterm2_themes";
-        url = "https://deps.files.ghostty.org/ghostty-themes-release-20260713-155359-c3968b3.tgz";
-        hash = "sha256-FLMES+9no8uDUjlzvRbTqg+wCW3dHg7Lo5FtFNbWfyA=";
+        url = "https://deps.files.ghostty.org/ghostty-themes-release-20260831-151010-752a9c0.tgz";
+        hash = "sha256-g2U+uDe661v8fVDJG31EdyeW4IwcJDE04Rxe32yNFcU=";
         unpack = false;
       };
     }
@@ -305,11 +305,11 @@ in
       };
     }
     {
-      name = "translate_c-0.0.0-Q_BUWj8_BwCr4na219OimiKKj4IVSq0aKtMXCQmIk4AB";
+      name = "translate_c-0.0.0-Q_BUWhVNBwDOEcIqub4VFPJPB6D9dgwzUMHTX5KWr8Xr";
       path = fetchZigArtifact {
         name = "translate_c";
-        url = "https://deps.files.ghostty.org/translate_c-a916baf225a3cfc93a982225462db612604ae290.tar.gz";
-        hash = "sha256-i7TSSiLU9YGtLtEjgVqy2jSnKLDTeKHX+EFuXEMXJ+U=";
+        url = "https://codeberg.org/vancluever/translate-c/archive/4e879eb8aba615de112eabd1231ea6e01920cead.tar.gz";
+        hash = "sha256-/sT7W8Kp+O11xaFBgpb/kDiWzfQ0MuXk/d/TuGq1Am8=";
         unpack = true;
       };
     }
@@ -368,20 +368,20 @@ in
       };
     }
     {
-      name = "N-V-__8AAAzZywE3s51XfsLbP9eyEw57ae9swYB9aGB6fCMs";
+      name = "N-V-__8AAP5JWgCGP_AD0teWpa4krRvE9VPZzvviGdbmN4jI";
       path = fetchZigArtifact {
         name = "wuffs";
-        url = "https://deps.files.ghostty.org/wuffs-122037b39d577ec2db3fd7b2130e7b69ef6cc1807d68607a7c232c958315d381b5cd.tar.gz";
-        hash = "sha256-nkzSCr6W5sTG7enDBXEIhgEm574uLD41UVR2wlC+HBM=";
+        url = "https://deps.files.ghostty.org/wuffs-7411f488fe2e2c205c3d3b3d28638b7356522930.tar.gz";
+        hash = "sha256-F4d9NG95iGUdbGLkWy47BchoCaZELF40YSN0sqlxmhw=";
         unpack = false;
       };
     }
     {
-      name = "z2d-0.11.0-j5P_HtLzDwBGyQt49DrT0v4BuVqI_SRs6CXsuj7eBVhR";
+      name = "z2d-0.12.1-j5P_Hsw8EQAKyZTQICCQnAH2xYkLDW8k9uefbsYdfPZ-";
       path = fetchZigArtifact {
         name = "z2d";
-        url = "https://deps.files.ghostty.org/z2d-0.11.0-j5P_HtLzDwBGyQt49DrT0v4BuVqI_SRs6CXsuj7eBVhR.tar.gz";
-        hash = "sha256-/Yje2P+ro7IrPodQ26YKk7RsPSYj1Cqx6bdrmykXEKA=";
+        url = "https://deps.files.ghostty.org/z2d-7dbae85c81784dba9988320bf9543ed9a81350c8.tar.gz";
+        hash = "sha256-Fjr1ORn0ozxU7QY09o2ZOZQHIJsXfVw0UCdZxTKmZJ0=";
         unpack = true;
       };
     }
