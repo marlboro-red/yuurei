@@ -1950,6 +1950,7 @@ pub const ReadThread = struct {
         var stat_bytes: u64 = 0;
         var stat_chunks: u64 = 0;
         var stat_parse_ns: u64 = 0;
+        var stat_lock_ns: u64 = 0;
 
         var first_output = true;
         while (true) {
@@ -2002,27 +2003,31 @@ pub const ReadThread = struct {
                     if (perf.sinceKeyMs()) |ms| {
                         log.info("perf: ptychunk key+{d}ms {d}B", .{ ms, n });
                     }
-                    @call(.always_inline, termio.Termio.processOutput, .{ io, buf[0..n] });
+                    var timing: termio.Termio.OutputTiming = .{};
+                    io.processOutputMeasured(buf[0..n], &timing);
                     perf.ptyData();
                     const t1 = std.Io.Timestamp.now(global.io(), .awake).toNanoseconds();
-                    stat_parse_ns += @intCast(t1 - t0);
+                    stat_parse_ns += timing.parse_ns;
+                    stat_lock_ns += timing.lock_ns;
                     stat_bytes += n;
                     stat_chunks += 1;
                     if (t1 - stat_start >= std.time.ns_per_s) {
                         const wall_ns: u64 = @intCast(t1 - stat_start);
                         log.info(
-                            "perf: io {d} KB/s in {d} chunks (avg {d} B), parse {d}% of wall",
+                            "perf: io {d} KB/s in {d} chunks (avg {d} B), parse {d}% lock-wait {d}% of wall",
                             .{
                                 stat_bytes * std.time.ns_per_s / wall_ns / 1024,
                                 stat_chunks,
                                 stat_bytes / @max(1, stat_chunks),
                                 stat_parse_ns * 100 / wall_ns,
+                                stat_lock_ns * 100 / wall_ns,
                             },
                         );
                         stat_start = 0;
                         stat_bytes = 0;
                         stat_chunks = 0;
                         stat_parse_ns = 0;
+                        stat_lock_ns = 0;
                     }
                 } else {
                     @call(.always_inline, termio.Termio.processOutput, .{ io, buf[0..n] });

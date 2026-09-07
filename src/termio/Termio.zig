@@ -651,15 +651,27 @@ pub fn focusGained(self: *Termio, td: *ThreadData, focused: bool) !void {
 /// call with pty data but it is also called by the read thread when using
 /// an exec subprocess.
 pub fn processOutput(self: *Termio, buf: []const u8) void {
+    self.processOutputMeasured(buf, null);
+}
+
+pub const OutputTiming = struct {
+    lock_ns: u64 = 0,
+    parse_ns: u64 = 0,
+};
+
+/// Optional measurements exclude tracing/log formatting from both counters.
+pub fn processOutputMeasured(self: *Termio, buf: []const u8, timing: ?*OutputTiming) void {
     // We are modifying terminal state from here on out and we need
     // the lock to grab our read data.
+    const start = if (timing != null) std.Io.Timestamp.now(global.io(), .awake) else undefined;
     self.renderer_state.mutex.lockUncancelable(global.io());
     defer self.renderer_state.mutex.unlock(global.io());
-    self.processOutputLocked(buf);
+    if (timing) |v| v.lock_ns = @intCast(start.durationTo(.now(global.io(), .awake)).nanoseconds);
+    self.processOutputLocked(buf, timing);
 }
 
 /// Process output from readdata but the lock is already held.
-fn processOutputLocked(self: *Termio, buf: []const u8) void {
+fn processOutputLocked(self: *Termio, buf: []const u8, timing: ?*OutputTiming) void {
     // Schedule a render. We can call this first because we have the lock.
     self.terminal_stream.handler.queueRender() catch unreachable;
 
@@ -685,6 +697,7 @@ fn processOutputLocked(self: *Termio, buf: []const u8) void {
     // process a byte at a time alternating between the inspector handler
     // and the termio handler. This is very slow compared to our optimizations
     // below but at least users only pay for it if they're using the inspector.
+    const parse_start = if (timing != null) std.Io.Timestamp.now(global.io(), .awake) else undefined;
     if (self.renderer_state.inspector) |insp| {
         for (buf, 0..) |byte, i| {
             insp.recordPtyRead(
@@ -700,6 +713,7 @@ fn processOutputLocked(self: *Termio, buf: []const u8) void {
     } else {
         self.terminal_stream.nextSlice(buf);
     }
+    if (timing) |v| v.parse_ns = @intCast(parse_start.durationTo(.now(global.io(), .awake)).nanoseconds);
 
     // If our stream handling caused messages to be sent to the mailbox
     // thread, then we need to wake it up so that it processes them.

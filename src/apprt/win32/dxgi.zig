@@ -411,6 +411,8 @@ const Interop = struct {
 /// Flip-model presentation for one GL surface. All methods must be
 /// called on the renderer thread with its GL context current.
 pub const Presenter = struct {
+    wait_timeouts: u64 = 0,
+    wait_failures: u64 = 0,
     device: *ID3D11Device,
     context: *ID3D11DeviceContext,
     swapchain: *IDXGISwapChain1,
@@ -623,7 +625,19 @@ pub const Presenter = struct {
     /// so a hung compositor can't wedge the renderer thread.
     pub fn waitFrame(self: *Presenter) void {
         if (self.waitable) |w| {
-            _ = winapi.WaitForSingleObject(w, 100);
+            switch (winapi.WaitForSingleObject(w, 100)) {
+                0 => {}, // WAIT_OBJECT_0
+                258 => { // WAIT_TIMEOUT
+                    self.wait_timeouts += 1;
+                    if (self.wait_timeouts == 1 or @import("../../perf.zig").isEnabled())
+                        log.warn("frame latency wait timed out count={d}", .{self.wait_timeouts});
+                },
+                else => |result| {
+                    self.wait_failures += 1;
+                    if (self.wait_failures == 1 or @import("../../perf.zig").isEnabled())
+                        log.warn("frame latency wait failed result={x} count={d}", .{ result, self.wait_failures });
+                },
+            }
         }
     }
 
