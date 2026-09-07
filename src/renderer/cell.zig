@@ -135,6 +135,17 @@ pub const Contents = struct {
         self.fg_rows.reset();
     }
 
+    /// Copy both cursor layers for change detection without retaining slices.
+    pub fn cursorCells(self: *const Contents) [2]?shaderpkg.CellText {
+        if (self.size.rows == 0) return .{ null, null };
+        const first = self.fg_rows.lists[0].items;
+        const last = self.fg_rows.lists[self.size.rows + 1].items;
+        return .{
+            if (first.len > 0) first[0] else null,
+            if (last.len > 0) last[0] else null,
+        };
+    }
+
     /// Set the cursor value. If the value is null then the cursor is hidden.
     pub fn setCursor(
         self: *Contents,
@@ -504,6 +515,22 @@ test "Contents with zero-sized screen" {
 
     c.setCursor(null, null);
     try testing.expect(c.getCursorGlyph() == null);
+}
+
+test "Contents cursor snapshot detects layer changes and removal" {
+    const testing = std.testing;
+    var cells: Contents = .{};
+    try cells.resize(testing.allocator, .{ .columns = 80, .rows = 24 });
+    defer cells.deinit(testing.allocator);
+    const cursor: shaderpkg.CellText = .{ .grid_pos = .{ 2, 3 }, .color = .{ 255, 255, 255, 255 }, .atlas = .grayscale };
+    const hidden = cells.cursorCells();
+    cells.setCursor(cursor, .block);
+    const block = cells.cursorCells();
+    try testing.expect(!std.meta.eql(hidden, block));
+    cells.setCursor(cursor, .bar);
+    try testing.expect(!std.meta.eql(block, cells.cursorCells()));
+    cells.setCursor(null, null);
+    try testing.expect(std.meta.eql(hidden, cells.cursorCells()));
 }
 
 test "Cell constraint widths" {

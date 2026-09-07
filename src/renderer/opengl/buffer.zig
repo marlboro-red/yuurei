@@ -84,6 +84,10 @@ pub fn Buffer(comptime T: type) type {
         /// remaining data in the buffer is left untouched.
         pub fn sync(self: *Self, data: []const T) !void {
             const bytes = std.mem.sliceAsBytes(data);
+            if (data.len <= self.len and changedRange(self.uploaded.items, bytes) == null) {
+                self.uploaded.items.len = bytes.len;
+                return;
+            }
             try self.uploaded.ensureTotalCapacity(std.heap.c_allocator, bytes.len);
             const binding = try self.buffer.bind(self.opts.target);
             defer binding.unbind();
@@ -91,11 +95,12 @@ pub fn Buffer(comptime T: type) type {
             // If we need more space than our buffer has, we need to reallocate.
             if (data.len > self.len) {
                 // Reallocate the buffer to hold double what we require.
-                self.len = data.len * 2;
+                const new_len = data.len * 2;
                 try binding.setDataNullManual(
-                    self.len * @sizeOf(T),
+                    new_len * @sizeOf(T),
                     self.opts.usage,
                 );
+                self.len = new_len;
                 self.uploaded.clearRetainingCapacity();
             }
 

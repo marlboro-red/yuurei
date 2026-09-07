@@ -102,6 +102,10 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         /// being modified, and also when it's being accessed in `drawFrame`.
         draw_mutex: std.Io.Mutex = .init,
 
+        /// Renderer-thread scratch, capped so a large transient frame does not
+        /// permanently increase memory usage for every tab.
+        frame_arena: ArenaAllocator.State = .{},
+
         /// The configuration we need derived from the main config.
         config: DerivedConfig,
 
@@ -804,6 +808,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         }
 
         pub fn deinit(self: *Self) void {
+            var frame_arena = self.frame_arena.promote(self.alloc);
+            frame_arena.deinit();
             if (self.overlay) |*overlay| overlay.deinit(self.alloc);
             self.terminal_state.deinit(self.alloc);
             if (self.search_selected_match) |*m| m.arena.deinit();
@@ -1145,8 +1151,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             self.terminal_state_frame_count += 1;
 
             // Create an arena for all our temporary allocations while rebuilding
-            var arena = ArenaAllocator.init(self.alloc);
-            defer arena.deinit();
+            var arena = self.frame_arena.promote(self.alloc);
+            defer {
+                _ = arena.reset(.{ .retain_with_limit = 256 * 1024 });
+                self.frame_arena = arena.state;
+            }
             const arena_alloc = arena.allocator();
 
             // Data we extract out of the critical area.
@@ -1156,6 +1165,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 preedit: ?renderer.State.Preedit,
                 scrollbar: terminal.Scrollbar,
                 overlay_features: []const Overlay.Feature,
+                images_changed: bool,
             };
 
             // Update all our data as tightly as possible within the mutex.
@@ -1235,7 +1245,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // If we have any virtual references, we must also rebuild our
                 // kitty state on every frame because any cell change can move
                 // an image.
-                if (self.images.kittyRequiresUpdate(state.terminal)) {
+                const images_changed = self.images.kittyRequiresUpdate(state.terminal, self.terminal_state.dirty != .false);
+                if (images_changed) {
                     // We need to grab the draw mutex since this updates
                     // our image state that drawFrame uses.
                     self.draw_mutex.lockUncancelable(global.io());
@@ -1283,6 +1294,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     .preedit = preedit,
                     .scrollbar = scrollbar,
                     .overlay_features = overlay_features,
+                    .images_changed = images_changed,
                 };
             };
 
@@ -1358,6 +1370,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
 
             // Rebuild the overlay image if we have one. We can do this
             // outside of any critical areas.
+            const had_overlay = self.overlay != null;
             self.rebuildOverlay(
                 critical.overlay_features,
             ) catch |err| {
@@ -1373,6 +1386,9 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 defer self.draw_mutex.unlock(global.io());
 
                 // Build our GPU cells
+                const previous_uniforms = self.uniforms;
+                if (critical.images_changed or had_overlay or self.overlay != null)
+                    self.cells_rebuilt = true;
                 self.rebuildCells(
                     critical.preedit,
                     renderer.cursorStyle(&self.terminal_state, .{
@@ -1428,6 +1444,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
 
                 // Update custom shader uniforms that depend on terminal state.
                 self.updateCustomShaderUniformsFromState();
+                if (!std.meta.eql(previous_uniforms, self.uniforms)) self.cells_rebuilt = true;
             }
 
             // Notify our shaper we're done for the frame. For some shapers,
@@ -2308,6 +2325,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             links: *const terminal.RenderState.CellSet,
         ) Allocator.Error!void {
             const state: *terminal.RenderState = &self.terminal_state;
+            const previous_cursor = self.cells.cursorCells();
 
             const grid_size_diff =
                 self.cells.size.rows != state.rows or
@@ -2325,6 +2343,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             }
 
             const rebuild = state.dirty == .full or grid_size_diff;
+            var rebuilt_rows = rebuild;
             if (rebuild) {
                 // If we are doing a full rebuild, then we clear the entire cell buffer.
                 self.cells.reset();
@@ -2411,6 +2430,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 }
 
                 // Unmark the dirty state in our render state.
+                rebuilt_rows = true;
                 dirty.* = false;
 
                 self.rebuildRow(
@@ -2588,7 +2608,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             }
 
             // Update that our cells rebuilt
-            self.cells_rebuilt = true;
+            self.cells_rebuilt = self.cells_rebuilt or rebuilt_rows or preedit != null or
+                !std.meta.eql(previous_cursor, self.cells.cursorCells());
 
             // Log some things
             // log.debug("rebuildCells complete cached_runs={}", .{

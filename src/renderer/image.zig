@@ -237,6 +237,7 @@ pub const State = struct {
     pub fn kittyRequiresUpdate(
         self: *const State,
         t: *const terminal.Terminal,
+        content_changed: bool,
     ) bool {
         // If the terminal kitty image state is dirty, we must update.
         if (t.screens.active.kitty_images.dirty) return true;
@@ -245,7 +246,7 @@ pub const State = struct {
         // kitty state on every frame because any cell change can move
         // an image. If the virtual placements were removed, this will
         // be set to false on the next update.
-        if (self.kitty_virtual) return true;
+        if (self.kitty_virtual and content_changed) return true;
 
         return false;
     }
