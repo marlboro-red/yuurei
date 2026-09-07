@@ -243,7 +243,7 @@ pub const State = struct {
         if (t.screens.active.kitty_images.dirty) return true;
 
         // If we have any virtual references, we must also rebuild our
-        // kitty state on every frame because any cell change can move
+        // kitty state on content changes because any cell change can move
         // an image. If the virtual placements were removed, this will
         // be set to false on the next update.
         if (self.kitty_virtual and content_changed) return true;

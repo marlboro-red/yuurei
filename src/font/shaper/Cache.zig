@@ -46,19 +46,33 @@ const CellCacheTable = CacheTable(
 
 /// The cache table of shaped cells.
 map: CellCacheTable,
+tracing: bool = false,
+hits: u64 = 0,
+misses: u64 = 0,
+evictions: u64 = 0,
 
 pub fn init() Cache {
-    return .{ .map = .{ .context = .{} } };
+    return .{ .map = .{ .context = .{} }, .tracing = @import("../../perf.zig").isEnabled() };
 }
 
 pub fn deinit(self: *Cache, alloc: Allocator) void {
+    if (self.tracing) self.report();
     self.clear(alloc);
 }
 
 /// Get the shaped cells for the given text run,
 /// or null if they are not in the cache.
 pub fn get(self: *Cache, run: font.shape.TextRun) ?[]const font.shape.Cell {
-    return self.map.get(run.hash);
+    const result = self.map.get(run.hash);
+    if (self.tracing) {
+        if (result != null) self.hits += 1 else self.misses += 1;
+        if ((self.hits + self.misses) % 4096 == 0) self.report();
+    }
+    return result;
+}
+
+fn report(self: *const Cache) void {
+    log.info("perf: shaping-cache hits={d} misses={d} evictions={d}", .{ self.hits, self.misses, self.evictions });
 }
 
 /// Insert the shaped cells for the given text run into the cache.
@@ -73,6 +87,7 @@ pub fn put(
     const copy = try alloc.dupe(font.shape.Cell, cells);
     const evicted = self.map.put(run.hash, copy);
     if (evicted) |kv| {
+        if (self.tracing) self.evictions += 1;
         alloc.free(kv.value);
     }
 }
