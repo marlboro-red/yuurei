@@ -2857,6 +2857,19 @@ pub fn wndProc(
             };
             _ = winapi.ScreenToClient(hwnd, &pt);
 
+            // DWM can decline caption hits on a maximized custom frame.
+            // Its native button bounds remain available in screen coordinates.
+            // Return native hit codes so Windows still owns press tracking,
+            // hover feedback, and snap layouts.
+            if (self.mica and !self.fullscreen and
+                pt.y >= 0 and pt.y < self.titlebarHeight())
+            {
+                var info: winapi.TITLEBARINFOEX = .{};
+                _ = winapi.SendMessageW(hwnd, winapi.WM_GETTITLEBARINFOEX, 0, @intCast(@intFromPtr(&info)));
+                if (nativeCaptionHit(&info, .{ .x = lparamX(lparam), .y = lparamY(lparam) })) |hit|
+                    return hit;
+            }
+
             // Top resize border (the standard one left with the caption).
             // Skip it in fullscreen: there is no border to grab.
             if (!self.fullscreen and winapi.IsZoomed(hwnd) == 0) {
@@ -2919,12 +2932,12 @@ pub fn wndProc(
         winapi.WM_NCLBUTTONDOWN => {
             // Swallow presses on the maximize button so DefWindowProc
             // doesn't start a move/size loop; the action happens on up.
-            if (wparam == @as(usize, @intCast(winapi.HTMAXBUTTON))) return 0;
+            if (!self.mica and wparam == @as(usize, @intCast(winapi.HTMAXBUTTON))) return 0;
             return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
 
         winapi.WM_NCLBUTTONUP => {
-            if (wparam == @as(usize, @intCast(winapi.HTMAXBUTTON))) {
+            if (!self.mica and wparam == @as(usize, @intCast(winapi.HTMAXBUTTON))) {
                 self.captionButtonClick(.maximize);
                 return 0;
             }
@@ -4074,4 +4087,39 @@ fn vkToKey(vk: u8, lparam: winapi.LPARAM) input.Key {
         winapi.VK_OEM_102 => .intl_backslash,
         else => .unidentified,
     };
+}
+
+/// TITLEBARINFOEX button rectangles use physical screen coordinates.
+fn nativeCaptionHit(info: *const winapi.TITLEBARINFOEX, pt: winapi.POINT) ?winapi.LRESULT {
+    const unavailable = 0x1 | 0x8000 | 0x10000; // disabled, invisible, offscreen
+    inline for (.{ 2, 3, 5 }, .{ winapi.HTMINBUTTON, winapi.HTMAXBUTTON, winapi.HTCLOSE }) |index, hit| {
+        const rect = info.rgrect[index];
+        if (info.rgstate[index] & unavailable == 0 and
+            pt.x >= rect.left and pt.x < rect.right and
+            pt.y >= rect.top and pt.y < rect.bottom) return hit;
+    }
+    return null;
+}
+
+test "native caption hit bounds" {
+    const testing = std.testing;
+    try testing.expectEqual(@as(usize, 140), @sizeOf(winapi.TITLEBARINFOEX));
+    var info: winapi.TITLEBARINFOEX = .{};
+    try testing.expectEqual(null, nativeCaptionHit(&info, .{ .x = 0, .y = 0 }));
+    // Negative monitor origin and 200% DPI-sized buttons.
+    info.rgrect[2] = .{ .left = -282, .top = -20, .right = -188, .bottom = 36 };
+    info.rgrect[3] = .{ .left = -188, .top = -20, .right = -96, .bottom = 36 };
+    info.rgrect[5] = .{ .left = -96, .top = -20, .right = 0, .bottom = 36 };
+    try testing.expectEqual(winapi.HTMINBUTTON, nativeCaptionHit(&info, .{ .x = -282, .y = -20 }).?);
+    try testing.expectEqual(winapi.HTMAXBUTTON, nativeCaptionHit(&info, .{ .x = -188, .y = 0 }).?);
+    try testing.expectEqual(winapi.HTCLOSE, nativeCaptionHit(&info, .{ .x = -96, .y = 35 }).?);
+    try testing.expectEqual(null, nativeCaptionHit(&info, .{ .x = 0, .y = 0 }));
+    try testing.expectEqual(null, nativeCaptionHit(&info, .{ .x = -1, .y = 36 }));
+    try testing.expectEqual(null, nativeCaptionHit(&info, .{ .x = -283, .y = 0 }));
+    inline for (.{ 0x1, 0x8000, 0x10000 }) |state| {
+        info.rgstate[5] = state;
+        try testing.expectEqual(null, nativeCaptionHit(&info, .{ .x = -1, .y = 0 }));
+    }
+    info.rgstate[5] = 0x8; // Pressed buttons must still hit.
+    try testing.expectEqual(winapi.HTCLOSE, nativeCaptionHit(&info, .{ .x = -1, .y = 0 }).?);
 }

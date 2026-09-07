@@ -44,6 +44,13 @@ pub const POINT = extern struct {
     y: i32,
 };
 
+pub const TITLEBARINFOEX = extern struct {
+    cbSize: DWORD = @sizeOf(TITLEBARINFOEX),
+    rcTitleBar: RECT = std.mem.zeroes(RECT),
+    rgstate: [6]DWORD = @splat(0),
+    rgrect: [6]RECT = @splat(std.mem.zeroes(RECT)),
+};
+
 pub const HGLRC = *opaque {};
 
 pub const WNDPROC = *const fn (
@@ -844,12 +851,15 @@ pub extern "gdi32" fn SwapBuffers(HDC) callconv(.winapi) BOOL;
 // Custom frame
 pub const WM_NCCALCSIZE: UINT = 0x0083;
 pub const WM_NCHITTEST: UINT = 0x0084;
+pub const WM_GETTITLEBARINFOEX: UINT = 0x033F;
 
 // Hit test results
 pub const HTCLIENT: LRESULT = 1;
 pub const HTCAPTION: LRESULT = 2;
+pub const HTMINBUTTON: LRESULT = 8;
 pub const HTMAXBUTTON: LRESULT = 9;
 pub const HTTOP: LRESULT = 12;
+pub const HTCLOSE: LRESULT = 20;
 
 pub const WM_NCMOUSEMOVE: UINT = 0x00A0;
 pub const WM_NCLBUTTONDOWN: UINT = 0x00A1;

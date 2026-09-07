@@ -61,6 +61,16 @@ Hidden-window Unicode and color-output smoke runs exited with code 0 using
 vendored ConPTY and OpenGL, including opt-in DXGI flip presentation. These
 are lifecycle checks, not visual or latency measurements.
 
+Manual testing exposed unresponsive native caption buttons when maximized.
+The window returned HTCAPTION across all three buttons when DWM declined
+hit testing. A TITLEBARINFOEX bounds fallback now returns the native button
+codes and leaves native press tracking to Windows. The targeted caption
+test run passed all 75 tests, and the ReleaseFast build passed. Live probes
+at 200% scaling confirmed minimize, maximize, and close hit codes while
+adjacent title-bar space remained draggable. Automated mouse clicks could
+not obtain foreground/pointer control, so visual hover and physical clicks
+still need manual confirmation.
+
 The v0.2.14 release workflow completed successfully. Its published ZIP was
 downloaded, checked against the published SHA-256, and its packaged executable
 passed the version startup smoke check. The upstream integration is not part
