@@ -14,6 +14,15 @@ const log = std.log.scoped(.io_writer);
 /// but I'm open to changing it with good arguments.
 const Queue = BlockingQueue(termio.Message, 64);
 
+test "discarded IO mailbox releases queued write data" {
+    const alloc = std.testing.allocator;
+    var mailbox = try Mailbox.initSPSC(alloc);
+    defer mailbox.deinit(alloc);
+    const data = try alloc.dupe(u8, "a queued write that outlives the writer");
+    const msg: termio.Message = .{ .write_alloc = .{ .alloc = alloc, .data = data } };
+    try std.testing.expectEqual(@as(usize, 1), mailbox.spsc.queue.push(global.io(), msg, .instant));
+}
+
 /// The location to where write-related messages are sent.
 pub const Mailbox = union(enum) {
     // /// Write messages to an unbounded list backed by an allocator.
@@ -47,6 +56,7 @@ pub const Mailbox = union(enum) {
     pub fn deinit(self: *Mailbox, alloc: Allocator) void {
         switch (self.*) {
             .spsc => |*v| {
+                while (v.queue.pop(global.io())) |msg| msg.deinit();
                 v.queue.destroy(alloc);
                 v.wakeup.deinit();
             },
@@ -76,6 +86,7 @@ pub const Mailbox = union(enum) {
                 // lock so we need to unlock.
                 mb.wakeup.notify() catch |err| {
                     log.warn("failed to wake up writer, data will be dropped err={}", .{err});
+                    msg.deinit();
                     return;
                 };
 
@@ -90,7 +101,7 @@ pub const Mailbox = union(enum) {
                 // here.
                 if (mutex) |m| m.unlock(global.io());
                 defer if (mutex) |m| m.lockUncancelable(global.io());
-                _ = mb.queue.push(global.io(), msg, .{ .forever = {} });
+                if (mb.queue.push(global.io(), msg, .{ .forever = {} }) == 0) msg.deinit();
             },
         }
     }
