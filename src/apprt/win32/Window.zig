@@ -1213,26 +1213,11 @@ pub fn layoutActiveTab(self: *Window) void {
             const y: i32 = @intFromFloat(@as(f32, @floatCast(slot.y)) * area_h);
             const w: i32 = @intFromFloat(@as(f32, @floatCast(slot.width)) * area_w);
             const h: i32 = @intFromFloat(@as(f32, @floatCast(slot.height)) * area_h);
-            _ = winapi.SetWindowPos(
-                surface.host,
-                null,
-                x,
-                strip + y,
-                @max(0, w - 2 - sbw),
-                @max(0, h - 2),
-                winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
-            );
+            const host_changed = positionChild(self.hwnd, surface.host, x, strip + y, @max(0, w - 2 - sbw), @max(0, h - 2));
             if (surface.scrollbar) |sb| {
-                _ = winapi.SetWindowPos(
-                    sb.hwnd,
-                    null,
-                    x + @max(0, w - 2 - sbw),
-                    strip + y,
-                    sbw,
-                    @max(0, h - 2),
-                    winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
-                );
+                _ = positionChild(self.hwnd, sb.hwnd, x + @max(0, w - 2 - sbw), strip + y, sbw, @max(0, h - 2));
             }
+            if (!host_changed) continue;
             const size = surface.getSize() catch continue;
             surface.core_surface.sizeCallback(size) catch |err| {
                 log.err("error in size callback err={}", .{err});
@@ -1260,6 +1245,19 @@ fn refreshActiveTab(self: *Window) void {
             log.err("error refreshing surface after resize err={}", .{err});
         };
     }
+}
+
+/// Avoid redundant size/move messages and forced renders for unchanged splits.
+/// Read actual geometry so tab tear-off/reparenting cannot stale a local cache.
+fn positionChild(parent: winapi.HWND, child: winapi.HWND, x: i32, y: i32, width: i32, height: i32) bool {
+    var rect: winapi.RECT = undefined;
+    if (winapi.GetWindowRect(child, &rect) != 0) {
+        var point: winapi.POINT = .{ .x = rect.left, .y = rect.top };
+        if (winapi.ScreenToClient(parent, &point) != 0 and
+            point.x == x and point.y == y and
+            rect.right - rect.left == width and rect.bottom - rect.top == height) return false;
+    }
+    return winapi.SetWindowPos(child, null, x, y, width, height, winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE) != 0;
 }
 
 /// Arm the deferred post-resize repaint. The grid is resized
@@ -2159,10 +2157,12 @@ fn paintTitlebarBuffered(self: *Window, hdc: winapi.HDC) void {
     if (self.strip_buf == null) {
         const dc = winapi.CreateCompatibleDC(null) orelse
             return self.paintTitlebarDirect(hdc); // degraded: direct paint
-        const bmi: winapi.BITMAPINFO = .{ .bmiHeader = .{
-            .biWidth = w,
-            .biHeight = -h, // top-down, so bits[0] is row 0
-        } };
+        const bmi: winapi.BITMAPINFO = .{
+            .bmiHeader = .{
+                .biWidth = w,
+                .biHeight = -h, // top-down, so bits[0] is row 0
+            },
+        };
         var bits: ?[*]u8 = null;
         const bmp = winapi.CreateDIBSection(
             dc,
@@ -3211,6 +3211,14 @@ pub fn wndProc(
         winapi.WM_SETTINGCHANGE => {
             self.notifyColorScheme();
             return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+        },
+
+        winapi.WM_FONTCHANGE => {
+            const grids = &self.app.core_app.font_grid_set;
+            grids.lock.lockUncancelable(global.io());
+            defer grids.lock.unlock(global.io());
+            if (grids.font_discover) |*discovery| discovery.invalidate();
+            return 0;
         },
 
         // The user changed their accent color: drop the cache and

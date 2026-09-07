@@ -892,21 +892,106 @@ pub const CoreText = struct {
 /// FreeType's family_name field (with a fallback to the SFNT name
 /// table when family_name is missing).
 ///
-/// No external service is used; each discover() call walks the
-/// directories, opening candidate files with FreeType only as needed.
-/// For typical Windows installations (~300 fonts) a name query is in
-/// the tens of milliseconds. A codepoint fallback query may be
-/// noticeably slower because every candidate has to be opened to
-/// probe its CMap.
+/// Directory enumeration observes newly installed files. Shared metadata
+/// avoids reopening known nonmatching candidates, with lazy coverage ranges
+/// for fallback queries. Only matching faces need to be opened again.
 pub const Windows = struct {
     lib: Library,
+    cache_mutex: std.Io.Mutex = .init,
+    cache: std.StringHashMapUnmanaged(CachedFace) = .{},
+    cache_generation: u64 = 0,
+
+    const Range = struct { first: u32, last: u32 };
+    const CachedFace = struct {
+        family: []u8,
+        name: []u8,
+        coverage: ?[]Range,
+
+        fn deinit(self: CachedFace) void {
+            const alloc = std.heap.c_allocator;
+            alloc.free(self.family);
+            alloc.free(self.name);
+            if (self.coverage) |v| alloc.free(v);
+        }
+
+        fn matches(self: CachedFace, desc: Descriptor) ?bool {
+            if (desc.family) |family| {
+                if (!std.ascii.eqlIgnoreCase(self.family, family) and
+                    !std.ascii.eqlIgnoreCase(self.name, family)) return false;
+            }
+            if (desc.codepoint == 0) return true;
+            const coverage = self.coverage orelse return null;
+            for (coverage) |range| {
+                if (desc.codepoint < range.first) return false;
+                if (desc.codepoint <= range.last) return true;
+            }
+            return false;
+        }
+    };
 
     pub fn init(lib: Library) Windows {
         return .{ .lib = lib };
     }
 
     pub fn deinit(self: *Windows) void {
-        _ = self;
+        self.invalidate();
+    }
+
+    /// Metadata is shared across grids, but no live FreeType face is cached.
+    /// WM_FONTCHANGE invalidates it before subsequent discovery requests.
+    pub fn invalidate(self: *Windows) void {
+        self.cache_mutex.lockUncancelable(global.io());
+        defer self.cache_mutex.unlock(global.io());
+        var it = self.cache.iterator();
+        while (it.next()) |entry| {
+            std.heap.c_allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit();
+        }
+        self.cache.deinit(std.heap.c_allocator);
+        self.cache = .{};
+        self.cache_generation +%= 1;
+    }
+
+    fn cachedMatch(self: *Windows, key: []const u8, desc: Descriptor) struct { matches: ?bool, generation: u64 } {
+        self.cache_mutex.lockUncancelable(global.io());
+        defer self.cache_mutex.unlock(global.io());
+        return .{ .matches = if (self.cache.get(key)) |entry| entry.matches(desc) else null, .generation = self.cache_generation };
+    }
+
+    fn cacheFace(self: *Windows, key: []const u8, face: *Face, coverage_needed: bool, generation: u64) !void {
+        const alloc = std.heap.c_allocator;
+        const ft_family: ?[*:0]const u8 = face.face.handle.*.family_name;
+        const family = try alloc.dupe(u8, if (ft_family) |v| std.mem.span(v) else "");
+        errdefer alloc.free(family);
+        var name_buf: [256]u8 = undefined;
+        const name = try alloc.dupe(u8, face.name(&name_buf) catch "");
+        errdefer alloc.free(name);
+        var ranges: std.ArrayList(Range) = .empty;
+        defer ranges.deinit(alloc);
+        if (coverage_needed) {
+            const ft = @import("freetype").c;
+            var glyph: ft.FT_UInt = 0;
+            var cp = ft.FT_Get_First_Char(face.face.handle, &glyph);
+            while (glyph != 0) : (cp = ft.FT_Get_Next_Char(face.face.handle, cp, &glyph)) {
+                if (cp > 0x10FFFF) break;
+                if (ranges.items.len > 0 and ranges.items[ranges.items.len - 1].last + 1 == cp) {
+                    ranges.items[ranges.items.len - 1].last = @intCast(cp);
+                } else try ranges.append(alloc, .{ .first = @intCast(cp), .last = @intCast(cp) });
+            }
+        }
+        const coverage = if (coverage_needed) try ranges.toOwnedSlice(alloc) else null;
+        errdefer if (coverage) |v| alloc.free(v);
+        const owned_key = try alloc.dupe(u8, key);
+        errdefer alloc.free(owned_key);
+        self.cache_mutex.lockUncancelable(global.io());
+        defer self.cache_mutex.unlock(global.io());
+        if (generation != self.cache_generation) return error.StaleFontCache;
+        const entry = try self.cache.getOrPut(alloc, owned_key);
+        if (entry.found_existing) {
+            alloc.free(owned_key);
+            entry.value_ptr.deinit();
+        }
+        entry.value_ptr.* = .{ .family = family, .name = name, .coverage = coverage };
     }
 
     pub fn discover(
@@ -917,6 +1002,7 @@ pub const Windows = struct {
         return .{
             .alloc = alloc,
             .lib = self.lib,
+            .discovery = @constCast(self),
             .desc = desc,
             .variations = desc.variations,
             .state = .system,
@@ -940,6 +1026,7 @@ pub const Windows = struct {
     pub const DiscoverIterator = struct {
         alloc: Allocator,
         lib: Library,
+        discovery: *Windows,
         desc: Descriptor,
         variations: []const Variation,
         state: State,
@@ -1073,12 +1160,19 @@ pub const Windows = struct {
             // Probe each face in the file.
             var face_index: i32 = 0;
             while (face_index < max_faces) : (face_index += 1) {
+                var key_buf: [std.fs.max_path_bytes + 24]u8 = undefined;
+                const key = try std.fmt.bufPrint(&key_buf, "{s}#{d}", .{ full_path, face_index });
+                const lookup = self.discovery.cachedMatch(key, self.desc);
+                const cached = lookup.matches;
+                if (cached == false) continue;
                 var face = Face.initFile(
                     self.lib,
                     full_path,
                     face_index,
                     .{ .size = .{ .points = 12 } },
                 ) catch break;
+
+                if (cached == null) self.discovery.cacheFace(key, &face, self.desc.codepoint != 0, lookup.generation) catch {};
 
                 if (self.matches(&face)) {
                     return try self.makeDeferred(face, full_path, face_index);
@@ -1151,6 +1245,26 @@ test "descriptor hash" {
 
     var d: Descriptor = .{};
     try testing.expect(d.hashcode() != 0);
+}
+
+test "windows cached font coverage respects gaps and family aliases" {
+    const testing = std.testing;
+    const entry: Windows.CachedFace = .{
+        .family = @constCast("Example Sans"),
+        .name = @constCast("Example Regular"),
+        .coverage = @constCast(&[_]Windows.Range{
+            .{ .first = 32, .last = 126 },
+            .{ .first = 0x400, .last = 0x4FF },
+        }),
+    };
+    try testing.expectEqual(@as(?bool, true), entry.matches(.{ .family = "example sans", .codepoint = 126 }));
+    try testing.expectEqual(@as(?bool, true), entry.matches(.{ .family = "Example Regular", .codepoint = 0x400 }));
+    try testing.expectEqual(@as(?bool, false), entry.matches(.{ .codepoint = 127 }));
+    try testing.expectEqual(@as(?bool, false), entry.matches(.{ .codepoint = 0x500 }));
+    try testing.expectEqual(@as(?bool, false), entry.matches(.{ .family = "Other" }));
+    var uncached = entry;
+    uncached.coverage = null;
+    try testing.expect(uncached.matches(.{ .codepoint = 65 }) == null);
 }
 
 test "descriptor hash family names" {
