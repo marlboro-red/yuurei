@@ -141,7 +141,8 @@ pub fn restore(app: *App) ?*Surface {
 
     var result: ?*Surface = null;
     var window: ?*Window = null;
-    const profile_list = app.ensureProfiles();
+    _ = app.ensureProfiles();
+    const profile_list = &app.profiles_list.?;
 
     while (lines.next()) |line_raw| {
         const line = std.mem.trimEnd(u8, line_raw, "\r");
@@ -163,7 +164,7 @@ pub fn restore(app: *App) ?*Surface {
 
             _ = win.newTabWithOpts(.{
                 .profile = if (profile_name.len > 0)
-                    profile_list.byName(profile_name)
+                    profile_list.bySavedName(profile_name)
                 else
                     null,
                 .cwd = if (cwd.len > 0) cwd else null,

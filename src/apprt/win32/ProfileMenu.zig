@@ -152,6 +152,11 @@ fn contentHeight(self: *const ProfileMenu) i32 {
     return h;
 }
 
+pub fn profilesChanged(self: *ProfileMenu) void {
+    _ = winapi.SetWindowPos(self.hwnd, null, 0, 0, self.window.scale(width_logical), self.contentHeight(), winapi.SWP_NOMOVE | winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE);
+    _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+}
+
 /// Top y of a row in client coordinates.
 fn rowTop(self: *const ProfileMenu, row: usize) i32 {
     const window = self.window;

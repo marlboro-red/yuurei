@@ -50,13 +50,51 @@ pub const List = struct {
         }
         return null;
     }
+
+    /// Append without moving existing indices or invalidating their strings.
+    pub fn append(self: *List, profile: Profile) !void {
+        if (self.byName(profile.name) != null) return;
+        const alloc = self.arena.allocator();
+        const items = try alloc.alloc(Profile, self.items.len + 1);
+        @memcpy(items[0..self.items.len], self.items);
+        const name = try alloc.dupeZ(u8, profile.name);
+        const hint = try alloc.dupeZ(u8, profile.hint);
+        const source: Source = switch (profile.source) {
+            .builtin => |v| .{ .builtin = try alloc.dupeZ(u8, v) },
+            .file => |v| .{ .file = try alloc.dupeZ(u8, v) },
+        };
+        items[self.items.len] = .{ .name = name, .hint = hint, .source = source };
+        self.items = items;
+    }
+
+    /// A saved WSL profile already identifies its distro; restoring it need
+    /// not wait for enumeration. User overlay profiles still take precedence.
+    pub fn bySavedName(self: *List, name: []const u8) ?*const Profile {
+        if (self.byName(name)) |p| return p;
+        const prefix = "WSL: ";
+        if (!std.mem.startsWith(u8, name, prefix)) return null;
+        const distro = name[prefix.len..];
+        if (distro.len == 0 or std.mem.indexOfAny(u8, distro, "\"\r\n") != null) return null;
+        const alloc = self.arena.allocator();
+        const command = std.fmt.allocPrintSentinel(alloc, "wsl.exe -d \"{s}\"", .{distro}, 0) catch return null;
+        const name_z = alloc.dupeZ(u8, name) catch return null;
+        self.append(.{ .name = name_z, .hint = command, .source = .{ .builtin = command } }) catch return null;
+        return self.byName(name);
+    }
 };
 
 /// Discover all profiles. Never fails: on any error the affected
-/// source is simply absent. The WSL probe spawns `wsl.exe -l -q`
-/// (windowless, bounded wait), so call this lazily (first menu open)
-/// rather than at startup, and cache the result.
+/// source is simply absent. This blocking convenience API must not run on
+/// the UI thread: the app uses scanLocal plus a scanWsl worker instead.
 pub fn scan(gpa: std.mem.Allocator) List {
+    var result = scanLocal(gpa);
+    var wsl = scanWsl(gpa);
+    defer wsl.deinit();
+    for (wsl.items) |p| result.append(p) catch {};
+    return result;
+}
+
+pub fn scanLocal(gpa: std.mem.Allocator) List {
     var arena = std.heap.ArenaAllocator.init(gpa);
     const alloc = arena.allocator();
 
@@ -67,13 +105,36 @@ pub fn scan(gpa: std.mem.Allocator) List {
     const detected_start = items.items.len;
 
     detectShells(alloc, &items);
-    detectWsl(alloc, &items);
 
     return .{
         .arena = arena,
         .items = items.toOwnedSlice(alloc) catch &.{},
         .detected_start = detected_start,
     };
+}
+
+/// Run only on a worker: WSL may take seconds to respond.
+pub fn scanWsl(gpa: std.mem.Allocator) List {
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    var items: std.ArrayList(Profile) = .empty;
+    detectWsl(arena.allocator(), &items);
+    const owned = items.toOwnedSlice(arena.allocator()) catch &.{};
+    return .{ .arena = arena, .items = owned };
+}
+
+test "saved WSL profiles preserve overlay precedence and indices" {
+    const testing = std.testing;
+    var list: List = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer list.deinit();
+    try list.append(.{ .name = "WSL: custom", .hint = "overlay", .source = .{ .file = "custom.conf" } });
+    const original = list.bySavedName("WSL: custom").?;
+    try testing.expect(original.source == .file);
+    const saved = list.bySavedName("WSL: Ubuntu").?;
+    try testing.expectEqualStrings("wsl.exe -d \"Ubuntu\"", saved.source.builtin);
+    try testing.expectEqualStrings("WSL: custom", list.items[0].name);
+    try testing.expectEqualStrings("overlay", original.hint);
+    try testing.expect(list.bySavedName("WSL: ") == null);
+    try testing.expect(list.bySavedName("WSL: bad\"name") == null);
 }
 
 fn nameLessThan(_: void, a: Profile, b: Profile) bool {

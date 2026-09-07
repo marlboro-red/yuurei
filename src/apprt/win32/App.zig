@@ -82,10 +82,12 @@ flip_capable: bool = false,
 /// app-wide, not per-window, to avoid unbalanced hide/show calls.
 cursor_hidden: bool = false,
 
-/// Discovered shell profiles (profiles.zig), scanned lazily on first
-/// dropdown open (the WSL probe spawns a process) and invalidated on
-/// config reload so new overlay files appear without a restart.
+/// Local profiles are scanned on demand. WSL enumeration runs on a worker;
+/// its result is read only after acquire/join and appended on the UI thread.
 profiles_list: ?profiles.List = null,
+wsl_thread: ?std.Thread = null,
+wsl_ready: std.atomic.Value(bool) = .init(false),
+wsl_result: ?profiles.List = null,
 
 /// Deadline (std.time.milliTimestamp) for quitting after the last
 /// window closed, when quit-after-last-window-closed-delay is set.
@@ -362,6 +364,7 @@ pub fn init(
         .prewarm_font = prewarm_font,
     };
     handoff_app = self;
+    self.startWslScan();
 
     // `self` is stable from here (there is one App per process, in
     // caller-owned memory), so the prewarm thread can hold it.
@@ -540,6 +543,8 @@ fn prewarmThreadMain(self: *App) void {
 }
 
 pub fn terminate(self: *App) void {
+    if (self.wsl_thread) |t| t.join();
+    if (self.wsl_result) |*l| l.deinit();
     // Prewarm teardown before anything it touches: join the thread,
     // then release the font-grid ref it may hold. (The grid set lives
     // on the core app and its deref takes the set's own lock, so this
@@ -636,9 +641,45 @@ fn receiveHandoff(self: *App, h: defterm.Handoff) !void {
 
 /// The profile list, scanned on first use. See profiles.zig.
 pub fn ensureProfiles(self: *App) *const profiles.List {
-    if (self.profiles_list == null)
-        self.profiles_list = profiles.scan(self.core_app.alloc);
+    if (self.profiles_list == null) {
+        self.profiles_list = profiles.scanLocal(self.core_app.alloc);
+        if (self.wsl_thread == null) {
+            if (self.wsl_result) |result| {
+                for (result.items) |p| self.profiles_list.?.append(p) catch {};
+            }
+        }
+    }
     return &self.profiles_list.?;
+}
+
+fn startWslScan(self: *App) void {
+    if (self.wsl_thread != null) return;
+    if (self.wsl_result) |*l| l.deinit();
+    self.wsl_result = null;
+    self.wsl_ready.store(false, .release);
+    self.wsl_thread = std.Thread.spawn(.{}, wslScanMain, .{self}) catch null;
+}
+
+fn wslScanMain(self: *App) void {
+    self.wsl_result = profiles.scanWsl(self.core_app.alloc);
+    self.wsl_ready.store(true, .release);
+    self.wakeup();
+}
+
+fn pollWslScan(self: *App) void {
+    if (!self.wsl_ready.load(.acquire)) return;
+    self.wsl_ready.store(false, .release);
+    if (self.wsl_thread) |t| t.join();
+    self.wsl_thread = null;
+    if (self.profiles_list) |*list| {
+        if (self.wsl_result) |result| {
+            for (result.items) |p| list.append(p) catch {};
+        }
+        for (self.windows.items) |window| {
+            if (window.profile_menu) |menu| menu.profilesChanged();
+            if (window.palette) |palette| palette.profilesChanged();
+        }
+    }
 }
 
 /// Build the effective configuration for a spawn override (profile
@@ -836,8 +877,10 @@ pub fn run(self: *App) !void {
         }
 
         // Drain whatever else is queued before ticking so one tick
-        // covers a burst of input.
-        while (winapi.PeekMessageW(&msg, null, 0, 0, winapi.PM_REMOVE) != 0) {
+        // covers a burst of input. Bound the batch so sustained messages
+        // cannot starve core mailboxes, handoffs, or deferred teardown.
+        var drained: usize = 0;
+        while (drained < 256 and winapi.PeekMessageW(&msg, null, 0, 0, winapi.PM_REMOVE) != 0) : (drained += 1) {
             if (msg.message == winapi.WM_QUIT) {
                 self.quit = true;
                 continue;
@@ -853,6 +896,7 @@ pub fn run(self: *App) !void {
         // Build windows for any handoffs the COM server queued. Done
         // here (not inline in EstablishPtyHandoff) so that call returns
         // to conhost immediately; see App.pending_handoffs.
+        self.pollWslScan();
         self.drainHandoffs();
 
         self.drainUrls();
@@ -1707,6 +1751,7 @@ fn reloadConfig(
         l.deinit();
         self.profiles_list = null;
     }
+    self.startWslScan();
 
     // Window-level transparency/blur are applied by the apprt (not the
     // renderer), so re-apply them here for background-opacity /

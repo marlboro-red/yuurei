@@ -244,6 +244,22 @@ fn scoreLessThan(_: void, a: Scored, b: Scored) bool {
     return a.i < b.i;
 }
 
+pub fn profilesChanged(self: *CommandPalette) void {
+    const selected_entry: ?usize = if (self.selected < self.matches.items.len)
+        self.matches.items[self.selected]
+    else
+        null;
+    self.refilter();
+    if (selected_entry) |entry| {
+        for (self.matches.items, 0..) |candidate, i| {
+            if (candidate != entry) continue;
+            self.selected = i;
+            self.scroll = i -| (self.visibleRows() -| 1);
+            break;
+        }
+    }
+}
+
 fn refilter(self: *CommandPalette) void {
     const alloc = self.window.app.core_app.alloc;
     self.matches.clearRetainingCapacity();
