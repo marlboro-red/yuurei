@@ -83,9 +83,10 @@ the updated hover behavior remains a manual check.
 The v0.2.14 release workflow completed successfully. Its published ZIP was
 downloaded, checked against the published SHA-256, and its packaged executable
 passed the version startup smoke check. The upstream integration is not part
-of that release and remains local, unmerged into main.
+of that release. It was subsequently fast-forwarded into main for v0.2.15,
+along with the caption-button click and hover fixes described above.
 
-Before merging to main, manually exercise PowerShell, cmd, Git Bash and WSL;
+Additional manual coverage remains desirable for PowerShell, cmd, Git Bash and WSL;
 tabs/splits and session restoration; clipboard allow/deny flows; resize and
 mixed-DPI movement; IME; and animated Kitty images/custom shaders across
 hide/show transitions. Test both presentation modes on representative GPUs.

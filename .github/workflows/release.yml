@@ -47,6 +47,9 @@ jobs:
       - name: Unit tests
         run: zig build -Dapp-runtime=none test
 
+      - name: Native caption regression tests
+        run: zig build test -Dapp-runtime=win32 "-Dtest-filter=native caption"
+
       - name: Assemble package
         shell: pwsh
         run: |
