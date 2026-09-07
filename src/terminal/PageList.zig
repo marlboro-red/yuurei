@@ -4015,6 +4015,12 @@ const IncrementalCompressionState = struct {
     /// node at or above this value before the saved marker requires a restart.
     next_serial: u64 = 0,
 
+    /// Fast continuation while the list is unchanged. Never dereference this
+    /// after activity or allocation changes; destruction also clears it before
+    /// releasing node storage. The serial-based path remains the fallback.
+    next_node: ?*List.Node = null,
+    next_activity: u48 = 0,
+
     /// Record activity without disturbing valid traversal progress.
     fn markActivity(self: *IncrementalCompressionState) void {
         self.activity_serial +%= 1;
@@ -4166,7 +4172,12 @@ fn compressIncremental(self: *PageList) IncrementalCompressionResult {
     // prefix. A missing marker means the list changed between steps, so begin
     // again at the current first page. This lookup does not touch page memory.
     var it: CompressionIterator = .init(self);
-    if (state.last_serial) |last_serial| continuation: {
+    if (state.next_node != null and
+        state.next_activity == state.activity_serial and
+        state.next_serial == self.page_serial)
+    {
+        it.current = state.next_node.?;
+    } else if (state.last_serial) |last_serial| continuation: {
         while (it.next()) |node| {
             // A newly allocated or replacement node appeared before the
             // marker. Restart immediately so that node cannot be skipped.
@@ -4206,7 +4217,11 @@ fn compressIncremental(self: *PageList) IncrementalCompressionResult {
     }
 
     // If we didn't reach our active node, then we still have work to do.
-    if (!it.done()) return .pending;
+    if (!it.done()) {
+        state.next_node = it.current;
+        state.next_activity = state.activity_serial;
+        return .pending;
+    }
 
     // We reached our active node. So we're done, except that we always
     // do one pass after the first success so we can recompress nodes that
@@ -4326,6 +4341,9 @@ fn compressPage(self: *PageList, node: *List.Node) bool {
 /// responsible for accounting for the removed rows. This function only
 /// updates `page_size` (byte accounting), not row accounting.
 fn destroyNode(self: *PageList, node: *List.Node) void {
+    // Invalidates even when a different node is removed: eligibility and the
+    // path to our continuation may have changed along with the list topology.
+    self.page_compression.next_node = null;
     destroyNodeExt(&self.pool, node, &self.page_size);
 }
 
@@ -7045,6 +7063,23 @@ test "PageList incremental compression advances after failure" {
     const continued = s.compress(.incremental);
     try testing.expectEqual(IncrementalCompressionResult.pending, continued);
     try testing.expect(second.isCompressed());
+}
+
+test "PageList incremental compression invalidates cached successor on replacement" {
+    const testing = std.testing;
+    var s = try init(testing.allocator, 80, 24, null);
+    defer s.deinit();
+    try s.growColdPagesForTest(3);
+
+    _ = s.compress(.incremental);
+    const successor = s.pages.first.?.next.?;
+    try testing.expectEqual(successor, s.page_compression.next_node.?);
+    const replacement = try s.increaseCapacity(successor, null);
+    try testing.expect(s.page_compression.next_node == null);
+    _ = s.compress(.incremental);
+    try testing.expect(replacement.isCompressed());
+    _ = s.compress(.drain);
+    try testing.expect(s.page_compression.next_node == null);
 }
 
 test "PageList incremental compression advances after allocation failure" {
