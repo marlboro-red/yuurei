@@ -43,6 +43,10 @@ pub const Options = struct {
     /// use stdin by default but I find that a hanging CLI command
     /// with no interaction is a bit annoying.
     data: ?[]const u8 = null,
+
+    /// Match platform read sizes without rebuilding the benchmark. Windows
+    /// currently parses 1 KiB chunks; POSIX gathers up to 64 KiB.
+    @"chunk-size": usize = 64 * 1024,
 };
 
 /// Create a new terminal stream handler for the given arguments.
@@ -119,12 +123,11 @@ fn step(ptr: *anyopaque) Benchmark.Error!void {
     var f_reader = f.reader(global.io(), &.{});
     const r = &f_reader.interface;
 
-    // This buffer size matches the read buffer size used by the
-    // real IO thread (see termio Exec.zig buffer_capacity) so that
-    // the benchmark exercises the stream with realistic chunk sizes.
+    if (self.opts.@"chunk-size" == 0 or self.opts.@"chunk-size" > 64 * 1024)
+        return error.BenchmarkFailed;
     var buf: [64 * 1024]u8 = undefined;
     while (true) {
-        const n = r.readSliceShort(&buf) catch {
+        const n = r.readSliceShort(buf[0..self.opts.@"chunk-size"]) catch {
             log.warn("error reading data file err={?}", .{f_reader.err});
             return error.BenchmarkFailed;
         };

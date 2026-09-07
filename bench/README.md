@@ -24,7 +24,8 @@ introduce and hard to feel reliably by hand.
   `a` via `keybd_event` (real input; conhost accepts posted messages but
   Windows Terminal and yuurei need real input + foreground), polls the region
   until any pixel differs, records the delta, backspaces, repeats. Reports
-  `n`, `skipped`, `median`, and the sorted samples.
+  successful samples, focus skips, timeouts, median, p95, and p99. `-Json`
+  preserves the unrounded samples in collection order.
 
 ## Usage
 
@@ -40,7 +41,7 @@ powershell -NoProfile -File bench\bench-shot.ps1 -Hwnd <HWND> -Out shot.png
 # 3. Measure.
 powershell -NoProfile -File bench\photon-bench.ps1 `
   -Hwnd <HWND> -RegionX 390 -RegionY 300 -RegionW 400 -RegionH 50 `
-  -Samples 15 -Label "yuurei"
+  -Samples 100 -Label "yuurei"
 ```
 
 ### Avoiding a phase-locking artifact
@@ -60,7 +61,46 @@ correctly wake-driven terminal returns the same median at both.
 | yuurei (after fix)    | ~17 ms               |
 | yuurei (before fix)   | ~433 ms              |
 
-~16–17 ms is the one-vblank compositor floor at 60 Hz; both terminals hit
-it, so they are at parity. There is no more latency to extract on this
-display without GPU-bypass tricks that camera studies show make typing
-*worse*, not better.
+These are historical software-capture measurements, not a physical scanout
+measurement or proof of a latency floor. Compare latency distributions under
+the same capture, display, focus, and workload conditions.
+
+The harness adds deterministic settle jitter (`-JitterMs`, default 100) to
+avoid repeatedly sampling one timer phase. Capture a tight echo region and
+exclude a blinking cursor or animation with `-IgnoreX/-IgnoreY/-IgnoreW/-IgnoreH`
+(coordinates relative to the region). `-MinChangedPixels` rejects small pixel
+changes. These controls do not automatically distinguish echoed text from all
+unrelated screen changes; choose the region carefully. Run the comparator's
+noninteractive checks with `powershell -NoProfile -File bench/test-photon.ps1`.
+
+## Reproducible throughput comparisons
+
+Build both revisions using Zig 0.16 and `-Doptimize=ReleaseFast -Demit-bench`.
+Keep the correct Zig directory first on PATH as build helpers also use it.
+Use PowerShell 7 for the throughput runner (including its UTF-8 Unicode
+corpus). Generate corpora once outside the repository, before timing:
+
+```powershell
+./bench/performance.ps1 -Generate -DataDirectory "$env:TEMP/yuurei-corpora"
+./bench/performance.ps1 -DataDirectory "$env:TEMP/yuurei-corpora" `
+  -Baseline C:/baseline/ghostty-bench.exe -Candidate ./zig-out/bin/ghostty-bench.exe `
+  -OutputJson "$env:TEMP/yuurei-comparison.json"
+./bench/performance.ps1 -DataDirectory "$env:TEMP/yuurei-corpora" `
+  -Candidate ./zig-out/bin/ghostty-bench.exe -ChunkSizes
+```
+
+The runner alternates binary order, uses two warmups and nine measurements,
+and records corpus hashes and raw wall-time samples. Do not run benchmarks
+alongside builds or other benchmarks. Full-process times include startup and
+file I/O; the compression `noop` case provides a setup comparison. Run
+`+scrollback-compression --mode=report --data=<corpus>` before interpreting
+compression timings: runtime compression currently reports zero compressed
+pages on Windows because retained-mapping reclamation is unsupported there.
+
+`+terminal-stream --chunk-size=1024` matches the Windows read-buffer ceiling;
+the default is 65536. Differences include file-read overhead, so they do not
+by themselves establish an end-to-end ConPTY batching benefit.
+
+With `GHOSTTY_PERF_TRACE=1`, native I/O logs separate parsing from mutex wait
+time. Shaping logs report cache hits, misses, and evictions; DXGI logs report
+frame-wait failures and timeouts. Keep tracing off for ordinary timing runs.
