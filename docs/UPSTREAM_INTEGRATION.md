@@ -71,6 +71,15 @@ adjacent title-bar space remained draggable. Automated mouse clicks could
 not obtain foreground/pointer control, so visual hover and physical clicks
 still need manual confirmation.
 
+Follow-up manual testing confirmed caption clicks work, but hover highlights
+were still missing. The strip now owns the hovered caption plate and glyph
+at the native button bounds, including explicit opaque alpha over Mica.
+Non-client leave tracking, resize, and focus loss clear the highlight;
+DWM handling no longer bypasses this hover bookkeeping. Native click and
+snap-layout handling remain intact. The 77-test targeted caption run covers
+hit codes, bounds, and caption-zone alpha clipping. Visual confirmation of
+the updated hover behavior remains a manual check.
+
 The v0.2.14 release workflow completed successfully. Its published ZIP was
 downloaded, checked against the published SHA-256, and its packaged executable
 passed the version startup smoke check. The upstream integration is not part

@@ -648,6 +648,7 @@ pub const TRACKMOUSEEVENT = extern struct {
     dwHoverTime: DWORD = 0,
 };
 pub const TME_LEAVE: DWORD = 0x02;
+pub const TME_NONCLIENT: DWORD = 0x10;
 pub extern "user32" fn TrackMouseEvent(*TRACKMOUSEEVENT) callconv(.winapi) BOOL;
 
 // Tooltips (comctl32)

@@ -1824,6 +1824,26 @@ fn captionButtonRect(self: *const Window, button: CaptionButton) winapi.RECT {
     };
 }
 
+fn nativeCaptionButtonRect(self: *const Window, button: CaptionButton) ?winapi.RECT {
+    var info: winapi.TITLEBARINFOEX = .{};
+    _ = winapi.SendMessageW(self.hwnd, winapi.WM_GETTITLEBARINFOEX, 0, @intCast(@intFromPtr(&info)));
+    const index: usize = switch (button) {
+        .minimize => 2,
+        .maximize => 3,
+        .close => 5,
+    };
+    const rect = info.rgrect[index];
+    if (rect.right <= rect.left or rect.bottom <= rect.top) return null;
+    var origin: winapi.POINT = .{ .x = rect.left, .y = rect.top };
+    if (winapi.ScreenToClient(self.hwnd, &origin) == 0) return null;
+    return .{
+        .left = origin.x,
+        .top = origin.y,
+        .right = origin.x + rect.right - rect.left,
+        .bottom = origin.y + rect.bottom - rect.top,
+    };
+}
+
 /// Width of one tab, shrinking when they no longer fit. Below a floor
 /// the tabs stop shrinking and the strip scrolls instead (tabScroll).
 fn tabWidth(self: *const Window) i32 {
@@ -2204,6 +2224,10 @@ fn paintTitlebarBuffered(self: *Window, hdc: winapi.HDC) void {
 /// ALL GDI drawing inside it — text drawn later would re-zero glyph
 /// pixels. No-op when Mica is off (alpha is ignored then).
 fn markOpaque(self: *Window, rect: winapi.RECT) void {
+    self.markOpaqueTo(rect, self.tabsRegionRight());
+}
+
+fn markOpaqueTo(self: *Window, rect: winapi.RECT, clip_right: i32) void {
     if (!self.mica) return;
     const buf = &(self.strip_buf orelse return);
     // Honor the same right-edge clip GDI painting uses (line ~2274): an
@@ -2211,7 +2235,7 @@ fn markOpaque(self: *Window, rect: winapi.RECT) void {
     // clipped away by GDI, but these raw-pixel writes bypass the DC clip
     // and would stamp opaque alpha into the DWM caption-button zone.
     const x0 = @max(rect.left, 0);
-    const x1 = @min(rect.right, @min(buf.w, self.tabsRegionRight()));
+    const x1 = @min(rect.right, @min(buf.w, clip_right));
     const y0 = @max(rect.top, 0);
     const y1 = @min(rect.bottom, buf.h);
     var y = y0;
@@ -2617,19 +2641,24 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
     // Drop the tab clip before the caption buttons.
     if (clip_saved != 0) _ = winapi.RestoreDC(hdc, clip_saved);
 
-    // Caption buttons (DWM draws the native ones under Mica)
-    if (!self.mica) if (glyph_font) |f| {
+    // DWM draws idle native buttons. Own the hot plate and glyph so
+    // hover stays visible on custom frames, using native button bounds.
+    if (glyph_font) |f| {
         const old = winapi.SelectObject(hdc, f);
         defer if (old) |o| {
             _ = winapi.SelectObject(hdc, o);
         };
 
-        inline for (.{ .minimize, .maximize, .close }) |button| {
-            var rect = self.captionButtonRect(button);
+        for ([_]CaptionButton{ .minimize, .maximize, .close }) |button| {
             const hovered = switch (self.hover) {
                 .caption => |h| h == @as(CaptionButton, button),
                 else => false,
             };
+            if (self.mica and !hovered) continue;
+            var rect = if (self.mica)
+                self.nativeCaptionButtonRect(button) orelse continue
+            else
+                self.captionButtonRect(button);
 
             if (hovered) {
                 const hover_bg: u32 = if (button == .close)
@@ -2665,11 +2694,11 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
                 winapi.DT_CENTER | winapi.DT_VCENTER | winapi.DT_SINGLELINE,
             );
             if (hovered)
-                self.markOpaque(rect)
+                self.markOpaqueTo(rect, self.clientWidth())
             else
                 self.glassTextAlpha(rect, fg);
         }
-    };
+    }
 
     self.syncTabTooltips();
 }
@@ -2789,6 +2818,7 @@ pub fn wndProc(
     // their hover states, and shows the snap-layouts flyout. Give it
     // first refusal on the NC messages it cares about; everywhere it
     // declines, our handling below proceeds unchanged.
+    var dwm_mouse_result: ?winapi.LRESULT = null;
     if (self.mica) switch (msg) {
         winapi.WM_NCHITTEST,
         winapi.WM_NCMOUSEMOVE,
@@ -2797,8 +2827,14 @@ pub fn wndProc(
         winapi.WM_NCLBUTTONUP,
         => {
             var result: winapi.LRESULT = 0;
-            if (winapi.DwmDefWindowProc(hwnd, msg, wparam, lparam, &result) != 0)
-                return result;
+            if (winapi.DwmDefWindowProc(hwnd, msg, wparam, lparam, &result) != 0) {
+                // A handled mouse message doesn't guarantee a visible
+                // native highlight on custom frames. Still update our
+                // hover plate, but preserve DWM's result below.
+                if (msg == winapi.WM_NCMOUSEMOVE or msg == winapi.WM_NCMOUSELEAVE) {
+                    dwm_mouse_result = result;
+                } else return result;
+            }
         },
         else => {},
     };
@@ -2910,7 +2946,9 @@ pub fn wndProc(
                 .y = lparamY(lparam),
             };
             _ = winapi.ScreenToClient(hwnd, &pt);
-            const hover: Hover = if (pt.y >= 0 and pt.y < self.titlebarHeight())
+            const hover: Hover = if (self.mica and !self.fullscreen and nativeCaptionButton(wparam) != null)
+                .{ .caption = nativeCaptionButton(wparam).? }
+            else if (pt.y >= 0 and pt.y < self.titlebarHeight())
                 self.hitTestStrip(pt.x, pt.y)
             else
                 .none;
@@ -2918,7 +2956,12 @@ pub fn wndProc(
                 self.hover = hover;
                 self.invalidateStrip();
             }
-            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+            var tracking: winapi.TRACKMOUSEEVENT = .{
+                .hwndTrack = hwnd,
+                .dwFlags = winapi.TME_LEAVE | winapi.TME_NONCLIENT,
+            };
+            _ = winapi.TrackMouseEvent(&tracking);
+            return dwm_mouse_result orelse winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
 
         winapi.WM_NCMOUSELEAVE => {
@@ -2926,7 +2969,7 @@ pub fn wndProc(
                 self.hover = .none;
                 self.invalidateStrip();
             }
-            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+            return dwm_mouse_result orelse winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
 
         winapi.WM_NCLBUTTONDOWN => {
@@ -2993,6 +3036,7 @@ pub fn wndProc(
         },
 
         winapi.WM_SIZE => {
+            self.hover = .none;
             // Minimize fully occludes every surface: tell the
             // renderers so they stop rebuilding cells and drawing
             // until restore. (wparam: 1 = minimized.)
@@ -3127,6 +3171,10 @@ pub fn wndProc(
             }
 
             if (msg == winapi.WM_KILLFOCUS) {
+                if (!std.meta.eql(self.hover, Hover.none)) {
+                    self.hover = .none;
+                    self.invalidateStrip();
+                }
                 // Drop any half-finished key state: its completing event
                 // goes to the window that now has focus, so we'd otherwise
                 // keep it forever. altgr_down is the important one — AltGr
@@ -4087,6 +4135,54 @@ fn vkToKey(vk: u8, lparam: winapi.LPARAM) input.Key {
         winapi.VK_OEM_102 => .intl_backslash,
         else => .unidentified,
     };
+}
+
+/// Map native non-client mouse hit codes to our caption hover state.
+fn nativeCaptionButton(hit: winapi.WPARAM) ?CaptionButton {
+    return switch (hit) {
+        winapi.HTMINBUTTON => .minimize,
+        winapi.HTMAXBUTTON => .maximize,
+        winapi.HTCLOSE => .close,
+        else => null,
+    };
+}
+
+test "native caption hover hit codes" {
+    try std.testing.expectEqual(CaptionButton.minimize, nativeCaptionButton(winapi.HTMINBUTTON).?);
+    try std.testing.expectEqual(CaptionButton.maximize, nativeCaptionButton(winapi.HTMAXBUTTON).?);
+    try std.testing.expectEqual(CaptionButton.close, nativeCaptionButton(winapi.HTCLOSE).?);
+    try std.testing.expectEqual(null, nativeCaptionButton(winapi.HTCAPTION));
+    try std.testing.expectEqual(null, nativeCaptionButton(winapi.HTCLIENT));
+    try std.testing.expectEqual(null, nativeCaptionButton(winapi.HTTOP));
+}
+
+test "native caption hover alpha reaches caption zone" {
+    var pixels: [4 * 4 * 2]u8 = @splat(0);
+    // Only the fields read by markOpaqueTo are needed; no HWND or GDI
+    // objects are involved in this back-buffer alpha operation.
+    var window: Window = undefined;
+    window.mica = true;
+    window.strip_buf = .{
+        .dc = undefined,
+        .bmp = undefined,
+        .old_bmp = null,
+        .bits = &pixels,
+        .w = 4,
+        .h = 2,
+    };
+    const rect: winapi.RECT = .{ .left = 2, .top = -1, .right = 8, .bottom = 3 };
+    // Tab painting must not touch the caption zone (x >= 2).
+    window.markOpaqueTo(rect, 2);
+    try std.testing.expectEqualSlices(u8, &(@as([pixels.len]u8, @splat(0))), &pixels);
+    // A caption plate opts into the full width, clamped to the bitmap.
+    window.markOpaqueTo(rect, 4);
+    for (0..2) |y| {
+        for (0..4) |x| {
+            const offset = (y * 4 + x) * 4;
+            try std.testing.expectEqual(@as(u8, if (x >= 2) 255 else 0), pixels[offset + 3]);
+            try std.testing.expectEqualSlices(u8, &.{ 0, 0, 0 }, pixels[offset..][0..3]);
+        }
+    }
 }
 
 /// TITLEBARINFOEX button rectangles use physical screen coordinates.
