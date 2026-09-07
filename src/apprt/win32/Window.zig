@@ -518,7 +518,8 @@ pub fn setOccluded(self: *Window, occluded: bool) void {
     const tab = self.activeTab() orelse return;
     var it = tab.tree.iterator();
     while (it.next()) |entry| {
-        entry.view.core_surface.occlusionCallback(!occluded) catch {};
+        const visible = !occluded and (tab.tree.zoomed == null or entry.view == tab.focused);
+        entry.view.core_surface.occlusionCallback(visible) catch {};
     }
 }
 
@@ -1633,6 +1634,9 @@ pub fn applyStartupShow(self: *Window) void {
     else
         winapi.SW_SHOWDEFAULT;
     _ = winapi.ShowWindow(self.hwnd, show);
+    // SW_SHOWDEFAULT can honor a caller's hidden startup request without
+    // producing a visibility transition. Reconcile after ShowWindow returns.
+    self.setOccluded(winapi.IsWindowVisible(self.hwnd) == 0 or self.minimized);
     // Borderless fullscreen at startup (any non-false value).
     if (app.config.fullscreen != .false) self.toggleFullscreen();
 }
@@ -2982,7 +2986,7 @@ pub fn wndProc(
             const minimized = wparam == 1;
             if (minimized != self.minimized) {
                 self.minimized = minimized;
-                self.setOccluded(minimized);
+                self.setOccluded(minimized or winapi.IsWindowVisible(hwnd) == 0);
             }
             if (minimized) return 0;
 
@@ -3000,6 +3004,11 @@ pub fn wndProc(
             _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
             self.scheduleResizeRepaint();
             return 0;
+        },
+
+        winapi.WM_SHOWWINDOW => {
+            self.setOccluded(wparam == 0 or self.minimized);
+            return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
 
         // The search bar is a popup in screen coordinates; keep it

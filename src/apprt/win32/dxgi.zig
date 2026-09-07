@@ -413,6 +413,7 @@ const Interop = struct {
 pub const Presenter = struct {
     wait_timeouts: u64 = 0,
     wait_failures: u64 = 0,
+    hwnd: winapi.HWND,
     device: *ID3D11Device,
     context: *ID3D11DeviceContext,
     swapchain: *IDXGISwapChain1,
@@ -592,6 +593,7 @@ pub const Presenter = struct {
         };
 
         return .{
+            .hwnd = hwnd,
             .device = device.?,
             .context = context.?,
             .swapchain = swapchain.?,
@@ -624,6 +626,9 @@ pub const Presenter = struct {
     /// block) displays stale state (microsoft/terminal#6435). Bounded
     /// so a hung compositor can't wedge the renderer thread.
     pub fn waitFrame(self: *Presenter) void {
+        // The UI's visibility message may still be queued on this thread.
+        // Hidden composition targets need not receive frame-latency signals.
+        if (winapi.IsWindowVisible(self.hwnd) == 0) return;
         if (self.waitable) |w| {
             switch (winapi.WaitForSingleObject(w, 100)) {
                 0 => {}, // WAIT_OBJECT_0

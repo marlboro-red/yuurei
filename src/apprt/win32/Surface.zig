@@ -356,7 +356,8 @@ pub fn setVisible(self: *Self, visible: bool) void {
 
     // Tell the renderer thread: occluded surfaces stop rebuilding
     // cells and drawing entirely (it catches up on re-show).
-    self.core_surface.occlusionCallback(visible) catch {};
+    self.core_surface.occlusionCallback(visible and
+        winapi.IsWindowVisible(self.window.hwnd) != 0 and !self.window.minimized) catch {};
 }
 
 /// Feed core scrollbar state (rows) into our scrollbar.

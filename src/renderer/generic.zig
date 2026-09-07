@@ -153,9 +153,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         /// cells goes into a separate shader.
         cells: cellpkg.Contents,
 
-        /// Set to true after rebuildCells is called. This can be used
-        /// to determine if any possible changes have been made to the
-        /// cells for the draw call.
+        /// Cell, image, or uniform changes require a new draw. Preserve this
+        /// across updates until drawFrame consumes it.
         cells_rebuilt: bool = false,
 
         /// The current GPU uniform values.
@@ -1949,9 +1948,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
 
             // We only actually need the padding from this,
             // everything else is derived elsewhere.
+            const previous_uniforms = self.uniforms;
             self.size.padding = size.padding;
 
             self.updateScreenSizeUniforms();
+            if (!std.meta.eql(previous_uniforms, self.uniforms)) self.cells_rebuilt = true;
 
             log.debug("screen size size={}", .{size});
         }
