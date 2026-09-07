@@ -45,10 +45,37 @@ format: Format = .grayscale,
 /// to observe it.
 modified: std.atomic.Value(usize) = .{ .raw = 0 },
 
-/// This will be incremented every time the atlas is resized. This is useful
-/// for knowing if a GPU texture can be updated in-place or if it requires
-/// a resize operation.
+/// Bounded change journal shared by independent GPU texture consumers. Readers
+/// hold the font-grid lock and never consume entries; lagging readers upload
+/// the full atlas. Full-width bands keep source data contiguous on every API.
+changes: [64]RowBand = undefined,
+
+/// Incremented when GPU texture dimensions change.
 resized: std.atomic.Value(usize) = .{ .raw = 0 },
+
+pub const RowBand = struct { start: u32, end: u32 };
+
+fn markRows(self: *Atlas, start: u32, end: u32) void {
+    const version = self.modified.load(.monotonic) + 1;
+    self.changes[version % self.changes.len] = .{ .start = start, .end = end };
+    self.modified.store(version, .monotonic);
+}
+
+/// Caller must hold the same lock used for atlas writes.
+pub fn changedRows(self: *const Atlas, since: usize) RowBand {
+    const current = self.modified.load(.monotonic);
+    if (since > current or current - since > self.changes.len)
+        return .{ .start = 0, .end = self.size };
+    var band: RowBand = .{ .start = self.size, .end = 0 };
+    var version = since;
+    while (version < current) {
+        version += 1;
+        const change = self.changes[version % self.changes.len];
+        band.start = @min(band.start, change.start);
+        band.end = @max(band.end, change.end);
+    }
+    return band;
+}
 
 pub const Format = enum(u8) {
     /// 1 byte per pixel grayscale.
@@ -123,6 +150,24 @@ pub fn deinit(self: *Atlas, alloc: Allocator) void {
     self.nodes.deinit(alloc);
     alloc.free(self.data);
     self.* = undefined;
+}
+
+test "atlas dirty bands support independent and lagging consumers" {
+    var atlas = try Atlas.init(testing.allocator, 32, .grayscale);
+    defer atlas.deinit(testing.allocator);
+    const initial = atlas.modified.load(.monotonic);
+    atlas.set(.{ .x = 1, .y = 2, .width = 1, .height = 2 }, &.{ 1, 2 });
+    const first = atlas.modified.load(.monotonic);
+    atlas.set(.{ .x = 1, .y = 8, .width = 1, .height = 1 }, &.{3});
+    try testing.expectEqual(RowBand{ .start = 2, .end = 9 }, atlas.changedRows(initial));
+    try testing.expectEqual(RowBand{ .start = 8, .end = 9 }, atlas.changedRows(first));
+    // Reading one texture's changes must not clear another texture's history.
+    try testing.expectEqual(RowBand{ .start = 2, .end = 9 }, atlas.changedRows(initial));
+    for (0..65) |_| atlas.set(.{ .x = 1, .y = 8, .width = 1, .height = 1 }, &.{4});
+    try testing.expectEqual(RowBand{ .start = 0, .end = 32 }, atlas.changedRows(first));
+    const before_clear = atlas.modified.load(.monotonic);
+    atlas.clear();
+    try testing.expectEqual(RowBand{ .start = 0, .end = 32 }, atlas.changedRows(before_clear));
 }
 
 pub const reserve_tw = tripwire.module(enum {
@@ -271,7 +316,7 @@ pub fn set(self: *Atlas, reg: Region, data: []const u8) void {
         );
     }
 
-    _ = self.modified.fetchAdd(1, .monotonic);
+    self.markRows(reg.y, reg.y + reg.height);
 }
 
 /// Like `set` but allows specifying a width for the source data and an
@@ -302,7 +347,7 @@ pub fn setFromLarger(
         );
     }
 
-    _ = self.modified.fetchAdd(1, .monotonic);
+    self.markRows(reg.y, reg.y + reg.height);
 }
 
 pub const grow_tw = tripwire.module(enum {
@@ -359,13 +404,13 @@ pub fn grow(self: *Atlas, alloc: Allocator, size_new: u32) Allocator.Error!void 
     });
 
     // We are both modified and resized
-    _ = self.modified.fetchAdd(1, .monotonic);
+    self.markRows(0, self.size);
     _ = self.resized.fetchAdd(1, .monotonic);
 }
 
 // Empty the atlas. This doesn't reclaim any previously allocated memory.
 pub fn clear(self: *Atlas) void {
-    _ = self.modified.fetchAdd(1, .monotonic);
+    self.markRows(0, self.size);
     @memset(self.data, 0);
     self.nodes.clearRetainingCapacity();
 

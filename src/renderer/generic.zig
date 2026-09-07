@@ -1575,16 +1575,16 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 if (modified <= frame.grayscale_modified) break :texture;
                 self.font_grid.lock.lockSharedUncancelable(global.io());
                 defer self.font_grid.lock.unlockShared(global.io());
+                try self.syncAtlasTexture(&self.font_grid.atlas_grayscale, &frame.grayscale, frame.grayscale_modified);
                 frame.grayscale_modified = self.font_grid.atlas_grayscale.modified.load(.monotonic);
-                try self.syncAtlasTexture(&self.font_grid.atlas_grayscale, &frame.grayscale);
             }
             texture: {
                 const modified = self.font_grid.atlas_color.modified.load(.monotonic);
                 if (modified <= frame.color_modified) break :texture;
                 self.font_grid.lock.lockSharedUncancelable(global.io());
                 defer self.font_grid.lock.unlockShared(global.io());
+                try self.syncAtlasTexture(&self.font_grid.atlas_color, &frame.color, frame.color_modified);
                 frame.color_modified = self.font_grid.atlas_color.modified.load(.monotonic);
-                try self.syncAtlasTexture(&self.font_grid.atlas_color, &frame.color);
             }
 
             // Get a frame context from the graphics API.
@@ -3348,8 +3348,10 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             self: *const Self,
             atlas: *const font.Atlas,
             texture: *Texture,
+            since: usize,
         ) !void {
-            if (atlas.size > texture.width) {
+            const resized = atlas.size > texture.width;
+            if (resized) {
                 // Free our old texture
                 texture.*.deinit();
 
@@ -3357,7 +3359,13 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 texture.* = try self.api.initAtlasTexture(atlas);
             }
 
-            try texture.replaceRegion(0, 0, atlas.size, atlas.size, atlas.data);
+            const band = if (resized)
+                font.Atlas.RowBand{ .start = 0, .end = atlas.size }
+            else
+                atlas.changedRows(since);
+            if (band.start >= band.end) return;
+            const stride = @as(usize, atlas.size) * atlas.format.depth();
+            try texture.replaceRegion(0, band.start, atlas.size, band.end - band.start, atlas.data[band.start * stride .. band.end * stride]);
         }
     };
 }
