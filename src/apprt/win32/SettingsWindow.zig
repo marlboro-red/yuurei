@@ -315,7 +315,7 @@ fn save(self: *SettingsWindow) void {
     for (model.fields, 0..) |field, i| {
         if (!self.dirty[i]) continue;
         const raw = self.controlValue(a, i) catch {
-            self.message("Could not read settings. Please try again.", true);
+            self.message("Could not read settings.", true);
             return;
         };
         const v = std.mem.trim(u8, raw, " \t");
@@ -348,7 +348,7 @@ fn save(self: *SettingsWindow) void {
         restart = restart or field.restart;
     }
     model.save(a, self.path, self.baseline, changes.items) catch |err| {
-        self.message(if (err == error.ConfigChanged) "Config changed outside this window. Revert to reload it, then reapply your edits." else "Could not save the config file. Your edits are still here.", true);
+        self.message(if (err == error.ConfigChanged) "Config changed externally. Revert to reload it before editing." else "Could not save the config file. Changes remain unsaved.", true);
         return;
     };
     _ = self.app.performAction(.app, .reload_config, .{}) catch {
@@ -361,11 +361,11 @@ fn save(self: *SettingsWindow) void {
     };
     self.refreshStyle();
     self.layout();
-    self.message(if (restart) "Saved. Shell and input changes apply to new terminals." else "Saved. Your settings are up to date.", false);
+    self.message(if (restart) "Saved. Shell and input changes apply to new terminals." else "Settings saved.", false);
 }
 fn confirmDiscard(self: *SettingsWindow) bool {
     if (!self.anyDirty()) return true;
-    return winapi.MessageBoxW(self.hwnd, L("Discard your unsaved settings changes?"), L("Unsaved changes"), 0x00000004 | 0x00000020 | 0x00000100) == 6;
+    return winapi.MessageBoxW(self.hwnd, L("Discard unsaved settings changes?"), L("Unsaved changes"), 0x00000004 | 0x00000020 | 0x00000100) == 6;
 }
 fn move(self: *SettingsWindow, h: ?winapi.HWND, x: i32, y: i32, w: i32, height: i32, show: bool) void {
     _ = self;
@@ -497,7 +497,7 @@ fn paint(self: *SettingsWindow, hdc: winapi.HDC) void {
     fill(hdc, .{ .left = 0, .top = 0, .right = self.width, .bottom = self.height }, p.bg);
     fill(hdc, .{ .left = 0, .top = 0, .right = self.s(218), .bottom = self.height }, p.sidebar);
     self.text(hdc, "yuurei", self.rect(28, 26, 162, 38), p.text, self.heading_font, 0);
-    self.text(hdc, "MAKE IT YOURS", self.rect(29, 72, 162, 20), p.muted, self.small_font, 0);
+    self.text(hdc, "SETTINGS", self.rect(29, 72, 162, 20), p.muted, self.small_font, 0);
     box(hdc, .{ .left = self.s(246), .top = self.s(33), .right = self.width - self.s(28), .bottom = self.s(71) }, p.bg, p.border);
     self.text(hdc, if (self.query_len > 0) "Search results" else model.categories[self.category], .{ .left = self.s(246), .top = self.s(79), .right = self.width - self.s(28), .bottom = self.s(119) }, p.text, self.heading_font, 0);
     self.text(hdc, if (self.query_len > 0) "Matching settings across every category." else model.descriptions[self.category], .{ .left = self.s(247), .top = self.s(125), .right = self.width - self.s(28), .bottom = self.s(146) }, p.muted, self.font, 0);
@@ -518,7 +518,7 @@ fn paint(self: *SettingsWindow, hdc: winapi.HDC) void {
     }
     if (self.matched_count == 0) {
         self.text(hdc, "No settings found", self.rect(270, 195, 400, 36), p.text, self.heading_font, 0);
-        self.text(hdc, "Try a shorter search, such as font, shell, or folder.", self.rect(270, 240, 520, 30), p.muted, self.font, 0);
+        self.text(hdc, "Search by setting name, description, or config key.", self.rect(270, 240, 520, 30), p.muted, self.font, 0);
     }
     self.text(hdc, "BASE CONFIGURATION", self.rect(28, 344, 168, 24), p.accent, self.small_font, 0);
     self.text(hdc, "Applies across yuurei.\nProfiles keep their own overrides.", self.rect(28, 374, 162, 74), p.muted, self.font, 0x10);

@@ -7,10 +7,10 @@ const Allocator = std.mem.Allocator;
 pub const Category = enum { appearance, terminal, windows, input };
 pub const categories = [_][]const u8{ "Appearance", "Terminal", "Windows & tabs", "Input" };
 pub const descriptions = [_][]const u8{
-    "Make your terminal feel like home.",
-    "Choose how your shells start and behave.",
-    "Keep your workspace just the way you like it.",
-    "Fine-tune the way you work with your terminal.",
+    "Themes, fonts, and transparency.",
+    "Shell startup, cursor, and closing behavior.",
+    "Session restore, tab bar, and directory inheritance.",
+    "Mouse, clipboard, and keyboard behavior.",
 };
 pub const Kind = enum { text, choice, toggle, theme, font };
 pub const Field = struct {
@@ -23,23 +23,23 @@ pub const Field = struct {
     restart: bool = false,
 };
 pub const fields = [_]Field{
-    .{ .key = "theme", .title = "Color theme", .description = "Choose a theme, or type a light/dark theme pair.", .category = .appearance, .kind = .theme },
-    .{ .key = "font-family", .title = "Font family", .description = "Choose an installed font or enter a family name.", .category = .appearance, .kind = .font },
-    .{ .key = "font-size", .title = "Font size", .description = "Text size in points. Decimal sizes are welcome.", .category = .appearance, .kind = .text },
-    .{ .key = "background-opacity", .title = "Background opacity", .description = "1 is opaque. Try 0.9 for a little transparency.", .category = .appearance, .kind = .text },
-    .{ .key = "background-blur", .title = "Background blur", .description = "Soften the desktop behind a transparent window.", .category = .appearance, .kind = .choice, .choices = &.{ "false", "true", "20", "40", "60", "80" } },
-    .{ .key = "window-theme", .title = "Interface theme", .description = "Follow Windows, or keep the interface light or dark.", .category = .appearance, .kind = .choice, .choices = &.{ "auto", "dark", "light", "ghostty", "system" } },
+    .{ .key = "theme", .title = "Color theme", .description = "Theme name, path, or light/dark theme pair.", .category = .appearance, .kind = .theme },
+    .{ .key = "font-family", .title = "Font family", .description = "Installed font or custom family name.", .category = .appearance, .kind = .font },
+    .{ .key = "font-size", .title = "Font size", .description = "Text size in points, including fractional values.", .category = .appearance, .kind = .text },
+    .{ .key = "background-opacity", .title = "Background opacity", .description = "Opacity from 0 to 1. A value of 1 is fully opaque.", .category = .appearance, .kind = .text },
+    .{ .key = "background-blur", .title = "Background blur", .description = "Blur behind transparent terminal backgrounds.", .category = .appearance, .kind = .choice, .choices = &.{ "false", "true", "20", "40", "60", "80" } },
+    .{ .key = "window-theme", .title = "Interface theme", .description = "System, light, or dark interface appearance.", .category = .appearance, .kind = .choice, .choices = &.{ "auto", "dark", "light", "ghostty", "system" } },
     .{ .key = "command", .title = "Default shell", .description = "For example: pwsh.exe, cmd.exe, or wsl.exe -d Ubuntu.", .category = .terminal, .kind = .text, .restart = true },
     .{ .key = "working-directory", .title = "Starting directory", .description = "Use home, inherit, or an absolute folder path.", .category = .terminal, .kind = .text, .restart = true },
-    .{ .key = "cursor-style", .title = "Cursor shape", .description = "The cursor used by your shell and text applications.", .category = .terminal, .kind = .choice, .choices = &.{ "block", "bar", "underline", "block_hollow" } },
-    .{ .key = "cursor-style-blink", .title = "Blinking cursor", .description = "Let the cursor blink when the terminal is idle.", .category = .terminal, .kind = .choice, .choices = &.{ "", "true", "false" } },
+    .{ .key = "cursor-style", .title = "Cursor shape", .description = "Default terminal cursor shape.", .category = .terminal, .kind = .choice, .choices = &.{ "block", "bar", "underline", "block_hollow" } },
+    .{ .key = "cursor-style-blink", .title = "Blinking cursor", .description = "Enable cursor blinking.", .category = .terminal, .kind = .choice, .choices = &.{ "", "true", "false" } },
     .{ .key = "confirm-close-surface", .title = "Confirm before closing", .description = "Ask before closing a terminal with a running process.", .category = .terminal, .kind = .choice, .choices = &.{ "true", "false", "always" } },
     .{ .key = "windows-restore-session", .title = "Restore tabs on launch", .description = "Reopen profiles, titles, and folders. Starts fresh shells.", .category = .windows, .kind = .toggle },
-    .{ .key = "windows-titlebar-thin", .title = "Compact tab bar", .description = "Use a smaller title bar with more room for your terminal.", .category = .windows, .kind = .toggle },
+    .{ .key = "windows-titlebar-thin", .title = "Compact tab bar", .description = "Reduce the height of the title bar.", .category = .windows, .kind = .toggle },
     .{ .key = "window-inherit-working-directory", .title = "New windows keep the folder", .description = "Start new windows in the current terminal's directory.", .category = .windows, .kind = .toggle },
     .{ .key = "tab-inherit-working-directory", .title = "New tabs keep the folder", .description = "Start new tabs in the current terminal's directory.", .category = .windows, .kind = .toggle },
     .{ .key = "split-inherit-working-directory", .title = "New splits keep the folder", .description = "Start new panes in the current terminal's directory.", .category = .windows, .kind = .toggle },
-    .{ .key = "mouse-hide-while-typing", .title = "Hide pointer while typing", .description = "Move the mouse to bring the pointer back.", .category = .input, .kind = .toggle },
+    .{ .key = "mouse-hide-while-typing", .title = "Hide pointer while typing", .description = "Hide until the next mouse movement.", .category = .input, .kind = .toggle },
     .{ .key = "copy-on-select", .title = "Copy selected text", .description = "Copy selections directly to the Windows clipboard.", .category = .input, .kind = .choice, .choices = &.{ "none", "clipboard" } },
     .{ .key = "win32-input-mode", .title = "Windows keyboard compatibility", .description = "Preserve modifiers such as Shift+Enter in console apps.", .category = .input, .kind = .toggle, .restart = true },
 };
