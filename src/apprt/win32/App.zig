@@ -1120,6 +1120,9 @@ pub fn performAction(
 
         .close_all_windows => {
             if (!self.confirmQuit()) return true;
+            // The sweep destroys every tab before the no-windows exit;
+            // save now, just as an individual window close does.
+            session.save(self);
             for (self.windows.items) |window| window.should_close = true;
             self.wakeup();
         },
