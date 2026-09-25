@@ -20,6 +20,7 @@ const defterm = @import("defterm.zig");
 const SearchBar = @import("SearchBar.zig");
 const winapi = @import("winapi.zig");
 const perf = @import("../../perf.zig");
+const key_text = @import("key_text.zig");
 
 const log = std.log.scoped(.win32);
 
@@ -171,10 +172,6 @@ transparent: bool = false,
 fullscreen: bool = false,
 saved_placement: winapi.WINDOWPLACEMENT = undefined,
 saved_style: isize = 0,
-
-/// Buffer backing a delivered key event's utf8 text for the duration
-/// of the keyCallback (deliverKeyWithText).
-utf8_buf: [4]u8 = undefined,
 
 /// Whether the ctrl currently reported down by GetKeyState is the one
 /// Windows injects for AltGr (see keyEvent): while true, ctrl+alt are
@@ -3739,6 +3736,17 @@ fn keyEvent(
     else
         .press;
 
+    var text_buffer = std.heap.stackFallback(128, self.app.core_app.alloc);
+    const text_alloc = text_buffer.get();
+    const text = if (!released and vk != winapi.VK_PROCESSKEY)
+        key_text.take(text_alloc, self.hwnd) catch |err| {
+            log.warn("invalid key text err={}", .{err});
+            return;
+        }
+    else
+        &.{};
+    defer text_alloc.free(text);
+
     // Key-to-present latency tracing (GHOSTTY_PERF_TRACE).
     if (action == .press) perf.keyPress();
 
@@ -3792,8 +3800,7 @@ fn keyEvent(
         const list = self.app.ensureProfiles();
         const i: usize = vk - '1';
         if (i >= list.items.len) break :profile;
-        // Swallow the paired WM_CHAR too.
-        _ = self.takeQueuedChar();
+        // The paired text was already consumed above.
         _ = self.newTabWithProfile(&list.items[i]) catch |err|
             log.err("profile shortcut err={}", .{err});
         return;
@@ -3824,10 +3831,10 @@ fn keyEvent(
     // A dead key: TranslateMessage queued WM_DEADCHAR, not WM_CHAR.
     // Report the keydown as composing -- the core then suppresses
     // encoding the raw key (the kitty protocol would otherwise leak a
-    // spurious key event to TUIs). The WM_DEADCHAR itself is consumed
-    // in the wndproc; the eventually composed WM_CHAR is consumed
-    // synchronously by the keydown it completes (takeQueuedChar).
-    if ((action == .press or action == .repeat) and self.deadCharQueued()) {
+    // spurious key event to TUIs). Consume WM_DEADCHAR here too; the
+    // eventually composed WM_CHAR is consumed
+    // synchronously by the keydown it completes (key_text.take).
+    if ((action == .press or action == .repeat) and key_text.takeDead(self.hwnd)) {
         var composing = key_event;
         composing.composing = true;
         _ = tab.core_surface.keyCallback(composing) catch |err| {
@@ -3847,7 +3854,9 @@ fn keyEvent(
     if ((action == .press or action == .repeat) and
         vk != winapi.VK_PROCESSKEY)
     {
-        if (self.takeQueuedChar()) |codepoint| {
+        if (text.len > 0) {
+            var text_it = std.unicode.Utf8View.initUnchecked(text).iterator();
+            const codepoint = text_it.nextCodepoint().?;
             if (codepoint >= 0x20 and codepoint != 0x7F) {
                 // Printable: one event WITH text (Shift/AltGr folded in
                 // deliverKeyWithText). Encoding the text-less keydown
@@ -3855,7 +3864,7 @@ fn keyEvent(
                 // a CSI-u "shift+key" sequence -- shifted text (capitals,
                 // symbols) then never reaches apps that enable the
                 // protocol (e.g. the Copilot TUI).
-                self.deliverKeyWithText(tab, key_event, codepoint);
+                self.deliverKeyWithText(tab, key_event, text);
                 return;
             }
 
@@ -3869,7 +3878,7 @@ fn keyEvent(
             };
             if (effect == .closed) return;
             if (effect == .ignored)
-                self.deliverKeyWithText(tab, key_event, codepoint);
+                self.deliverKeyWithText(tab, key_event, text);
             return;
         }
     }
@@ -3880,43 +3889,6 @@ fn keyEvent(
     };
 }
 
-/// Remove this keydown's queued WM_CHAR(s) and return the codepoint,
-/// reassembling a UTF-16 surrogate pair (two WM_CHARs) when present.
-/// Null when no char is queued (non-character key) or on a malformed
-/// pair. Must only be called while handling the keydown's dispatch:
-/// that is what guarantees the queued chars are this keydown's.
-fn takeQueuedChar(self: *Window) ?u21 {
-    var msg: winapi.MSG = undefined;
-    if (winapi.PeekMessageW(
-        &msg,
-        self.hwnd,
-        winapi.WM_CHAR,
-        winapi.WM_CHAR,
-        winapi.PM_REMOVE,
-    ) == 0) return null;
-    const unit: u16 = @truncate(msg.wParam);
-
-    // Lead surrogate: the trail was posted by the same TranslateMessage
-    // call, directly behind it.
-    if (unit >= 0xD800 and unit <= 0xDBFF) {
-        if (winapi.PeekMessageW(
-            &msg,
-            self.hwnd,
-            winapi.WM_CHAR,
-            winapi.WM_CHAR,
-            winapi.PM_REMOVE,
-        ) == 0) return null;
-        const trail: u16 = @truncate(msg.wParam);
-        if (trail < 0xDC00 or trail > 0xDFFF) return null;
-        return 0x10000 +
-            (@as(u21, unit - 0xD800) << 10) +
-            (trail - 0xDC00);
-    }
-    // A bare trail surrogate is malformed; swallow it.
-    if (unit >= 0xDC00 and unit <= 0xDFFF) return null;
-    return unit;
-}
-
 /// Deliver a key event completed with its produced text, folding
 /// modifier consumption the way the text implies (Shift that changed
 /// the character, AltGr chords that produced it).
@@ -3924,16 +3896,13 @@ fn deliverKeyWithText(
     self: *Window,
     tab: *Surface,
     event: input.KeyEvent,
-    codepoint: u21,
+    text: []const u8,
 ) void {
+    _ = self;
     var key_event = event;
-
-    const len = std.unicode.utf8Encode(codepoint, &self.utf8_buf) catch |err| {
-        log.err("error encoding codepoint={} err={}", .{ codepoint, err });
-        return;
-    };
-    key_event.utf8 = self.utf8_buf[0..len];
-
+    key_event.utf8 = text;
+    var it = std.unicode.Utf8View.initUnchecked(text).iterator();
+    const codepoint = it.nextCodepoint().?;
     // Record that Shift was folded into the produced text when it
     // actually changed the character (';' -> ':', 'a' -> 'A'). The core
     // negates consumed_mods to get the effective mods; without this the
@@ -3994,28 +3963,8 @@ fn altGrInjectedCtrl(self: *Window) bool {
     return msg.time == @as(u32, @bitCast(winapi.GetMessageTime()));
 }
 
-/// Whether a dead-key WM_DEADCHAR is queued behind the keydown we're
-/// handling (TranslateMessage posts it before this dispatch).
-fn deadCharQueued(self: *Window) bool {
-    var msg: winapi.MSG = undefined;
-    if (winapi.PeekMessageW(
-        &msg,
-        self.hwnd,
-        winapi.WM_DEADCHAR,
-        winapi.WM_DEADCHAR,
-        winapi.PM_NOREMOVE,
-    ) != 0) return true;
-    return winapi.PeekMessageW(
-        &msg,
-        self.hwnd,
-        winapi.WM_SYSDEADCHAR,
-        winapi.WM_SYSDEADCHAR,
-        winapi.PM_NOREMOVE,
-    ) != 0;
-}
-
 /// A WM_CHAR that reached dispatch. Keydown-paired text is consumed
-/// synchronously inside keyEvent (takeQueuedChar), so a char getting
+/// synchronously inside keyEvent (key_text.take), so a char getting
 /// this far has no owning keydown -- injected/synthesized text -- and
 /// is deliberately dropped (the TranslateMessage trap: accepting bare
 /// chars would double-deliver text for consumed keydowns on any path
