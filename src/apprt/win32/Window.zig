@@ -459,12 +459,12 @@ pub const SpawnOpts = struct {
 
 /// Create a new surface (with its GL host) owned by a fresh
 /// single-leaf tree. The tree holds the only reference on return.
-fn newSurfaceTree(self: *Window, opts: SpawnOpts) !Tree {
+fn newSurfaceTree(self: *Window, opts: SpawnOpts, context: apprt.surface.NewSurfaceContext) !Tree {
     const alloc = self.app.core_app.alloc;
     const surface = try alloc.create(Surface);
     errdefer alloc.destroy(surface);
 
-    try surface.init(self.app, self, opts);
+    try surface.init(self.app, self, opts, context);
     errdefer surface.deinit();
 
     const tree = try Tree.init(alloc, surface);
@@ -490,7 +490,7 @@ pub fn newTabWithProfile(
 pub fn newTabWithOpts(self: *Window, opts: SpawnOpts) !*Surface {
     perf.mark("new-tab-begin");
     const alloc = self.app.core_app.alloc;
-    var tree = try self.newSurfaceTree(opts);
+    var tree = try self.newSurfaceTree(opts, if (self.tabs.items.len == 0) .window else .tab);
     errdefer tree.deinit();
 
     const surface = tree.nodes[0].leaf;
@@ -1371,7 +1371,7 @@ pub fn newSplit(self: *Window, direction: apprt.action.SplitDirection) !*Surface
     else
         null;
 
-    var insert = try self.newSurfaceTree(.{ .profile = profile });
+    var insert = try self.newSurfaceTree(.{ .profile = profile }, .split);
     defer insert.deinit();
     const surface = insert.nodes[0].leaf;
 

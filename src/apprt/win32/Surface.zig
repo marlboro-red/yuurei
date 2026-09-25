@@ -130,6 +130,7 @@ pub fn init(
     app: *App,
     window: *Window,
     spawn_opts: Window.SpawnOpts,
+    context: apprt.surface.NewSurfaceContext,
 ) !void {
     perf.mark("surface-init-begin");
 
@@ -281,7 +282,7 @@ pub fn init(
         try apprt.surface.newConfig(
             app.core_app,
             if (profile_base) |*c| c else &app.config,
-            .window,
+            context,
         );
     defer config.deinit();
 
