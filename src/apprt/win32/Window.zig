@@ -3082,7 +3082,7 @@ pub fn wndProc(
         },
 
         // Dropped files paste their paths into the focused surface,
-        // double-quoted when cmd/pwsh would split them.
+        // quoted for the shell launched in this surface.
         winapi.WM_DROPFILES => {
             const hdrop: winapi.HDROP = @ptrFromInt(wparam);
             defer winapi.DragFinish(hdrop);
@@ -3108,12 +3108,8 @@ pub fn wndProc(
 
                 drop: {
                     if (text.items.len > 0) text.append(alloc, ' ') catch break :drop;
-                    // Paths can't contain double quotes on Windows, so
-                    // plain wrapping is a complete escape.
-                    const quote = std.mem.indexOfAny(u8, path, " \t&^=;,'`(){}[]!") != null;
-                    if (quote) text.append(alloc, '"') catch break :drop;
-                    text.appendSlice(alloc, path) catch break :drop;
-                    if (quote) text.append(alloc, '"') catch break :drop;
+                    const args = surface.core_surface.io.backend.exec.subprocess.args;
+                    @import("drop.zig").appendPath(alloc, &text, args[0], path) catch return 0;
                 }
             }
 
