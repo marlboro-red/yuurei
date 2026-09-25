@@ -77,6 +77,23 @@ pub fn init(b: *std.Build, cfg: *const Config) !SharedDeps {
         .build_config_path = b.path("src/build/uucode_config.zig"),
     }).module("uucode");
 
+    // This graph is shared across compile steps with different targets and
+    // optimization modes. Inherit both from each importing step instead of
+    // pinning Unicode lookups to the dependency's default Debug/host build.
+    // Walk with a visited set: config and storage import each other.
+    var pending: std.ArrayList(*std.Build.Module) = .empty;
+    var visited: std.AutoHashMapUnmanaged(*std.Build.Module, void) = .empty;
+    defer pending.deinit(b.allocator);
+    defer visited.deinit(b.allocator);
+    try pending.append(b.allocator, uucode_mod);
+    while (pending.pop()) |module| {
+        const entry = try visited.getOrPut(b.allocator, module);
+        if (entry.found_existing) continue;
+        module.resolved_target = null;
+        module.optimize = null;
+        try pending.appendSlice(b.allocator, module.import_table.values());
+    }
+
     // Re-export the uucode module so that Zig programs that embed libgtostty-vt
     // can use it. This is necessary to use libraries like libvaxis in
     // the embedding program that need uucode as well (libvaxis provides
@@ -508,7 +525,10 @@ pub fn add(
     }
 
     // Other dependencies, mostly pure Zig
-    if (b.lazyDependency("opengl", .{})) |dep| {
+    if (b.lazyDependency("opengl", .{
+        .target = target,
+        .optimize = optimize,
+    })) |dep| {
         step.root_module.addImport("opengl", dep.module("opengl"));
     }
     if (b.lazyDependency("vaxis", .{

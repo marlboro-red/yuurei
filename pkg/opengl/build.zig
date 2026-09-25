@@ -19,5 +19,11 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
         .include_paths = &.{b.path("../../vendor/glad/include")},
+        // Windows uses WGL, so no native EGL window types are needed.
+        // Avoid importing the Windows SDK solely for unused EGL handles.
+        .extra_args = if (target.result.os.tag == .windows)
+            &.{"-DEGL_NO_PLATFORM_SPECIFIC_TYPES"}
+        else
+            &.{},
     });
 }
