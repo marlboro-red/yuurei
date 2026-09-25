@@ -729,6 +729,9 @@ pub fn presentLastTarget(self: *OpenGL) !void {
 
 pub fn gpuResourcesReleased(self: *OpenGL) void {
     self.last_target = null;
+    // A hidden surface may not submit another frame for a long time.
+    // Submit pending deletions without waiting for the GPU to finish.
+    gl.flush();
 }
 
 fn presentWin32(self: *OpenGL, target: Target) !void {
