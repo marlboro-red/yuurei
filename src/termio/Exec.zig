@@ -1237,6 +1237,10 @@ const Subprocess = struct {
     /// Called to notify that we exited externally so we can unset our
     /// running state.
     pub fn externalExit(self: *Subprocess) void {
+        if (self.process) |*process| switch (process.*) {
+            .fork_exec => |*cmd| cmd.deinit(),
+            .flatpak => {},
+        };
         self.process = null;
     }
 
@@ -1291,6 +1295,7 @@ const Subprocess = struct {
     /// process. This also waits for the command to exit and will return the
     /// exit code.
     fn killCommand(command: *Command) !void {
+        defer command.deinit();
         if (command.pid) |pid| {
             switch (builtin.os.tag) {
                 .windows => {

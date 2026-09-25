@@ -433,6 +433,17 @@ fn startWindows(self: *Command, arena: Allocator) !void {
     ) == windows.FALSE) return windows.unexpectedError(windows.GetLastError());
 
     self.pid = process_information.hProcess;
+    // We never use the primary thread handle returned by CreateProcessW.
+    _ = windows.exp.kernel32.CloseHandle(process_information.hThread);
+}
+
+/// Release the owned Windows process handle without terminating the child.
+/// Process watchers keep their own duplicate. Safe after wait or cleanup.
+pub fn deinit(self: *Command) void {
+    if (comptime builtin.os.tag == .windows) {
+        if (self.pid) |handle| _ = windows.exp.kernel32.CloseHandle(handle);
+        self.pid = null;
+    }
 }
 
 fn setupFd(src: File.Handle, target: i32) !void {
@@ -483,7 +494,7 @@ fn setupFd(src: File.Handle, target: i32) !void {
 }
 
 /// Wait for the command to exit and return information about how it exited.
-pub fn wait(self: Command, block: bool) !Exit {
+pub fn wait(self: *Command, block: bool) !Exit {
     if (comptime builtin.os.tag == .windows) {
         // Block until the process exits. This returns immediately if the
         // process already exited.
@@ -502,6 +513,7 @@ pub fn wait(self: Command, block: bool) !Exit {
             return windows.unexpectedError(windows.GetLastError());
         }
 
+        self.deinit();
         return .{ .Exited = exit_code };
     }
 
@@ -1024,6 +1036,37 @@ test "Command: posix fork handles execveZ failure" {
 // assert its output round-trips through the pty's output pipe and that
 // exit is detected via the process handle. This is the only test that
 // exercises the PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE spawn path.
+test "Command: windows process handles are released" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const Native = struct {
+        extern "kernel32" fn GetProcessHandleCount(windows.HANDLE, *windows.DWORD) callconv(.winapi) windows.BOOL;
+
+        fn run() !void {
+            var cmd: Command = .{
+                .path = "C:\\Windows\\System32\\cmd.exe",
+                .args = &.{ "C:\\Windows\\System32\\cmd.exe", "/C", "exit 0" },
+                .os_pre_exec = null,
+                .rt_pre_exec = null,
+                .rt_post_fork = null,
+                .rt_pre_exec_info = undefined,
+                .rt_post_fork_info = undefined,
+            };
+            try cmd.testingStart();
+            defer cmd.deinit();
+            _ = try cmd.wait(true);
+            try testing.expect(cmd.pid == null);
+        }
+    };
+    // Warm up lazy runtime state before comparing kernel resource counts.
+    try Native.run();
+    var before: windows.DWORD = 0;
+    try testing.expect(Native.GetProcessHandleCount(std.os.windows.GetCurrentProcess(), &before) != windows.FALSE);
+    for (0..10) |_| try Native.run();
+    var after: windows.DWORD = 0;
+    try testing.expect(Native.GetProcessHandleCount(std.os.windows.GetCurrentProcess(), &after) != windows.FALSE);
+    try testing.expectEqual(before, after);
+}
+
 test "Command: windows pseudo console round-trip" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const Pty = @import("pty.zig").Pty;
