@@ -847,6 +847,8 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
         }
 
         fn initShaders(self: *Self) !void {
+            @import("../perf.zig").memoryMark("shaders-init-begin");
+            defer @import("../perf.zig").memoryMark("shaders-init-end");
             var arena = ArenaAllocator.init(self.alloc);
             defer arena.deinit();
             const arena_alloc = arena.allocator();
@@ -1192,6 +1194,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 sc.deinit();
                 self.swap_chain = null;
                 if (@hasDecl(GraphicsAPI, "gpuResourcesReleased")) self.api.gpuResourcesReleased();
+                @import("../perf.zig").memoryMark("frame-resources-released");
             }
 
             // Release the shaders as well if we're unrealized.

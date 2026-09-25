@@ -3,9 +3,15 @@ param(
     [string]$Executable = "$PSScriptRoot/../zig-out/bin/ghostty.exe",
     [string]$Artifacts = "$env:TEMP/yuurei-resources",
     [ValidateRange(1,1000)][int]$Cycles = 20,
-    [ValidateRange(1,60)][int]$IdleSeconds = 5
+    [ValidateRange(1,60)][int]$IdleSeconds = 5,
+    [switch]$TabsOnly,
+    [switch]$ProbeHiddenHosts,
+    [ValidateRange(0,1000)][int]$SwitchSamples = 0,
+    [ValidateRange(0,16384)][int]$Width = 0,
+    [ValidateRange(0,16384)][int]$Height = 0
 )
 $ErrorActionPreference = 'Stop'
+if (($Width -eq 0) -ne ($Height -eq 0)) { throw 'Specify both Width and Height, or neither' }
 Add-Type @'
 using System;
 using System.Text;
@@ -19,6 +25,11 @@ public static class ResourceNative {
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
     [DllImport("user32.dll")] public static extern uint GetGuiResources(IntPtr p, uint flags);
+    [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int height, uint flags);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out Rect r);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [StructLayout(LayoutKind.Sequential)] public struct Rect { public int left, top, right, bottom; }
     public static IntPtr Find(uint process, string name) {
         IntPtr result = IntPtr.Zero;
         EnumWindows((h,l) => {
@@ -39,6 +50,25 @@ public static class ResourceNative {
         }, IntPtr.Zero);
         return count;
     }
+    static System.Collections.Generic.Dictionary<IntPtr, Rect> saved = new System.Collections.Generic.Dictionary<IntPtr, Rect>();
+    public static void ShrinkHiddenHosts(IntPtr parent) {
+        EnumChildWindows(parent, (h,l) => {
+            var s = new StringBuilder(256); GetClassName(h,s,256);
+            Rect r;
+            if (s.ToString() == "ghostty-host" && !IsWindowVisible(h) && GetWindowRect(h,out r)) {
+                saved[h] = r;
+                if (!SetWindowPos(h,IntPtr.Zero,0,0,1,1,0x16)) throw new Exception("Host resize failed");
+            }
+            return true;
+        }, IntPtr.Zero);
+    }
+    public static void RestoreHosts() {
+        foreach (var pair in saved) {
+            var r=pair.Value;
+            if (!SetWindowPos(pair.Key,IntPtr.Zero,0,0,r.right-r.left,r.bottom-r.top,0x16)) throw new Exception("Host restore failed");
+        }
+        saved.Clear();
+    }
 }
 '@
 $run = Join-Path $Artifacts ([Guid]::NewGuid().ToString('N'))
@@ -54,6 +84,7 @@ keybind = f9=close_surface
 keybind = f12=open_config
 keybind = f11=inspector:toggle
 keybind = f7=text:exit\r
+keybind = f6=next_tab
 '@ | Set-Content (Join-Path $run 'ghostty/config')
 $rows = [Collections.Generic.List[object]]::new()
 function Find-Window([string]$Class) {
@@ -87,16 +118,57 @@ function Sample([string]$Phase) {
     }
     $rows.Add($row); Write-Host ($row | ConvertTo-Json -Compress)
 }
+function Save-Results {
+    [pscustomobject]@{
+        executable=(Resolve-Path $Executable).Path
+        sha256=(Get-FileHash -LiteralPath $Executable -Algorithm SHA256).Hash
+        startup_window_ms=$startup.Elapsed.TotalMilliseconds
+        window_width=$rect.right-$rect.left; window_height=$rect.bottom-$rect.top
+        tabs_only=[bool]$TabsOnly; cycles=$Cycles; idle_seconds=$IdleSeconds
+        switch_samples=$SwitchSamples; samples=$rows
+    } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $run 'results.json')
+}
 $startup = [Diagnostics.Stopwatch]::StartNew()
 $app = Start-Process -FilePath (Resolve-Path $Executable) -PassThru -WindowStyle Hidden -Environment @{XDG_CONFIG_HOME=$run; LOCALAPPDATA=$run; GHOSTTY_PERF_TRACE='1'} -RedirectStandardError (Join-Path $run 'stderr.log')
 try {
     $terminal = Find-Window 'ghostty'; $startup.Stop()
+    [void][ResourceNative]::SetThreadDpiAwarenessContext(-4)
+    if ($Width -gt 0 -and $Height -gt 0) { [void][ResourceNative]::SetWindowPos($terminal,0,0,0,$Width,$Height,0x16) }
+    $rect = [ResourceNative+Rect]::new()
+    [void][ResourceNative]::GetWindowRect($terminal,[ref]$rect)
+    Write-Host "Window pixels: $($rect.right-$rect.left) x $($rect.bottom-$rect.top)"
     [void][ResourceNative]::ShowWindow($terminal,5)
     Start-Sleep -Seconds 2
     Sample 'one-tab'
     for ($i=0; $i -lt 7; $i++) { Key 0x79 }
     Assert-Surfaces 8
     Sample 'eight-tabs'
+    if ($SwitchSamples -gt 0) {
+        $latencies = [Collections.Generic.List[int]]::new()
+        $log = Join-Path $run 'stderr.log'
+        for ($i=0; $i -lt $SwitchSamples; $i++) {
+            $offset = @(Get-Content -LiteralPath $log).Count
+            Key 0x75
+            $matchesForSwitch = @(Get-Content -LiteralPath $log | Select-Object -Skip $offset | Select-String 'perf: present key\+(\d+)ms')
+            if ($matchesForSwitch.Count -eq 0) { throw 'No traced presentation after tab switch' }
+            $latencies.Add([int]$matchesForSwitch[0].Matches[0].Groups[1].Value)
+        }
+        $latencies | ConvertTo-Json | Set-Content (Join-Path $run 'tab-switch-ms.json')
+        $sorted = @($latencies | Sort-Object)
+        Write-Host "Tab dispatch-to-present ms: median=$($sorted[[int][math]::Floor($sorted.Count/2)]) p95=$($sorted[[int][math]::Floor(($sorted.Count-1)*0.95)])"
+        Sample 'after-tab-switches'
+    }
+    if ($ProbeHiddenHosts) {
+        [ResourceNative]::ShrinkHiddenHosts($terminal)
+        Sample 'hidden-hosts-shrunk'
+        [ResourceNative]::RestoreHosts()
+        Sample 'hidden-hosts-restored'
+    }
+    if ($TabsOnly) {
+        Save-Results
+        Write-Host "Results: $run"
+        return
+    }
     for ($i=0; $i -lt 7; $i++) { Key 0x78 }
     Assert-Surfaces 1
     Sample 'after-eight-tabs'
@@ -133,7 +205,7 @@ try {
     Start-Sleep -Milliseconds 350
     [void][ResourceNative]::ShowWindow($terminal,6)
     Sample 'minimized'
-    [pscustomobject]@{executable=(Resolve-Path $Executable).Path; startup_window_ms=$startup.Elapsed.TotalMilliseconds; cycles=$Cycles; samples=$rows} | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $run 'results.json')
+    Save-Results
     Write-Host "Results: $run"
 } finally {
     if (!$app.HasExited) { Stop-Process -Id $app.Id }

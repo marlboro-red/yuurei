@@ -116,3 +116,35 @@ windows. CPU is expressed as a percentage of one core. The printed artifact
 directory contains raw JSON and startup traces. Surface counts are checked
 before accepting closure measurements. Run serially with other benchmarks;
 its measurements exclude child processes and dedicated GPU allocations.
+
+For a shorter per-tab comparison, run:
+
+```powershell
+pwsh -NoProfile -File bench/resources.ps1 -TabsOnly -SwitchSamples 30 -Width 1600 -Height 1200
+pwsh -NoProfile -File test/windows/settings-smoke.ps1 -GraphicsStress
+python bench/wgl-memory.py --count 8
+python bench/wgl-memory.py --count 8 --shaders --detach
+```
+
+Specify both dimensions in physical pixels, or omit both to use the default
+window size. The JSON records dimensions, executable hash and samples.
+Tab timings span posted-key handler dispatch to the first traced present;
+they exclude message queue delay and physical scanout. The short-run p95 is
+descriptive, not a statistically established bound. `-ProbeHiddenHosts` is an
+optional experiment that temporarily shrinks only the isolated process's
+hidden terminal HWNDs, then restores their sizes.
+
+`wgl-memory.py` isolates process memory used by separate WGL contexts on
+worker threads, without terminal state. It uses hidden 1200 x 800 windows
+and optionally compiles the built-in shaders. `--core` requests OpenGL 4.3
+core; `--release-compiler` tests the driver hint. This is a driver-cost probe,
+not an exact model of Yuurei or a dedicated-VRAM measurement. Run variants
+serially and warm shader caches before comparing them.
+
+`-GraphicsStress` adds custom shader reloads, eleven surfaces, tab switching
+and 20,000 Unicode/ANSI output lines to the native settings checks. Completion
+assertions check process and command progress; inspect the captures separately
+before claiming rendering correctness. With `GHOSTTY_PERF_TRACE=1`, lifecycle
+logs also report process-wide private commit and working set around startup,
+shader initialization and frame-resource release. Concurrent allocations make
+these stage samples unsuitable as exact per-object accounting.

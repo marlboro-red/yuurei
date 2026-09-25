@@ -96,6 +96,35 @@ pub fn mark(name: []const u8) void {
         name,
         @divTrunc(now - epoch, std.time.ns_per_ms),
     });
+    memoryMark(name);
+}
+
+/// Process-wide memory at a traced lifecycle boundary. Other threads may
+/// allocate concurrently: these samples locate stages, not object sizes.
+pub fn memoryMark(name: []const u8) void {
+    if (comptime builtin.os.tag != .windows) return;
+    if (!isEnabled()) return;
+    const Native = struct {
+        const Counters = extern struct {
+            size: u32 = @sizeOf(@This()),
+            faults: u32 = 0,
+            peak_working_set: usize = 0,
+            working_set: usize = 0,
+            peak_paged: usize = 0,
+            paged: usize = 0,
+            peak_nonpaged: usize = 0,
+            nonpaged: usize = 0,
+            pagefile: usize = 0,
+            peak_pagefile: usize = 0,
+            private: usize = 0,
+        };
+        extern "kernel32" fn K32GetProcessMemoryInfo(std.os.windows.HANDLE, *Counters, u32) callconv(.winapi) std.os.windows.BOOL;
+    };
+    var counters: Native.Counters = .{};
+    if (Native.K32GetProcessMemoryInfo(std.os.windows.GetCurrentProcess(), &counters, @sizeOf(Native.Counters)) == .FALSE) return;
+    std.log.scoped(.perf).info("memory {s} private={d}KiB working={d}KiB", .{
+        name, counters.private / 1024, counters.working_set / 1024,
+    });
 }
 
 /// Consume the pending key press and return the elapsed time to now,

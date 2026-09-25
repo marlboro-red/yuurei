@@ -124,19 +124,81 @@ terminal rendering, tabs, splits and the inspector, with the terminal capture
 also inspected visually. The resource harness exercised twenty cycles each
 of forced closure, normal shell exit, settings and inspector teardown.
 
+## Per-tab memory follow-up
+
+The follow-up corrected the initial hidden-tab diagnosis: `setVisible(false)`
+already releases frame targets, atlas texture copies, cell buffers and custom
+shader textures. It retains programs, images, the WGL context and native
+drawable. Adding another eviction mechanism would duplicate existing work.
+
+Three changes are committed separately:
+
+- `10e464cb4`: use explicit 4 MiB Windows worker stacks. Zig 0.16's default
+  thread stack is 16 MiB, passed as committed stack size on Windows. The
+  renderer, I/O dispatcher and PTY reader consequently committed about
+  48 MiB per surface. The explicit budget reduces that to 12 MiB; lifecycle
+  samples confirmed the original 32 MiB dispatch/renderer and 16 MiB reader
+  increments. Startup prewarm and WSL discovery use the same budget.
+- `b827d37b2`: detach linked GL shaders so deletion can finish, release shaders
+  and programs on compilation/link failure, and delete pipeline VAOs/FBOs.
+  These repair ownership; no isolated memory reduction is attributed to them.
+- `46cda6002`: flush GL commands after releasing hidden frame resources.
+  An inactive context may otherwise leave deletion work queued until its next
+  frame. This submits work without adding a GPU completion wait.
+
+Matched warm ReleaseFast runs at **1600 x 1200 physical window pixels**, on
+the same machine and configuration described above:
+
+| Phase | Baseline private MiB | Candidate private MiB | Baseline working MiB | Candidate working MiB |
+| --- | ---: | ---: | ---: | ---: |
+| One tab | 178.81 | 141.61 | 72.79 | 72.65 |
+| Eight tabs | 933.44 | 576.59 | 223.73 | 222.36 |
+| After 30 tab switches | 964.19 | 612.11 | 246.77 | 247.28 |
+
+Eight-tab private commit decreased **356.85 MiB (38.2%)**. Resident working
+memory was essentially unchanged. The intermediate stack/ownership build
+measured 645.38 MiB with eight tabs; submitting deletions reduced this by
+another approximately 69 MiB. Treat these as this driver's observed values,
+not guaranteed savings on every GPU. Raw samples, binary hashes and switch
+timings are in `performance-graphics-memory-2026-09-26.json`.
+
+The 30-sample tab dispatch-to-present median was 6 ms in both builds; p95 was
+6 ms baseline and 8 ms candidate. This is key-handler dispatch through the
+first traced presentation, with millisecond resolution. It excludes time
+queued before dispatch and does not measure physical scanout. The small
+sample does not establish latency equivalence or a statistically reliable
+2 ms regression. Both eight-tab idle samples consumed zero measured CPU.
+
+Shrinking hidden native host windows to 1 x 1 saved only about 1 MiB across
+seven hidden tabs. A standalone eight-context WGL probe consumed roughly
+350–365 MiB private commit without terminal state. Releasing the shader
+compiler and requesting a core profile produced no repeatable major benefit.
+These experiments do not establish a universal driver-memory floor or justify
+context sharing without a separate correctness and lifetime design.
+
+Validation: ReleaseFast build passed; targeted Windows, OpenGL and Shadertoy
+tests passed (118 passed, one skipped). Native stress completed with eleven
+surfaces, ten shader reload/tab-switch cycles, a 128-function custom shader,
+20,000 Unicode/ANSI output lines, surface teardown and settings assertions.
+This exercises the smaller stacks but is not an exhaustive stack-depth bound
+for third-party drivers or arbitrary shaders. Desktop captures showed black
+and stale regions in both baseline and candidate, including before custom
+shaders were loaded. Rendering-versus-capture attribution remains unresolved;
+these stress runs are **not a visual correctness pass**.
+
 ## Remaining priorities
 
-1. **Reduce memory retained by hidden tabs.** Eight quiet tabs still approach
-   0.9 GiB private commit, despite only about 223 MiB working set. Each surface
-   owns its own WGL context and renderer resources; visibility suppresses
-   rendering but does not evict those resources. Measure GPU allocations with
-   ETW/GPUView or a graphics debugger, then trial delayed GPU-resource release
-   for hidden tabs. Preserve terminal/PTY state and measure tab-switch latency,
-   atlas reupload, custom shaders, resize and device loss before enabling it.
+1. **Attribute the remaining context/driver allocations.** Eight quiet tabs
+   now use approximately 577 MiB private commit and 222 MiB working set.
+   Frame resources are already evicted on hiding. Use ETW/GPUView or a graphics
+   debugger before considering context pooling or destruction on inactivity.
+   Resolve the baseline/candidate desktop capture anomaly before accepting
+   broader renderer changes. Preserve PTY state and validate atlas reupload,
+   custom shaders, resize and device loss.
 
 2. **Attribute per-surface thread and kernel cost.** Going from one to eight
-   tabs added 28 threads in this run (14 to 42). Inspect thread stacks and
-   committed stack pages before considering shared I/O dispatch. A thread
+   tabs added 28 threads in this run (14 to 42). Explicit stack budgets fixed
+   excessive initial commit without restructuring I/O. A thread
    count does not by itself prove meaningful idle CPU overhead: quiet tabs
    measured near zero CPU.
 

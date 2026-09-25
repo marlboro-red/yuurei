@@ -156,6 +156,9 @@ try {
         [void]$source.AppendLine('void mainImage(out vec4 color, in vec2 coord) { color = texture(iChannel0, coord/iResolution.xy) + vec4(f128(coord)*0.000001); }')
         [IO.File]::WriteAllText($shader,$source.ToString())
         [IO.File]::WriteAllText($config,$initial+"custom-shader = $($shader.Replace('\','/'))`ncustom-shader-animation = false`n")
+        [void][SettingsNative]::PostMessage($terminal,0x100,0x76,0)
+        Start-Sleep -Milliseconds 750
+        Capture 'graphics-shader-single' -Window $terminal -Desktop
         for ($i=0; $i -lt 7; $i++) {
             [void][SettingsNative]::PostMessage($terminal,0x100,0x79,0)
             Start-Sleep -Milliseconds 350

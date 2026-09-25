@@ -1,0 +1,156 @@
+{
+  "description": "Matched warm WGL runs, September 26 2026. Private commit and working set exclude child processes and dedicated GPU memory.",
+  "window_pixels": [
+    1600,
+    1200
+  ],
+  "idle_seconds": 5,
+  "baseline": {
+    "artifact_run": "f1df48c7c1ad43f1bd7c287bf5b64d41",
+    "executable": "ghostty-before-graphics-memory.exe",
+    "sha256": "c1540da6208263febac5c03f424375e879b2628fed961ab284e9ef9c28fe6e00",
+    "samples": [
+      {
+        "phase": "one-tab",
+        "private_mib": 178.81,
+        "working_mib": 72.79,
+        "handles": 356,
+        "threads": 14,
+        "gdi": 25,
+        "user": 23,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "eight-tabs",
+        "private_mib": 933.44,
+        "working_mib": 223.73,
+        "handles": 665,
+        "threads": 42,
+        "gdi": 39,
+        "user": 65,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "after-tab-switches",
+        "private_mib": 964.19,
+        "working_mib": 246.77,
+        "handles": 665,
+        "threads": 42,
+        "gdi": 39,
+        "user": 65,
+        "cpu_one_core_percent": 0.782
+      }
+    ],
+    "tab_dispatch_to_present_ms": [
+      8,
+      6,
+      6,
+      6,
+      5,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      6,
+      5,
+      5,
+      6,
+      6,
+      6,
+      5,
+      6,
+      6,
+      5,
+      6,
+      6,
+      6,
+      5,
+      5
+    ]
+  },
+  "candidate": {
+    "artifact_run": "9ff00cfd3ddd42e4b558a3bcb23b6b19",
+    "executable": "ghostty.exe",
+    "sha256": "5c072b53f23235a24adf0209ac4ead1c12c75ee4c9a4d4432816af3cf10c2160",
+    "samples": [
+      {
+        "phase": "one-tab",
+        "private_mib": 141.61,
+        "working_mib": 72.65,
+        "handles": 356,
+        "threads": 14,
+        "gdi": 25,
+        "user": 23,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "eight-tabs",
+        "private_mib": 576.59,
+        "working_mib": 222.36,
+        "handles": 665,
+        "threads": 42,
+        "gdi": 39,
+        "user": 65,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "after-tab-switches",
+        "private_mib": 612.11,
+        "working_mib": 247.28,
+        "handles": 665,
+        "threads": 42,
+        "gdi": 39,
+        "user": 65,
+        "cpu_one_core_percent": 1.553
+      }
+    ],
+    "tab_dispatch_to_present_ms": [
+      7,
+      7,
+      6,
+      6,
+      6,
+      5,
+      5,
+      6,
+      7,
+      6,
+      6,
+      6,
+      6,
+      13,
+      6,
+      8,
+      6,
+      5,
+      5,
+      6,
+      5,
+      5,
+      5,
+      5,
+      9,
+      5,
+      6,
+      6,
+      5,
+      5
+    ]
+  },
+  "candidate_changes": [
+    "10e464cb4",
+    "b827d37b2",
+    "46cda6002"
+  ],
+  "notes": [
+    "Candidate also includes env-gated lifecycle memory instrumentation.",
+    "One warm matched pair; no claims about driver-independent savings or physical input latency.",
+    "Median 6 ms both; observed 30-sample p95 baseline 6 ms, candidate 8 ms."
+  ]
+}
