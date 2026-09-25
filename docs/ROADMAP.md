@@ -36,17 +36,22 @@ Remaining before the flip:
 
 ## Settings window redesign
 
-- [ ] Rebuild the settings window to be easy to use, visually polished,
+- [x] Rebuild the settings window to be easy to use, visually polished,
       and modern, with a coherent Windows-native design rather than a
       small collection of controls.
-- [ ] Add clear category navigation, search, readable descriptions, and
+- [x] Add clear category navigation, search, readable descriptions, and
       visible distinctions between base settings and profile overrides.
-- [ ] Design consistent typography, spacing, colors, and controls for
+- [x] Design consistent typography, spacing, colors, and controls for
       light/dark themes and different display scales.
-- [ ] Provide keyboard navigation, accessible control names and focus
+- [x] Provide keyboard navigation, accessible control names and focus
       states, useful validation, and clear save/reset feedback.
-- [ ] Validate the design with common tasks: choosing a shell/profile,
-      changing fonts and themes, and configuring tabs, splits, and input.
+- [x] Validate font/theme and shell changes, search, reset, staged saves,
+      external edit conflicts, and light/dark layouts with the native GUI smoke test
+      (`test/windows/settings-smoke.ps1`).
+- [ ] Add direct profile editing and full terminal/theme previews. The
+      current settings window edits the base config and shows a font/cursor
+      sample; profiles remain configurable through their files.
+- [ ] Check with Narrator and mixed-DPI monitors on physical hardware.
 
 ## Session restore v2
 

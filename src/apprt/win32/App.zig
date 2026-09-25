@@ -263,16 +263,6 @@ pub fn init(
     };
     if (winapi.RegisterClassExW(&settings_class) == 0) return error.RegisterClassFailed;
 
-    // The settings window's dropdown-list popup class.
-    const dropdown_class: winapi.WNDCLASSEXW = .{
-        .style = winapi.CS_HREDRAW | winapi.CS_VREDRAW | winapi.CS_DROPSHADOW,
-        .lpfnWndProc = SettingsWindow.DropdownPopup.wndProc,
-        .hInstance = hinstance,
-        .hbrBackground = null,
-        .lpszClassName = SettingsWindow.DropdownPopup.class_name,
-    };
-    if (winapi.RegisterClassExW(&dropdown_class) == 0) return error.RegisterClassFailed;
-
     // Load our configuration
     var config = try Config.load(core_app.alloc);
     errdefer config.deinit();
@@ -872,8 +862,10 @@ pub fn run(self: *App) !void {
             // messages; DispatchMessage would drop them.
             self.handleHotkey(msg.wParam);
         } else {
-            _ = winapi.TranslateMessage(&msg);
-            _ = winapi.DispatchMessageW(&msg);
+            if (!(if (self.settings) |settings| settings.routeMessage(&msg) else false)) {
+                _ = winapi.TranslateMessage(&msg);
+                _ = winapi.DispatchMessageW(&msg);
+            }
         }
 
         // Drain whatever else is queued before ticking so one tick
@@ -889,8 +881,10 @@ pub fn run(self: *App) !void {
                 self.handleHotkey(msg.wParam);
                 continue;
             }
-            _ = winapi.TranslateMessage(&msg);
-            _ = winapi.DispatchMessageW(&msg);
+            if (!(if (self.settings) |settings| settings.routeMessage(&msg) else false)) {
+                _ = winapi.TranslateMessage(&msg);
+                _ = winapi.DispatchMessageW(&msg);
+            }
         }
 
         // Build windows for any handoffs the COM server queued. Done

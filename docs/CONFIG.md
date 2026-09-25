@@ -36,8 +36,21 @@ Other paths yuurei uses under `%LOCALAPPDATA%\ghostty\`:
 
 ## Editing and reloading
 
-- **Ctrl+,** opens the built-in settings window. It edits the config file in
-  place and applies changes live.
+- **Ctrl+,** opens the built-in settings window. Browse **Appearance**,
+  **Terminal**, **Windows & tabs**, or **Input**, or search across all four.
+  Edits stay in the window until **Save changes** (**Ctrl+S**). Saving writes
+  the config file and reloads yuurei.
+- **Reset** removes that setting from the base config when you save.
+  **Revert** discards pending edits and rereads the file. If an editor changes
+  the file while settings is open, saving reports a conflict; use Revert
+  to reload before reapplying your edits.
+- Settings edits the **base configuration**. Profile overrides keep taking
+  precedence; edit those through [profile files](PROFILES.md). **Open config
+  file** opens the base file in Notepad for options not exposed in the UI.
+- **Ctrl+F** focuses search, **Tab/Shift+Tab** moves between controls, and
+  **Escape** clears a search or closes settings (with a prompt for unsaved
+  edits). Use the mouse wheel or **Previous/Next** to browse longer lists.
+  The window resizes and follows the configured light/dark interface theme.
 - Or edit the file with any editor and press **Ctrl+Shift+,**
   (`reload_config`), or run *Reload configuration* from the command palette
   (**Ctrl+Shift+P**).

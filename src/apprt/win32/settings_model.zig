@@ -40,9 +40,36 @@ pub const fields = [_]Field{
     .{ .key = "tab-inherit-working-directory", .title = "New tabs keep the folder", .description = "Start new tabs in the current terminal's directory.", .category = .windows, .kind = .toggle },
     .{ .key = "split-inherit-working-directory", .title = "New splits keep the folder", .description = "Start new panes in the current terminal's directory.", .category = .windows, .kind = .toggle },
     .{ .key = "mouse-hide-while-typing", .title = "Hide pointer while typing", .description = "Move the mouse to bring the pointer back.", .category = .input, .kind = .toggle },
-    .{ .key = "copy-on-select", .title = "Copy selected text", .description = "Copy selections directly to the Windows clipboard.", .category = .input, .kind = .choice, .choices = &.{ "false", "clipboard" } },
+    .{ .key = "copy-on-select", .title = "Copy selected text", .description = "Copy selections directly to the Windows clipboard.", .category = .input, .kind = .choice, .choices = &.{ "none", "clipboard" } },
     .{ .key = "win32-input-mode", .title = "Windows keyboard compatibility", .description = "Preserve modifiers such as Shift+Enter in console apps.", .category = .input, .kind = .toggle, .restart = true },
 };
+
+pub fn choiceLabel(index: usize, raw: []const u8) []const u8 {
+    const key = fields[index].key;
+    if (std.mem.eql(u8, key, "confirm-close-surface")) {
+        if (std.mem.eql(u8, raw, "true")) return "Running processes";
+        if (std.mem.eql(u8, raw, "false")) return "Never";
+        if (std.mem.eql(u8, raw, "always")) return "Always";
+    }
+    const pairs = .{
+        .{ "", "Use default" },                    .{ "true", "On" },                   .{ "false", "Off" },
+        .{ "none", "Off" },                        .{ "clipboard", "To clipboard" },    .{ "auto", "Automatic" },
+        .{ "system", "Follow Windows" },           .{ "dark", "Dark" },                 .{ "light", "Light" },
+        .{ "ghostty", "Follow Windows (legacy)" }, .{ "block", "Block" },               .{ "bar", "Bar" },
+        .{ "underline", "Underline" },             .{ "block_hollow", "Hollow block" },
+    };
+    inline for (pairs) |pair| {
+        if (std.mem.eql(u8, raw, pair[0])) return pair[1];
+    }
+    return raw;
+}
+
+pub fn choiceValue(index: usize, label: []const u8) []const u8 {
+    for (fields[index].choices) |v| {
+        if (std.ascii.eqlIgnoreCase(label, choiceLabel(index, v))) return v;
+    }
+    return label;
+}
 
 pub fn matches(field: Field, query: []const u8) bool {
     var words = std.mem.tokenizeAny(u8, query, " \t");
@@ -215,6 +242,7 @@ test "windows settings choices use supported config values" {
     for (fields, 0..) |field, i| {
         for (field.choices) |choice| {
             if (choice.len > 0) try validate(std.testing.allocator, i, choice);
+            try std.testing.expectEqualStrings(choice, choiceValue(i, choiceLabel(i, choice)));
         }
         if (field.kind == .toggle) {
             try validate(std.testing.allocator, i, "true");
