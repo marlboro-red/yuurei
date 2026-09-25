@@ -167,7 +167,7 @@ pub fn threadEnter(
 
     // Start our read thread
     const read_thread = try std.Thread.spawn(
-        .{},
+        if (builtin.os.tag == .windows) windows.worker_thread_config else .{},
         if (builtin.os.tag == .windows) ReadThread.threadMainWindows else ReadThread.threadMainPosix,
         .{ pty_fds.read, io, pipe[0], reader_handoff },
     );

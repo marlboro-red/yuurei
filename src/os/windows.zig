@@ -1,6 +1,13 @@
 const std = @import("std");
 const windows = std.os.windows;
 
+/// Zig 0.16 commits the requested stack size on Windows rather than only
+/// reserving address space. Its 16 MiB default costs 48 MiB for a surface's
+/// renderer, I/O dispatcher, and reader. Keep a conservative 4 MiB per worker.
+pub const worker_thread_config: std.Thread.SpawnConfig = .{
+    .stack_size = 4 * 1024 * 1024,
+};
+
 // NOTE: The Windows part of the Zig stdlib is currently in the process of
 // having most of its features removed, with the ultimate goal of switching to
 // serve as a support for higher-level functionality offered in places like

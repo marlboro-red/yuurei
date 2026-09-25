@@ -746,7 +746,7 @@ pub fn init(
 
     // Start our renderer thread
     self.renderer_thr = try std.Thread.spawn(
-        .{},
+        if (builtin.os.tag == .windows) internal_os.windows.worker_thread_config else .{},
         rendererpkg.Thread.threadMain,
         .{&self.renderer_thread},
     );
@@ -754,7 +754,7 @@ pub fn init(
 
     // Start our IO thread
     self.io_thr = try std.Thread.spawn(
-        .{},
+        if (builtin.os.tag == .windows) internal_os.windows.worker_thread_config else .{},
         termio.Thread.threadMain,
         .{ &self.io_thread, &self.io },
     );

@@ -359,7 +359,7 @@ pub fn init(
     // `self` is stable from here (there is one App per process, in
     // caller-owned memory), so the prewarm thread can hold it.
     self.prewarm_thread = std.Thread.spawn(
-        .{},
+        @import("../../os/windows.zig").worker_thread_config,
         prewarmThreadMain,
         .{self},
     ) catch |err| thr: {
@@ -647,7 +647,7 @@ fn startWslScan(self: *App) void {
     if (self.wsl_result) |*l| l.deinit();
     self.wsl_result = null;
     self.wsl_ready.store(false, .release);
-    self.wsl_thread = std.Thread.spawn(.{}, wslScanMain, .{self}) catch null;
+    self.wsl_thread = std.Thread.spawn(@import("../../os/windows.zig").worker_thread_config, wslScanMain, .{self}) catch null;
 }
 
 fn wslScanMain(self: *App) void {

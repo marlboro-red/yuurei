@@ -2,9 +2,11 @@ param(
     [string]$Executable = "$PSScriptRoot/../../zig-out/bin/ghostty.exe",
     [string]$Artifacts = "$env:TEMP/yuurei-settings-smoke",
     [switch]$KeepOpen,
-    [switch]$RenderingChecks
+    [switch]$RenderingChecks,
+    [switch]$GraphicsStress
 )
 $ErrorActionPreference = 'Stop'
+if ($GraphicsStress) { $RenderingChecks = $true }
 Add-Type -AssemblyName System.Drawing
 Add-Type @'
 using System;
@@ -113,6 +115,17 @@ $initial = "# GUI smoke test`nkeybind = f12=open_config`nwindow-theme = dark`nfo
 if ($RenderingChecks) {
     $initial += "command = cmd.exe /Q /K echo YUUREI RENDER CHECK`nkeybind = f10=new_tab`nkeybind = f9=close_surface`nkeybind = f8=new_split:right`nkeybind = f11=inspector:toggle`n"
 }
+if ($GraphicsStress) {
+    $bulk = Join-Path $isolation 'bulk.vt'
+    $done = Join-Path $isolation 'burst.done'
+    $writer = [IO.StreamWriter]::new($bulk, $false, [Text.UTF8Encoding]::new($false))
+    try {
+        for ($i=0; $i -lt 20000; $i++) { $writer.WriteLine("$([char]27)[32m$i 日本語 Ελληνικά 👻 build output$([char]27)[0m") }
+        $writer.WriteLine('YUUREI BURST COMPLETE')
+    } finally { $writer.Dispose() }
+    $command = ('chcp 65001 >nul & type "{0}" & echo done>"{1}"' -f $bulk,$done).Replace('\','\\')
+    $initial += "keybind = f7=reload_config`nkeybind = f6=next_tab`nkeybind = f5=text:$command\r`n"
+}
 [IO.File]::WriteAllText($config, $initial)
 $script:appProcess = Start-Process -FilePath (Resolve-Path $Executable) -PassThru -WindowStyle Hidden -Environment @{ XDG_CONFIG_HOME = $isolation; LOCALAPPDATA = $isolation } -RedirectStandardError (Join-Path $isolation 'stderr.log')
 try {
@@ -135,6 +148,45 @@ try {
         Capture 'render-inspector' -Window $inspector -Desktop
         [void][SettingsNative]::PostMessage($inspector, 0x10, 0, 0)
         Start-Sleep -Milliseconds 150
+    }
+    if ($GraphicsStress) {
+        $shader = Join-Path $isolation 'stress.glsl'
+        $source = [Text.StringBuilder]::new("float f0(vec2 p) { return p.x; }`n")
+        for ($i=1; $i -le 128; $i++) { [void]$source.AppendLine("float f$i(vec2 p) { return f$($i-1)(p)*0.999+0.001; }") }
+        [void]$source.AppendLine('void mainImage(out vec4 color, in vec2 coord) { color = texture(iChannel0, coord/iResolution.xy) + vec4(f128(coord)*0.000001); }')
+        [IO.File]::WriteAllText($shader,$source.ToString())
+        [IO.File]::WriteAllText($config,$initial+"custom-shader = $($shader.Replace('\','/'))`ncustom-shader-animation = false`n")
+        for ($i=0; $i -lt 7; $i++) {
+            [void][SettingsNative]::PostMessage($terminal,0x100,0x79,0)
+            Start-Sleep -Milliseconds 350
+        }
+        for ($i=0; $i -lt 3; $i++) {
+            [void][SettingsNative]::PostMessage($terminal,0x100,0x77,0)
+            Start-Sleep -Milliseconds 350
+        }
+        for ($i=0; $i -lt 10; $i++) {
+            [void][SettingsNative]::PostMessage($terminal,0x100,0x76,0)
+            Start-Sleep -Milliseconds 500
+            [void][SettingsNative]::PostMessage($terminal,0x100,0x75,0)
+            Start-Sleep -Milliseconds 250
+            Assert (!$script:appProcess.HasExited) 'Application exited during shader reload and tab switching'
+        }
+        [void][SettingsNative]::PostMessage($terminal,0x100,0x74,0)
+        for ($i=0; $i -lt 300 -and !(Test-Path -LiteralPath $done); $i++) {
+            Start-Sleep -Milliseconds 100
+            Assert (!$script:appProcess.HasExited) 'Application exited during bulk output'
+        }
+        Assert (Test-Path -LiteralPath $done) 'Bulk-output command did not finish'
+        Start-Sleep -Seconds 1
+        Capture 'graphics-stress' -Window $terminal -Desktop
+        for ($i=0; $i -lt 10; $i++) {
+            [void][SettingsNative]::PostMessage($terminal,0x100,0x78,0)
+            Start-Sleep -Milliseconds 250
+        }
+        [IO.File]::WriteAllText($config,$initial)
+        [void][SettingsNative]::PostMessage($terminal,0x100,0x76,0)
+        Start-Sleep -Milliseconds 500
+        Assert (!$script:appProcess.HasExited) 'Application exited while closing stress surfaces'
     }
     [void][SettingsNative]::PostMessage($terminal, 0x100, 0x7B, 0x00580001)
     $script:settings = Wait-Window 'ghostty-settings'
