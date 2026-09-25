@@ -34,10 +34,29 @@ Remaining before the flip:
 - [ ] IME is implemented to the imm32 contract but still needs
       verification by a real CJK user.
 
+## Settings window redesign
+
+- [ ] Rebuild the settings window to be easy to use, visually polished,
+      and modern, with a coherent Windows-native design rather than a
+      small collection of controls.
+- [ ] Add clear category navigation, search, readable descriptions, and
+      visible distinctions between base settings and profile overrides.
+- [ ] Design consistent typography, spacing, colors, and controls for
+      light/dark themes and different display scales.
+- [ ] Provide keyboard navigation, accessible control names and focus
+      states, useful validation, and clear save/reset feedback.
+- [ ] Validate the design with common tasks: choosing a shell/profile,
+      changing fonts and themes, and configuring tabs, splits, and input.
+
 ## Session restore v2
 
 - [ ] Record splits and window geometry (a tab currently restores as its
       focused pane; windows restore at default size/position).
+
+Multiplexer-style workspaces and live detach/reattach are researched in
+[`MULTIPLEXER_RESEARCH.md`](MULTIPLEXER_RESEARCH.md). The proposed order is
+workspace/layout support, modal pane controls, then a separate process
+owning persistent sessions. This remains a proposal, not shipped behavior.
 
 ## Rendering / presentation
 
@@ -78,8 +97,6 @@ actually hits the gap:
 - Jump lists; WinRT toasts (both want package identity we don't have by
   design — GitHub-only, unpackaged)
 - Search: case-sensitivity and regex toggles
-- Settings window covers a handful of the ~190 options by design; grow
-  it by request only
 - `window-theme = ghostty` (match terminal background) — currently falls
   back to the OS theme
 - Remaining unimplemented apprt actions (log as `unimplemented action=`
