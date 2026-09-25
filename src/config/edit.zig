@@ -48,16 +48,18 @@ pub fn openPath(alloc_gpa: Allocator) ![:0]const u8 {
         }
 
         // Try to create file and go on if it already exists
-        _ = std.Io.Dir.createFileAbsolute(
+        if (std.Io.Dir.createFileAbsolute(
             global.io(),
             config_path.name,
             .{ .exclusive = true },
-        ) catch |err| {
+        )) |file| {
+            file.close(global.io());
+        } else |err| {
             switch (err) {
                 error.PathAlreadyExists => {},
                 else => return err,
             }
-        };
+        }
     }
 
     return try alloc_gpa.dupeZ(u8, config_path.name);
