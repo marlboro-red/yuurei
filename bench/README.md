@@ -94,8 +94,10 @@ and records corpus hashes and raw wall-time samples. Do not run benchmarks
 alongside builds or other benchmarks. Full-process times include startup and
 file I/O; the compression `noop` case provides a setup comparison. Run
 `+scrollback-compression --mode=report --data=<corpus>` before interpreting
-compression timings: runtime compression currently reports zero compressed
-pages on Windows because retained-mapping reclamation is unsupported there.
+compression timings. Current upstream supports retained-mapping reclamation
+on 64-bit Windows through `DiscardVirtualMemory`. This can reduce resident
+memory while retaining the mapping's private commit charge; inspect both
+working set and private bytes instead of treating them as interchangeable.
 
 `+terminal-stream --chunk-size=1024` matches the Windows read-buffer ceiling;
 the default is 65536. Differences include file-read overhead, so they do not
@@ -104,3 +106,13 @@ by themselves establish an end-to-end ConPTY batching benefit.
 With `GHOSTTY_PERF_TRACE=1`, native I/O logs separate parsing from mutex wait
 time. Shaping logs report cache hits, misses, and evictions; DXGI logs report
 frame-wait failures and timeouts. Keep tracing off for ordinary timing runs.
+
+## Windows resource lifecycle
+
+Run `pwsh -NoProfile -File bench/resources.ps1 -Cycles 20` against a ReleaseFast
+build. It uses an isolated config and reports one/eight tabs, repeated tab
+closure, normal shell exits, settings and inspector churn, and minimized
+windows. CPU is expressed as a percentage of one core. The printed artifact
+directory contains raw JSON and startup traces. Surface counts are checked
+before accepting closure measurements. Run serially with other benchmarks;
+its measurements exclude child processes and dedicated GPU allocations.

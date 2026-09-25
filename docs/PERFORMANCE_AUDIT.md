@@ -1,5 +1,8 @@
 # Performance audit follow-through
 
+For the post-upstream-merge Windows audit, see
+[September 26, 2026](PERFORMANCE_AUDIT_2026-09-26.md).
+
 September 7, 2026. Baseline: `75945c729`. Windows x64, Zig 0.16.0,
 ReleaseFast. Changes are split into local commits; nothing was pushed.
 

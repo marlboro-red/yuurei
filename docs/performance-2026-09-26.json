@@ -1,0 +1,444 @@
+{
+  "post_merge": {
+    "startup_window_ms": 63.6498,
+    "cycles": 20,
+    "samples": [
+      {
+        "phase": "one-tab",
+        "private_mib": 201.74,
+        "working_mib": 73.44,
+        "handles": 357,
+        "threads": 14,
+        "gdi": 25,
+        "user": 23,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "eight-tabs",
+        "private_mib": 1112.25,
+        "working_mib": 229.57,
+        "handles": 673,
+        "threads": 42,
+        "gdi": 39,
+        "user": 65,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "after-eight-tabs",
+        "private_mib": 256.01,
+        "working_mib": 95.55,
+        "handles": 372,
+        "threads": 14,
+        "gdi": 25,
+        "user": 23,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "after-tab-cycles",
+        "private_mib": 227.09,
+        "working_mib": 98.86,
+        "handles": 410,
+        "threads": 13,
+        "gdi": 25,
+        "user": 23,
+        "cpu_one_core_percent": 0.312
+      },
+      {
+        "phase": "after-settings-cycles",
+        "private_mib": 222.56,
+        "working_mib": 96.78,
+        "handles": 424,
+        "threads": 13,
+        "gdi": 32,
+        "user": 32,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "after-inspector-cycles",
+        "private_mib": 245.08,
+        "working_mib": 108.51,
+        "handles": 443,
+        "threads": 13,
+        "gdi": 32,
+        "user": 32,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "minimized",
+        "private_mib": 243.98,
+        "working_mib": 107.64,
+        "handles": 443,
+        "threads": 13,
+        "gdi": 32,
+        "user": 32,
+        "cpu_one_core_percent": 0.0
+      }
+    ],
+    "binary_sha256": "c5057ea830c6819e6119297251fbd13841bced853d398ef6f23a807885c5ca3f"
+  },
+  "audit_fixes": {
+    "startup_window_ms": 98.0046,
+    "cycles": 20,
+    "samples": [
+      {
+        "phase": "one-tab",
+        "private_mib": 178.85,
+        "working_mib": 72.86,
+        "handles": 356,
+        "threads": 14,
+        "gdi": 25,
+        "user": 23,
+        "cpu_one_core_percent": 7.806
+      },
+      {
+        "phase": "eight-tabs",
+        "private_mib": 934.52,
+        "working_mib": 223.22,
+        "handles": 665,
+        "threads": 42,
+        "gdi": 39,
+        "user": 65,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "after-eight-tabs",
+        "private_mib": 251.98,
+        "working_mib": 111.32,
+        "handles": 357,
+        "threads": 14,
+        "gdi": 25,
+        "user": 23,
+        "cpu_one_core_percent": 0.623
+      },
+      {
+        "phase": "after-tab-cycles",
+        "private_mib": 200.85,
+        "working_mib": 93.73,
+        "handles": 355,
+        "threads": 13,
+        "gdi": 25,
+        "user": 23,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "after-shell-exit-cycles",
+        "private_mib": 211.53,
+        "working_mib": 93.14,
+        "handles": 355,
+        "threads": 10,
+        "gdi": 25,
+        "user": 23,
+        "cpu_one_core_percent": 0.312
+      },
+      {
+        "phase": "after-settings-cycles",
+        "private_mib": 195.61,
+        "working_mib": 91.13,
+        "handles": 369,
+        "threads": 11,
+        "gdi": 32,
+        "user": 32,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "after-inspector-cycles",
+        "private_mib": 201.26,
+        "working_mib": 102.62,
+        "handles": 388,
+        "threads": 13,
+        "gdi": 32,
+        "user": 32,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "inspector-visible",
+        "private_mib": 216.99,
+        "working_mib": 104.61,
+        "handles": 389,
+        "threads": 13,
+        "gdi": 33,
+        "user": 34,
+        "cpu_one_core_percent": 8.109
+      },
+      {
+        "phase": "inspector-minimized",
+        "private_mib": 217.15,
+        "working_mib": 106.71,
+        "handles": 413,
+        "threads": 15,
+        "gdi": 33,
+        "user": 35,
+        "cpu_one_core_percent": 0.936
+      },
+      {
+        "phase": "minimized",
+        "private_mib": 200.48,
+        "working_mib": 104.0,
+        "handles": 412,
+        "threads": 15,
+        "gdi": 32,
+        "user": 34,
+        "cpu_one_core_percent": 0.0
+      }
+    ],
+    "binary_sha256": "c1540da6208263febac5c03f424375e879b2628fed961ab284e9ef9c28fe6e00"
+  },
+  "inspector_restore_repeat": {
+    "startup_window_ms": 61.685,
+    "cycles": 1,
+    "samples": [
+      {
+        "phase": "one-tab",
+        "private_mib": 179.14,
+        "working_mib": 72.81,
+        "handles": 356,
+        "threads": 14,
+        "gdi": 25,
+        "user": 23,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "eight-tabs",
+        "private_mib": 932.64,
+        "working_mib": 223.65,
+        "handles": 665,
+        "threads": 42,
+        "gdi": 39,
+        "user": 65,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "after-eight-tabs",
+        "private_mib": 286.4,
+        "working_mib": 123.08,
+        "handles": 357,
+        "threads": 14,
+        "gdi": 25,
+        "user": 23,
+        "cpu_one_core_percent": 0.312
+      },
+      {
+        "phase": "after-tab-cycles",
+        "private_mib": 195.3,
+        "working_mib": 90.23,
+        "handles": 357,
+        "threads": 14,
+        "gdi": 25,
+        "user": 23,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "after-shell-exit-cycles",
+        "private_mib": 221.71,
+        "working_mib": 90.19,
+        "handles": 355,
+        "threads": 13,
+        "gdi": 25,
+        "user": 23,
+        "cpu_one_core_percent": 0.312
+      },
+      {
+        "phase": "after-settings-cycles",
+        "private_mib": 189.09,
+        "working_mib": 86.0,
+        "handles": 369,
+        "threads": 13,
+        "gdi": 32,
+        "user": 32,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "after-inspector-cycles",
+        "private_mib": 190.33,
+        "working_mib": 88.78,
+        "handles": 387,
+        "threads": 13,
+        "gdi": 32,
+        "user": 32,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "inspector-visible",
+        "private_mib": 210.43,
+        "working_mib": 93.09,
+        "handles": 388,
+        "threads": 13,
+        "gdi": 33,
+        "user": 34,
+        "cpu_one_core_percent": 6.248
+      },
+      {
+        "phase": "inspector-minimized",
+        "private_mib": 209.41,
+        "working_mib": 92.08,
+        "handles": 388,
+        "threads": 13,
+        "gdi": 33,
+        "user": 33,
+        "cpu_one_core_percent": 0.312
+      },
+      {
+        "phase": "inspector-restored",
+        "private_mib": 213.35,
+        "working_mib": 96.14,
+        "handles": 388,
+        "threads": 11,
+        "gdi": 33,
+        "user": 34,
+        "cpu_one_core_percent": 5.31
+      },
+      {
+        "phase": "minimized",
+        "private_mib": 192.67,
+        "working_mib": 93.57,
+        "handles": 388,
+        "threads": 13,
+        "gdi": 32,
+        "user": 32,
+        "cpu_one_core_percent": 0.0
+      }
+    ]
+  },
+  "throughput": [
+    {
+      "binary": "candidate",
+      "corpus": "ascii",
+      "case": "stream",
+      "median_ms": 15.9167,
+      "samples_ms": [
+        16.2168,
+        15.9493,
+        15.6553,
+        15.9167,
+        15.7333
+      ],
+      "sha256": "6305018073718BCCAFEB50688F3AB8AD35A1F1EF21948677F24023A23ED4D301"
+    },
+    {
+      "binary": "candidate",
+      "corpus": "ascii",
+      "case": "compression-noop",
+      "median_ms": 31.2053,
+      "samples_ms": [
+        31.2053,
+        30.6797,
+        31.3595,
+        31.5427,
+        30.161
+      ],
+      "sha256": "6305018073718BCCAFEB50688F3AB8AD35A1F1EF21948677F24023A23ED4D301"
+    },
+    {
+      "binary": "candidate",
+      "corpus": "ascii",
+      "case": "compression-incremental",
+      "median_ms": 55.2204,
+      "samples_ms": [
+        53.2882,
+        55.235,
+        55.2204,
+        56.7096,
+        54.2118
+      ],
+      "sha256": "6305018073718BCCAFEB50688F3AB8AD35A1F1EF21948677F24023A23ED4D301"
+    },
+    {
+      "binary": "candidate",
+      "corpus": "color",
+      "case": "stream",
+      "median_ms": 44.8137,
+      "samples_ms": [
+        44.3557,
+        45.4326,
+        44.1045,
+        45.8508,
+        44.8137
+      ],
+      "sha256": "8F8DB8034A498264019FB4C1228AC66799E9B942B6318619936DC4743C5ACF2B"
+    },
+    {
+      "binary": "candidate",
+      "corpus": "color",
+      "case": "compression-noop",
+      "median_ms": 64.3617,
+      "samples_ms": [
+        65.6452,
+        64.7488,
+        64.1684,
+        64.3617,
+        63.8841
+      ],
+      "sha256": "8F8DB8034A498264019FB4C1228AC66799E9B942B6318619936DC4743C5ACF2B"
+    },
+    {
+      "binary": "candidate",
+      "corpus": "color",
+      "case": "compression-incremental",
+      "median_ms": 86.9024,
+      "samples_ms": [
+        93.9293,
+        87.1203,
+        86.9024,
+        86.5578,
+        86.4138
+      ],
+      "sha256": "8F8DB8034A498264019FB4C1228AC66799E9B942B6318619936DC4743C5ACF2B"
+    },
+    {
+      "binary": "candidate",
+      "corpus": "unicode",
+      "case": "stream",
+      "median_ms": 29.3824,
+      "samples_ms": [
+        29.3472,
+        29.3824,
+        29.6675,
+        29.4732,
+        29.1801
+      ],
+      "sha256": "27800A6E16C3F37ABB8B5258088E524469C94ADA63A077309FD7EB77B3FDDC07"
+    },
+    {
+      "binary": "candidate",
+      "corpus": "unicode",
+      "case": "compression-noop",
+      "median_ms": 49.4817,
+      "samples_ms": [
+        49.7641,
+        50.0126,
+        49.4817,
+        49.3303,
+        48.5963
+      ],
+      "sha256": "27800A6E16C3F37ABB8B5258088E524469C94ADA63A077309FD7EB77B3FDDC07"
+    },
+    {
+      "binary": "candidate",
+      "corpus": "unicode",
+      "case": "compression-incremental",
+      "median_ms": 73.4612,
+      "samples_ms": [
+        74.6379,
+        72.9273,
+        73.4114,
+        73.4612,
+        75.554
+      ],
+      "sha256": "27800A6E16C3F37ABB8B5258088E524469C94ADA63A077309FD7EB77B3FDDC07"
+    }
+  ],
+  "throughput_method": {
+    "lines_per_corpus": 100000,
+    "warmups": 1,
+    "runs": 5,
+    "columns": 120,
+    "rows": 80,
+    "chunk_size": 65536,
+    "max_scrollback": 100000000,
+    "corpus_bytes": {
+      "ascii": 7800000,
+      "color": 6000000,
+      "unicode": 9600000
+    }
+  }
+}
