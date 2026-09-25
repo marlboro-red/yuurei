@@ -4,8 +4,8 @@ pub const OpenGL = @This();
 const std = @import("std");
 const global = @import("../global.zig");
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
 const gl = @import("opengl");
+const egl = gl.egl;
 const shadertoy = @import("shadertoy.zig");
 const apprt = @import("../apprt.zig");
 const font = @import("../font/main.zig");
@@ -13,6 +13,7 @@ const configpkg = @import("../config.zig");
 const perf = @import("../perf.zig");
 const rendererpkg = @import("../renderer.zig");
 const Renderer = rendererpkg.GenericRenderer(OpenGL);
+const Dmabuf = @import("Dmabuf.zig");
 
 pub const GraphicsAPI = OpenGL;
 pub const Target = @import("opengl/Target.zig");
@@ -29,9 +30,9 @@ pub const custom_shader_target: shadertoy.Target = .glsl;
 // The fragCoord for OpenGL shaders is +Y = up.
 pub const custom_shader_y_is_down = false;
 
-/// Because OpenGL's frame completion is always
-/// sync, we have no need for multi-buffering.
-pub const swap_chain_count = 1;
+/// Triple-buffering gives the GPU room to pipeline renders without
+/// having to wait on the apprt consuming previous frames.
+pub const swap_chain_count = 3;
 
 const log = std.log.scoped(.opengl);
 
@@ -44,31 +45,92 @@ alloc: std.mem.Allocator,
 /// Alpha blending mode
 blending: configpkg.Config.AlphaBlending,
 
-/// Whether presents are throttled to the display refresh
-/// (window-vsync; used by the win32 flip-model path).
 vsync: bool,
-
-/// Whether the win32 flip-model presentation path is enabled
-/// (windows-flip-model; the classic SwapBuffers path is the default
-/// for its measured typing latency).
 flip_model: bool,
-
-/// The most recently presented target, in case we need to present it again.
 last_target: ?Target = null,
 
-/// NOTE: This is an error{}!OpenGL instead of just OpenGL for parity with
-///       Metal, since it needs to be fallible so does this, even though it
-///       can't actually fail.
-pub fn init(alloc: Allocator, opts: rendererpkg.Options) error{}!OpenGL {
-    return .{
+egl_display: if (apprt.runtime == apprt.win32) void else *gl.egl.Display,
+egl_context: if (apprt.runtime == apprt.win32) void else *gl.egl.Context,
+
+pub fn init(alloc: Allocator, opts: rendererpkg.Options) !OpenGL {
+    if (comptime apprt.runtime == apprt.win32) return .{
         .alloc = alloc,
         .blending = opts.config.blending,
         .vsync = opts.config.vsync,
         .flip_model = opts.config.windows_flip_model,
+        .egl_display = {},
+        .egl_context = {},
+    };
+    try egl.load();
+
+    const display: *egl.Display = try .initPlatform(
+        egl.c.EGL_PLATFORM_SURFACELESS_MESA,
+        egl.c.EGL_DEFAULT_DISPLAY,
+        null,
+    );
+
+    log.info("EGL vendor={s}", .{display.queryString(.vendor) orelse "(unknown)"});
+    log.info("EGL extensions={s}", .{display.queryString(.extensions) orelse "(unknown)"});
+
+    try egl.bindApi(egl.c.EGL_OPENGL_API);
+
+    // Choose a config. We need a config that is renderable with
+    // OpenGL and a RGBA8 color buffer.
+    const config = egl.Config.choose(display, &.{
+        // EGL_SURFACE_TYPE defaults to EGL_WINDOW_BIT even though
+        // we are rendering exclusively through surfaceless mode.
+        // This is no problem on Mesa but we need to specify this
+        // explicitly for proprietary Nvidia drivers.
+        egl.c.EGL_SURFACE_TYPE,    0,
+        egl.c.EGL_RENDERABLE_TYPE, egl.c.EGL_OPENGL_BIT,
+        egl.c.EGL_RED_SIZE,        8,
+        egl.c.EGL_GREEN_SIZE,      8,
+        egl.c.EGL_BLUE_SIZE,       8,
+        egl.c.EGL_ALPHA_SIZE,      8,
+    }) catch |err| {
+        log.warn("failed to choose config err={}", .{err});
+        return err;
+    };
+
+    // Create our context.
+    const context = egl.Context.create(display, config, null, &.{
+        egl.c.EGL_CONTEXT_MAJOR_VERSION,       MIN_VERSION_MAJOR,
+        egl.c.EGL_CONTEXT_MINOR_VERSION,       MIN_VERSION_MINOR,
+        egl.c.EGL_CONTEXT_OPENGL_PROFILE_MASK, egl.c.EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
+    }) catch |err| {
+        log.warn("failed to create EGL context err={}", .{err});
+        return err;
+    };
+    errdefer context.destroy(display) catch {};
+
+    display.makeCurrent(null, null, context) catch |err| {
+        log.warn("failed to make EGL context current err={}", .{err});
+        return err;
+    };
+
+    // Release current so that the main thread
+    // doesn't hold onto the GL context forever.
+    defer display.releaseCurrent();
+
+    return .{
+        .alloc = alloc,
+        .blending = opts.config.blending,
+        .vsync = opts.config.vsync,
+        .flip_model = false,
+        .egl_display = display,
+        .egl_context = context,
     };
 }
 
 pub fn deinit(self: *OpenGL) void {
+    if (comptime apprt.runtime != apprt.win32) {
+        self.egl_display.releaseCurrent();
+        self.egl_context.destroy(self.egl_display) catch {};
+    }
+
+    // Do not destroy the EGL display here as
+    // it is shared across the entire process.
+    // It will get automatically torn down by the OS.
     self.* = undefined;
 }
 
@@ -171,231 +233,80 @@ fn prepareContext(getProcAddress: anytype) !void {
     try gl.enable(gl.c.GL_FRAMEBUFFER_SRGB);
 }
 
-/// This is called early right after surface creation.
-pub fn surfaceInit(surface: *apprt.Surface) !void {
-    switch (apprt.runtime) {
-        else => @compileError("unsupported app runtime for OpenGL"),
-
-        // GTK uses global OpenGL context so we load from null.
-        apprt.gtk,
-        => try prepareContext(null),
-
-        apprt.embedded => {
-            // TODO(mitchellh): this does nothing today to allow libghostty
-            // to compile for OpenGL targets but libghostty is strictly
-            // broken for rendering on this platforms.
-        },
-
-        // The WGL context was created with the window; make it current
-        // on this (main) thread for any GL the core does during surface
-        // init. finalizeSurfaceInit releases it for the renderer thread.
-        apprt.win32 => {
-            try surface.glMakeCurrent();
-            try prepareContext(&apprt.win32.winapi.glGetProcAddress);
-        },
-    }
-
-    // These are very noisy so this is commented, but easy to uncomment
-    // whenever we need to check the OpenGL extension list
-    // if (builtin.mode == .Debug) {
-    //     var ext_iter = try gl.ext.iterator();
-    //     while (try ext_iter.next()) |ext| {
-    //         log.debug("OpenGL extension available name={s}", .{ext});
-    //     }
-    // }
-}
-
-/// This is called just prior to spinning up the renderer
-/// thread for final main thread setup requirements.
-pub fn finalizeSurfaceInit(self: *const OpenGL, surface: *apprt.Surface) !void {
-    _ = self;
-    _ = surface;
-
-    // Release the WGL context from the main thread so the renderer
-    // thread can make it current in threadEnter.
+/// Callback called by renderer.Thread when it begins. Called on the render
+/// thread. The EGL context was created at `init` time on the main thread;
+/// here we (re)bind it to this thread and load the thread-local glad
+/// function pointers so all subsequent GL work on this thread is valid.
+pub fn threadEnter(self: *OpenGL, surface: *apprt.Surface) !void {
     if (comptime apprt.runtime == apprt.win32) {
-        apprt.win32.Surface.glReleaseCurrent();
-    }
-}
+        try surface.glMakeCurrent();
+        try prepareContext(&apprt.win32.winapi.glGetProcAddress);
 
-/// Callback called by renderer.Thread when it begins.
-pub fn threadEnter(self: *const OpenGL, surface: *apprt.Surface) !void {
-    switch (apprt.runtime) {
-        else => @compileError("unsupported app runtime for OpenGL"),
-
-        apprt.gtk => {
-            // GTK doesn't support threaded OpenGL operations as far as I can
-            // tell, so we use the renderer thread to setup all the state
-            // but then do the actual draws and texture syncs and all that
-            // on the main thread. As such, we don't do anything here.
-        },
-
-        apprt.embedded => {
-            // TODO(mitchellh): this does nothing today to allow libghostty
-            // to compile for OpenGL targets but libghostty is strictly
-            // broken for rendering on this platforms.
-        },
-
-        // Take the WGL context on the renderer thread; all drawing
-        // happens here (no must_draw_from_app_thread). The glad
-        // bindings are threadlocal so they must be reloaded.
-        apprt.win32 => {
-            try surface.glMakeCurrent();
-            try prepareContext(&apprt.win32.winapi.glGetProcAddress);
-
-            // Two presentation paths, selected by windows-flip-model:
-            //
-            // Classic (default): SwapBuffers into the window's
-            // redirected surface. Camera-measured typing latency
-            // favors this class of presentation (GDI conhost is the
-            // fastest-measured Windows terminal; all flip/GPU
-            // terminals measured ~2x slower) and our own PresentMon
-            // numbers agree. Always vsync-throttled: sporadic typing
-            // presents never block on the interval anyway, sustained
-            // bursts throttle at the driver, and unthrottled
-            // SwapBuffers once ran the GPU hot enough to trigger
-            // driver timeouts (LiveKernelEvent 141).
-            //
-            // Flip-model (opt-in): DXGI swapchain on a DComp visual
-            // (the Windows Terminal architecture), eligible for
-            // hardware-overlay promotion, and the foundation for
-            // future per-pixel transparency.
-            if (self.flip_model and initPresenter(surface)) {
-                log.info("flip-model presentation active", .{});
-            } else {
-                if (!apprt.win32.winapi.setSwapInterval(1)) {
-                    log.warn("wglSwapIntervalEXT unavailable; presentation unthrottled", .{});
-                }
+        // Two presentation paths, selected by windows-flip-model:
+        //
+        // Classic (default): SwapBuffers into the window's
+        // redirected surface. Camera-measured typing latency
+        // favors this class of presentation (GDI conhost is the
+        // fastest-measured Windows terminal; all flip/GPU
+        // terminals measured ~2x slower) and our own PresentMon
+        // numbers agree. Always vsync-throttled: sporadic typing
+        // presents never block on the interval anyway, sustained
+        // bursts throttle at the driver, and unthrottled
+        // SwapBuffers once ran the GPU hot enough to trigger
+        // driver timeouts (LiveKernelEvent 141).
+        //
+        // Flip-model (opt-in): DXGI swapchain on a DComp visual
+        // (the Windows Terminal architecture), eligible for
+        // hardware-overlay promotion, and the foundation for
+        // future per-pixel transparency.
+        if (self.flip_model and initPresenter(surface)) {
+            log.info("flip-model presentation active", .{});
+        } else {
+            if (!apprt.win32.winapi.setSwapInterval(1)) {
+                log.warn("wglSwapIntervalEXT unavailable; presentation unthrottled", .{});
             }
-        },
+        }
+        return;
     }
+    try self.egl_display.makeCurrent(null, null, self.egl_context);
+    // Load our function pointers for this thread's threadlocal.
+    try prepareContext(&gl.egl.getProcAddress);
 }
 
-/// Callback called by renderer.Thread when it exits.
-pub fn threadExit(self: *const OpenGL) void {
+/// Callback called by renderer.Thread when it exits. Called on the render
+/// thread; unbinds the context from this thread so it can be destroyed on
+/// the main thread.
+pub fn threadExit(self: *OpenGL) void {
+    if (comptime apprt.runtime == apprt.win32) {
+        if (currentWin32Surface()) |surface| deinitPresenter(surface);
+        apprt.win32.Surface.glReleaseCurrent();
+        gl.glad.unload();
+        return;
+    }
+    self.egl_display.releaseCurrent();
+    gl.glad.unload();
+}
+
+/// Get the current size of the runtime surface.
+pub fn surfaceSize(self: *const OpenGL) !struct { width: u32, height: u32 } {
     _ = self;
-
-    switch (apprt.runtime) {
-        else => @compileError("unsupported app runtime for OpenGL"),
-
-        apprt.gtk => {
-            // We don't need to do any unloading for GTK because we may
-            // be sharing the global bindings with other windows.
-        },
-
-        apprt.embedded => {
-            // TODO: see threadEnter
-        },
-
-        apprt.win32 => {
-            // Tear down flip-model state while the context is still
-            // current (the interop handles are bound to it).
-            if (currentWin32Surface()) |surface| deinitPresenter(surface);
-            apprt.win32.Surface.glReleaseCurrent();
-        },
-    }
-}
-
-/// The apprt surface owning the current WGL context, recovered from
-/// the host window (the renderer thread's only route back).
-fn currentWin32Surface() ?*apprt.win32.Surface {
-    const winapi = apprt.win32.winapi;
-    const hdc = winapi.wglGetCurrentDC() orelse return null;
-    const hwnd = winapi.WindowFromDC(hdc) orelse return null;
-    const ptr = winapi.GetWindowLongPtrW(hwnd, winapi.GWLP_USERDATA);
-    if (ptr == 0) return null;
-    return @ptrFromInt(@as(usize, @bitCast(ptr)));
-}
-
-/// Set up flip-model presentation for a surface: swapchain, interop,
-/// and the GL renderbuffer+FBO pair aliasing the backbuffer. Returns
-/// false (leaving the surface on the SwapBuffers path) on any failure.
-fn initPresenter(surface: *apprt.Surface) bool {
-    if (comptime apprt.runtime != apprt.win32) return false;
-    const winapi = apprt.win32.winapi;
-
-    // Escape hatch for benchmarking and driver-issue workarounds.
-    if (global.environ().getWindows(std.unicode.utf8ToUtf16LeStringLiteral("GHOSTTY_NO_FLIP")) != null) return false;
-
-    var client: winapi.RECT = undefined;
-    if (winapi.GetClientRect(surface.host, &client) == 0) return false;
-
-    var presenter = apprt.win32.Surface.dxgi.Presenter.init(
-        surface.host,
-        @intCast(@max(1, client.right - client.left)),
-        @intCast(@max(1, client.bottom - client.top)),
-    ) catch |err| {
-        // With windows-flip-model on, the host window was created with
-        // WS_EX_NOREDIRECTIONBITMAP (creation-only): SwapBuffers has no
-        // redirection surface to present into, so this fallback shows a
-        // blank window. The startup probe exercises the full presenter
-        // pipeline to make this unreachable in practice; if it fires
-        // anyway, say so loudly rather than failing silently.
-        log.err(
-            "flip-model presenter failed at runtime err={}; the SwapBuffers " ++
-                "fallback cannot display into a WS_EX_NOREDIRECTIONBITMAP host — " ++
-                "if this window is blank, unset windows-flip-model",
-            .{err},
-        );
-        return false;
+    var viewport: [4]gl.c.GLint = undefined;
+    gl.glad.context.GetIntegerv.?(gl.c.GL_VIEWPORT, &viewport);
+    return .{
+        .width = @intCast(viewport[2]),
+        .height = @intCast(viewport[3]),
     };
-
-    if (!attachBackbuffer(&presenter)) {
-        presenter.deinit();
-        return false;
-    }
-
-    surface.presenter = presenter;
-    return true;
 }
 
-fn deinitPresenter(surface: *apprt.win32.Surface) void {
-    if (surface.presenter) |*p| {
-        const ctx = gl.glad.context;
-        if (p.fbo != 0) ctx.DeleteFramebuffers.?(1, &p.fbo);
-        if (p.renderbuffer != 0) ctx.DeleteRenderbuffers.?(1, &p.renderbuffer);
-        p.deinit();
-        surface.presenter = null;
-    }
-}
-
-/// (Re)create the GL renderbuffer aliasing the swapchain backbuffer
-/// and the FBO wrapping it.
-fn attachBackbuffer(p: *apprt.win32.Surface.dxgi.Presenter) bool {
-    const ctx = gl.glad.context;
-
-    if (p.renderbuffer == 0) ctx.GenRenderbuffers.?(1, &p.renderbuffer);
-    if (p.fbo == 0) ctx.GenFramebuffers.?(1, &p.fbo);
-
-    p.acquireBackbuffer(p.renderbuffer) catch |err| {
-        log.warn("backbuffer interop failed err={}", .{err});
-        return false;
-    };
-
-    ctx.BindFramebuffer.?(gl.c.GL_FRAMEBUFFER, p.fbo);
-    ctx.FramebufferRenderbuffer.?(
-        gl.c.GL_FRAMEBUFFER,
-        gl.c.GL_COLOR_ATTACHMENT0,
-        gl.c.GL_RENDERBUFFER,
-        p.renderbuffer,
-    );
-    ctx.BindFramebuffer.?(gl.c.GL_FRAMEBUFFER, 0);
-    return true;
-}
-
-pub fn displayRealized(self: *const OpenGL) void {
+/// Set the GL viewport to cover the given size in device pixels.
+///
+/// This used to be automatically called by the GtkGLArea upon resizing,
+/// but now we need to do this manually.
+pub fn setViewport(self: *const OpenGL, width: u32, height: u32) void {
     _ = self;
-
-    switch (apprt.runtime) {
-        apprt.gtk => prepareContext(null) catch |err| {
-            log.warn(
-                "Error preparing GL context in displayRealized, err={}",
-                .{err},
-            );
-        },
-
-        else => @compileError("only GTK should be calling displayRealized"),
-    }
+    gl.viewport(0, 0, @intCast(width), @intCast(height)) catch |err| {
+        log.warn("failed to set OpenGL viewport err={}", .{err});
+    };
 }
 
 /// Actions taken before doing anything in `drawFrame`.
@@ -551,71 +462,59 @@ pub fn initShaders(
     );
 }
 
-/// Get the current size of the runtime surface.
-pub fn surfaceSize(self: *const OpenGL) !struct { width: u32, height: u32 } {
-    _ = self;
-    var viewport: [4]gl.c.GLint = undefined;
-    gl.glad.context.GetIntegerv.?(gl.c.GL_VIEWPORT, &viewport);
-    return .{
-        .width = @intCast(viewport[2]),
-        .height = @intCast(viewport[3]),
-    };
-}
-
 /// Initialize a new render target which can be presented by this API.
 pub fn initTarget(self: *const OpenGL, width: usize, height: usize) !Target {
+    _ = self;
     return Target.init(.{
-        .internal_format = if (self.blending.isLinear()) .srgba else .rgba,
         .width = width,
         .height = height,
     });
 }
 
-/// Present the provided target.
-pub fn present(self: *OpenGL, target: Target) !void {
-    // In order to present a target we blit it to the default framebuffer.
+/// Export a rendered target. Caller takes ownership
+/// of the frame and is responsible for freeing it.
+///
+/// This runs on the render thread.
+pub fn present(self: *OpenGL, target: Target) !ExportedFrame {
+    if (comptime apprt.runtime == apprt.win32) return self.presentWin32(target);
+    if (target.exportDmabuf(self.egl_display, self.egl_context)) |dmabuf| {
+        return .{ .dmabuf = dmabuf };
+    } else |_| {
+        // If DMABUFs fail, then use CPU buffers
+        return .{ .memory = .{
+            .width = @intCast(target.width),
+            .height = @intCast(target.height),
+            .pixels = try target.readPixelsAlloc(self.alloc),
+            .alloc = self.alloc,
+        } };
+    }
+}
 
-    // We disable GL_FRAMEBUFFER_SRGB while doing this blit, otherwise the
-    // values may be linearized as they're copied, but even though the draw
-    // framebuffer has a linear internal format, the values in it should be
-    // sRGB, not linear!
-    try gl.disable(gl.c.GL_FRAMEBUFFER_SRGB);
-    defer gl.enable(gl.c.GL_FRAMEBUFFER_SRGB) catch |err| {
-        log.err("Error re-enabling GL_FRAMEBUFFER_SRGB, err={}", .{err});
+/// A finished frame exported for presentation by the apprt.
+pub const ExportedFrame = if (apprt.runtime == apprt.win32) void else union(enum) {
+    dmabuf: Dmabuf,
+    memory: Memory,
+
+    /// RGBA8 pixel data with premultiplied alpha, tightly packed
+    /// (`width * 4` bytes per row), in CPU memory.
+    pub const Memory = struct {
+        width: u32,
+        height: u32,
+        pixels: []u8,
+        alloc: Allocator,
+
+        pub fn deinit(self: Memory) void {
+            self.alloc.free(self.pixels);
+        }
     };
 
-    // Bind the target for reading.
-    const fbobind = try target.framebuffer.bind(.read);
-    defer fbobind.unbind();
-
-    // Blit
-    gl.glad.context.BlitFramebuffer.?(
-        0,
-        0,
-        @intCast(target.width),
-        @intCast(target.height),
-        0,
-        0,
-        @intCast(target.width),
-        @intCast(target.height),
-        gl.c.GL_COLOR_BUFFER_BIT,
-        gl.c.GL_NEAREST,
-    );
-
-    // Keep track of this target in case we need to repeat it.
-    self.last_target = target;
-}
-
-/// Present the last presented target again.
-pub fn presentLastTarget(self: *OpenGL) !void {
-    if (self.last_target) |target| try self.present(target);
-}
-
-/// Called when the renderer released its GPU resources; the last
-/// presented target is deinited with them so we must drop our copy.
-pub fn gpuResourcesReleased(self: *OpenGL) void {
-    self.last_target = null;
-}
+    pub fn deinit(self: ExportedFrame) void {
+        switch (self) {
+            .dmabuf => |v| v.deinit(),
+            .memory => |v| v.deinit(),
+        }
+    }
+};
 
 /// Returns the options to use when constructing buffers.
 pub inline fn bufferOptions(self: OpenGL) bufferpkg.Options {
@@ -639,7 +538,7 @@ pub inline fn textureOptions(self: OpenGL) Texture.Options {
     return .{
         .format = .rgba,
         .internal_format = .srgba,
-        .target = .@"2D",
+        .target = .@"2d",
         .min_filter = .linear,
         .mag_filter = .linear,
         .wrap_s = .clamp_to_edge,
@@ -686,7 +585,7 @@ pub inline fn imageTextureOptions(
     return .{
         .format = format.toPixelFormat(),
         .internal_format = if (srgb) .srgba else .rgba,
-        .target = .@"2D",
+        .target = .@"2d",
         // TODO: Generate mipmaps for image textures and use
         //       linear_mipmap_linear filtering so that they
         //       look good even when scaled way down.
@@ -717,7 +616,7 @@ pub fn initAtlasTexture(
         .{
             .format = format,
             .internal_format = internal_format,
-            .target = .Rectangle,
+            .target = .rectangle,
             .min_filter = .nearest,
             .mag_filter = .nearest,
             .wrap_s = .clamp_to_edge,
@@ -740,4 +639,128 @@ pub inline fn beginFrame(
 ) !Frame {
     _ = self;
     return try Frame.begin(.{}, renderer, target);
+}
+
+fn currentWin32Surface() ?*apprt.win32.Surface {
+    const winapi = apprt.win32.winapi;
+    const hdc = winapi.wglGetCurrentDC() orelse return null;
+    const hwnd = winapi.WindowFromDC(hdc) orelse return null;
+    const ptr = winapi.GetWindowLongPtrW(hwnd, winapi.GWLP_USERDATA);
+    if (ptr == 0) return null;
+    return @ptrFromInt(@as(usize, @bitCast(ptr)));
+}
+
+fn initPresenter(surface: *apprt.Surface) bool {
+    if (comptime apprt.runtime != apprt.win32) return false;
+    const winapi = apprt.win32.winapi;
+
+    // Escape hatch for benchmarking and driver-issue workarounds.
+    if (global.environ().getWindows(std.unicode.utf8ToUtf16LeStringLiteral("GHOSTTY_NO_FLIP")) != null) return false;
+
+    var client: winapi.RECT = undefined;
+    if (winapi.GetClientRect(surface.host, &client) == 0) return false;
+
+    var presenter = apprt.win32.Surface.dxgi.Presenter.init(
+        surface.host,
+        @intCast(@max(1, client.right - client.left)),
+        @intCast(@max(1, client.bottom - client.top)),
+    ) catch |err| {
+        // With windows-flip-model on, the host window was created with
+        // WS_EX_NOREDIRECTIONBITMAP (creation-only): SwapBuffers has no
+        // redirection surface to present into, so this fallback shows a
+        // blank window. The startup probe exercises the full presenter
+        // pipeline to make this unreachable in practice; if it fires
+        // anyway, say so loudly rather than failing silently.
+        log.err(
+            "flip-model presenter failed at runtime err={}; the SwapBuffers " ++
+                "fallback cannot display into a WS_EX_NOREDIRECTIONBITMAP host — " ++
+                "if this window is blank, unset windows-flip-model",
+            .{err},
+        );
+        return false;
+    };
+
+    if (!attachBackbuffer(&presenter)) {
+        presenter.deinit();
+        return false;
+    }
+
+    surface.presenter = presenter;
+    return true;
+}
+
+fn deinitPresenter(surface: *apprt.win32.Surface) void {
+    if (surface.presenter) |*p| {
+        const ctx = gl.glad.context;
+        if (p.fbo != 0) ctx.DeleteFramebuffers.?(1, &p.fbo);
+        if (p.renderbuffer != 0) ctx.DeleteRenderbuffers.?(1, &p.renderbuffer);
+        p.deinit();
+        surface.presenter = null;
+    }
+}
+
+fn attachBackbuffer(p: *apprt.win32.Surface.dxgi.Presenter) bool {
+    const ctx = gl.glad.context;
+
+    if (p.renderbuffer == 0) ctx.GenRenderbuffers.?(1, &p.renderbuffer);
+    if (p.fbo == 0) ctx.GenFramebuffers.?(1, &p.fbo);
+
+    p.acquireBackbuffer(p.renderbuffer) catch |err| {
+        log.warn("backbuffer interop failed err={}", .{err});
+        return false;
+    };
+
+    ctx.BindFramebuffer.?(gl.c.GL_FRAMEBUFFER, p.fbo);
+    ctx.FramebufferRenderbuffer.?(
+        gl.c.GL_FRAMEBUFFER,
+        gl.c.GL_COLOR_ATTACHMENT0,
+        gl.c.GL_RENDERBUFFER,
+        p.renderbuffer,
+    );
+    ctx.BindFramebuffer.?(gl.c.GL_FRAMEBUFFER, 0);
+    return true;
+}
+
+pub fn presentLastTarget(self: *OpenGL) !void {
+    if (comptime apprt.runtime == apprt.win32) {
+        if (self.last_target) |target| try self.presentWin32(target);
+    }
+}
+
+pub fn gpuResourcesReleased(self: *OpenGL) void {
+    self.last_target = null;
+}
+
+fn presentWin32(self: *OpenGL, target: Target) !void {
+    // In order to present a target we blit it to the default framebuffer.
+
+    // We disable GL_FRAMEBUFFER_SRGB while doing this blit, otherwise the
+    // values may be linearized as they're copied, but even though the draw
+    // framebuffer has a linear internal format, the values in it should be
+    // sRGB, not linear!
+    try gl.disable(gl.c.GL_FRAMEBUFFER_SRGB);
+    defer gl.enable(gl.c.GL_FRAMEBUFFER_SRGB) catch |err| {
+        log.err("Error re-enabling GL_FRAMEBUFFER_SRGB, err={}", .{err});
+    };
+
+    // Bind the target for reading.
+    const fbobind = try target.framebuffer.bind(.read);
+    defer fbobind.unbind();
+
+    // Blit
+    gl.glad.context.BlitFramebuffer.?(
+        0,
+        0,
+        @intCast(target.width),
+        @intCast(target.height),
+        0,
+        0,
+        @intCast(target.width),
+        @intCast(target.height),
+        gl.c.GL_COLOR_BUFFER_BIT,
+        gl.c.GL_NEAREST,
+    );
+
+    // Keep track of this target in case we need to repeat it.
+    self.last_target = target;
 }

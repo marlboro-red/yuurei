@@ -1,7 +1,8 @@
 param(
     [string]$Executable = "$PSScriptRoot/../../zig-out/bin/ghostty.exe",
     [string]$Artifacts = "$env:TEMP/yuurei-settings-smoke",
-    [switch]$KeepOpen
+    [switch]$KeepOpen,
+    [switch]$RenderingChecks
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -78,16 +79,28 @@ function Edit([int]$Id, [string]$Value) {
     }
     Start-Sleep -Milliseconds 120
 }
-function Capture([string]$Name) {
+function Capture([string]$Name, [IntPtr]$Window = $script:settings, [switch]$Desktop) {
     [void][SettingsNative]::SetThreadDpiAwarenessContext(-4)
+    if ($Desktop) {
+        [void][SettingsNative]::ShowWindow($Window, 5)
+        [void][SettingsNative]::SetWindowPos($Window, -1, 40, 40, 1200, 800, 0)
+    }
     Start-Sleep -Milliseconds 150
     $r = New-Object SettingsNative+Rect
-    [void][SettingsNative]::GetWindowRect($script:settings, [ref]$r)
+    [void][SettingsNative]::GetWindowRect($Window, [ref]$r)
     $bitmap = [Drawing.Bitmap]::new($r.right - $r.left, $r.bottom - $r.top)
     $graphics = [Drawing.Graphics]::FromImage($bitmap)
-    $dc = $graphics.GetHdc()
-    try { [void][SettingsNative]::PrintWindow($script:settings, $dc, 2) }
-    finally { $graphics.ReleaseHdc($dc); $graphics.Dispose() }
+    if ($Desktop) {
+        try { $graphics.CopyFromScreen($r.left, $r.top, 0, 0, $bitmap.Size) }
+        finally {
+            $graphics.Dispose()
+            [void][SettingsNative]::SetWindowPos($Window, -2, 0, 0, 0, 0, 0x13)
+        }
+    } else {
+        $dc = $graphics.GetHdc()
+        try { [void][SettingsNative]::PrintWindow($Window, $dc, 2) }
+        finally { $graphics.ReleaseHdc($dc); $graphics.Dispose() }
+    }
     try { $bitmap.Save((Join-Path $Artifacts "$Name.png")) } finally { $bitmap.Dispose() }
 }
 
@@ -97,10 +110,32 @@ $configDir = Join-Path $isolation 'ghostty'
 [void](New-Item -ItemType Directory -Force -Path $configDir)
 $config = Join-Path $configDir 'config'
 $initial = "# GUI smoke test`nkeybind = f12=open_config`nwindow-theme = dark`nfont-size = 12`nfont-family = Consolas`nfont-family = Cascadia Mono`nwindows-restore-session = false`nconfirm-close-surface = false`n"
+if ($RenderingChecks) {
+    $initial += "command = cmd.exe /Q /K echo YUUREI RENDER CHECK`nkeybind = f10=new_tab`nkeybind = f9=close_surface`nkeybind = f8=new_split:right`nkeybind = f11=inspector:toggle`n"
+}
 [IO.File]::WriteAllText($config, $initial)
 $script:appProcess = Start-Process -FilePath (Resolve-Path $Executable) -PassThru -WindowStyle Hidden -Environment @{ XDG_CONFIG_HOME = $isolation; LOCALAPPDATA = $isolation } -RedirectStandardError (Join-Path $isolation 'stderr.log')
 try {
     $terminal = Wait-Window 'ghostty'
+    if ($RenderingChecks) {
+        [void][SettingsNative]::ShowWindow($terminal, 5)
+        Start-Sleep -Milliseconds 600
+        Capture 'render-terminal' -Window $terminal -Desktop
+        [void][SettingsNative]::PostMessage($terminal, 0x100, 0x79, 0)
+        Start-Sleep -Milliseconds 300
+        [void][SettingsNative]::PostMessage($terminal, 0x100, 0x77, 0)
+        Start-Sleep -Milliseconds 600
+        Capture 'render-tabs-split' -Window $terminal -Desktop
+        [void][SettingsNative]::PostMessage($terminal, 0x100, 0x78, 0)
+        Start-Sleep -Milliseconds 200
+        [void][SettingsNative]::PostMessage($terminal, 0x100, 0x78, 0)
+        Start-Sleep -Milliseconds 200
+        [void][SettingsNative]::PostMessage($terminal, 0x100, 0x7A, 0)
+        $inspector = Wait-Window 'ghostty-inspector'
+        Capture 'render-inspector' -Window $inspector -Desktop
+        [void][SettingsNative]::PostMessage($inspector, 0x10, 0, 0)
+        Start-Sleep -Milliseconds 150
+    }
     [void][SettingsNative]::PostMessage($terminal, 0x100, 0x7B, 0x00580001)
     $script:settings = Wait-Window 'ghostty-settings'
     [void][SettingsNative]::ShowWindow($script:settings, 5)

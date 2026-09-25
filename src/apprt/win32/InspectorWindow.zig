@@ -85,6 +85,9 @@ pub fn create(alloc: Allocator, surface: *Surface) !*InspectorWindow {
     if (winapi.wglMakeCurrent(hdc, gl_context) == 0)
         return error.MakeCurrentFailed;
     defer _ = winapi.wglMakeCurrent(null, null);
+    // Terminal contexts now initialize only on renderer threads. The
+    // inspector owns the main thread's GL bindings and must load them here.
+    _ = try gl.glad.load(&winapi.glGetProcAddress);
 
     const ig_context = cimgui.c.ImGui_CreateContext(null) orelse
         return error.ImguiContextFailed;
@@ -157,11 +160,11 @@ fn updateDisplaySize(self: *InspectorWindow) void {
     var style: cimgui.c.ImGuiStyle = undefined;
     cimgui.ext.ImGuiStyle_ImGuiStyle(&style);
     cimgui.c.ImGuiStyle_ScaleAllSizes(&style, dpi / 96.0);
-    const active_style = cimgui.c.ImGui_GetStyle();
+    const active_style: *cimgui.c.ImGuiStyle = cimgui.c.ImGui_GetStyle();
     active_style.* = style;
 
     // Scale the font as well so text tracks the DPI, not just chrome.
-    io.FontGlobalScale = dpi / 96.0;
+    active_style.FontScaleDpi = dpi / 96.0;
 }
 
 fn render(self: *InspectorWindow) void {
