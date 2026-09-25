@@ -30,9 +30,9 @@ pub const custom_shader_target: shadertoy.Target = .glsl;
 // The fragCoord for OpenGL shaders is +Y = up.
 pub const custom_shader_y_is_down = false;
 
-/// Triple-buffering gives the GPU room to pipeline renders without
-/// having to wait on the apprt consuming previous frames.
-pub const swap_chain_count = 3;
+/// WGL completes frames synchronously and never exports them to an apprt.
+/// EGL needs multiple frames while the apprt consumes previous exports.
+pub const swap_chain_count = if (apprt.runtime == apprt.win32) 1 else 3;
 
 const log = std.log.scoped(.opengl);
 

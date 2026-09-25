@@ -24,6 +24,8 @@ const Allocator = std.mem.Allocator;
 const gl = @import("opengl");
 const egl = gl.egl;
 const Dmabuf = @import("../Dmabuf.zig");
+const apprt = @import("../../apprt.zig");
+const exports_frames = apprt.runtime != apprt.win32;
 
 const log = std.log.scoped(.opengl);
 
@@ -44,8 +46,8 @@ texture: gl.Texture,
 /// A plain RGBA8 texture + framebuffer that we blit `texture` into for
 /// dma-buf export. Mesa can't export sRGB textures, so we blit the
 /// already-sRGB-encoded pixels into this non-sRGB texture and export it.
-export_texture: gl.Texture,
-export_framebuffer: gl.Framebuffer,
+export_texture: if (exports_frames) gl.Texture else void,
+export_framebuffer: if (exports_frames) gl.Framebuffer else void,
 
 /// Current width of this target.
 width: usize,
@@ -89,6 +91,17 @@ pub fn init(opts: Options) !Self {
             },
         }
     }
+
+    // WGL blits the render framebuffer directly into its presentation
+    // target. It never needs a second full-size texture for EGL export.
+    if (comptime !exports_frames) return .{
+        .framebuffer = fbo,
+        .texture = texture,
+        .export_framebuffer = {},
+        .export_texture = {},
+        .width = opts.width,
+        .height = opts.height,
+    };
 
     // --- Export texture (plain RGBA8, for dma-buf export) ---
     const export_texture = try gl.Texture.create();
@@ -141,8 +154,10 @@ pub fn init(opts: Options) !Self {
 pub fn deinit(self: *Self) void {
     self.framebuffer.destroy();
     self.texture.destroy();
-    self.export_framebuffer.destroy();
-    self.export_texture.destroy();
+    if (comptime exports_frames) {
+        self.export_framebuffer.destroy();
+        self.export_texture.destroy();
+    }
 }
 
 pub fn exportDmabuf(
