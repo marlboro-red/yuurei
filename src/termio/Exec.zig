@@ -2218,10 +2218,9 @@ fn execCommand(
                 // (extra process in the tree, per-process cmd AutoRun
                 // state not reaching the user's actual shell).
                 //
-                // Values with arguments are split on whitespace. This
-                // does not honor Windows CLI quoting rules; users who
-                // need quoted arguments should use the direct command
-                // form, which takes an argv array as-is.
+                // Parse Windows quoting before the argv serializer quotes
+                // each argument again for CreateProcessW. Otherwise saved
+                // WSL distro names acquire literal quotation marks.
                 //
                 // Note we don't free any of the memory below since it is
                 // allocated in the arena.
@@ -2238,7 +2237,15 @@ fn execCommand(
                         try alloc.dupe(u8, v);
                     try args.append(alloc, try alloc.dupeZ(u8, argv0));
                 } else {
-                    var it = std.mem.tokenizeAny(u8, v, " \t");
+                    const wide = std.unicode.utf8ToUtf16LeAllocZ(alloc, v) catch |err| switch (err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        error.InvalidUtf8 => {
+                            log.err("invalid UTF-8 in Windows command", .{});
+                            return error.SystemError;
+                        },
+                    };
+                    var it = try std.process.Args.Iterator.Windows.init(alloc, wide);
+                    defer it.deinit();
                     while (it.next()) |tok| {
                         try args.append(alloc, try alloc.dupeZ(u8, tok));
                     }
@@ -2582,6 +2589,33 @@ test "execCommand windows: direct command is passed through unchanged" {
     try testing.expectEqual(2, result.len);
     try testing.expectEqualStrings("C:\\tools\\foo.exe", result[0]);
     try testing.expectEqualStrings("arg with spaces", result[1]);
+}
+
+test "execCommand windows: restored WSL profiles preserve distro arguments" {
+    if (comptime builtin.os.tag != .windows) return error.SkipZigTest;
+    const testing = std.testing;
+    const profiles = @import("../apprt/win32/profiles.zig");
+    var list: profiles.List = .{ .arena = .init(testing.allocator) };
+    defer list.deinit();
+    var arena = ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    for ([_][]const u8{ "Ubuntu", "Ubuntu Dev" }) |distro| {
+        const name = try std.fmt.allocPrint(alloc, "WSL: {s}", .{distro});
+        const profile = list.bySavedName(name).?;
+        var command: configpkg.Command = undefined;
+        try command.parseCLI(alloc, profile.source.builtin);
+        const result = try execCommand(alloc, command, internal_os.passwd);
+        try testing.expectEqual(3, result.len);
+        try testing.expectEqualStrings("wsl.exe", result[0]);
+        try testing.expectEqualStrings("-d", result[1]);
+        try testing.expectEqualStrings(distro, result[2]);
+    }
+    const result = try execCommand(alloc, .{ .shell = "\"C:\\Program Files\\tool.exe\" \"\" \"a b\"" }, internal_os.passwd);
+    try testing.expectEqual(3, result.len);
+    try testing.expectEqualStrings("C:\\Program Files\\tool.exe", result[0]);
+    try testing.expectEqualStrings("", result[1]);
+    try testing.expectEqualStrings("a b", result[2]);
 }
 
 // Drains a pty output pipe without ever blocking so the child/conhost
