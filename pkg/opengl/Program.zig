@@ -28,16 +28,19 @@ pub fn create() !Program {
 /// compile and link the vertex and fragment shader.
 pub fn createVF(vsrc: [:0]const u8, fsrc: [:0]const u8) !Program {
     const vs = try Shader.create(c.GL_VERTEX_SHADER);
-    try vs.setSourceAndCompile(vsrc);
     defer vs.destroy();
+    try vs.setSourceAndCompile(vsrc);
 
     const fs = try Shader.create(c.GL_FRAGMENT_SHADER);
-    try fs.setSourceAndCompile(fsrc);
     defer fs.destroy();
+    try fs.setSourceAndCompile(fsrc);
 
     const p = try create();
+    errdefer p.destroy();
     try p.attachShader(vs);
+    defer glad.context.DetachShader.?(p.id, vs.id);
     try p.attachShader(fs);
+    defer glad.context.DetachShader.?(p.id, fs.id);
     try p.link();
 
     return p;

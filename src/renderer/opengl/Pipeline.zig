@@ -70,6 +70,8 @@ pub fn init(comptime VertexAttributes: ?type, opts: Options) !Self {
 }
 
 pub fn deinit(self: *const Self) void {
+    self.vao.destroy();
+    self.fbo.destroy();
     self.program.destroy();
 }
 
