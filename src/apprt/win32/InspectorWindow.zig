@@ -168,6 +168,7 @@ fn updateDisplaySize(self: *InspectorWindow) void {
 }
 
 fn render(self: *InspectorWindow) void {
+    if (winapi.IsIconic(self.hwnd) != 0 or winapi.IsWindowVisible(self.hwnd) == 0) return;
     if (winapi.wglMakeCurrent(self.hdc, self.gl_context) == 0) return;
     defer _ = winapi.wglMakeCurrent(null, null);
     cimgui.c.ImGui_SetCurrentContext(self.ig_context);
@@ -259,6 +260,12 @@ pub fn wndProc(
         },
 
         winapi.WM_SIZE => {
+            if (winapi.IsIconic(hwnd) != 0) {
+                _ = winapi.KillTimer(hwnd, render_timer_id);
+                self.instant = null;
+                return 0;
+            }
+            _ = winapi.SetTimer(hwnd, render_timer_id, 33, null);
             self.updateDisplaySize();
             _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
             return 0;
