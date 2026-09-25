@@ -164,7 +164,11 @@ pub fn tick(self: *App, rt_app: *apprt.App) !void {
 pub fn updateConfig(self: *App, rt_app: *apprt.App, config: *const Config) !void {
     // Go through and update all of the surface configurations.
     for (self.surfaces.items) |surface| {
-        try surface.core().handleMessage(.{ .change_config = config });
+        const surface_config = if (comptime apprt.runtime == apprt.win32)
+            surface.configForReload(config)
+        else
+            config;
+        try surface.core().handleMessage(.{ .change_config = surface_config });
     }
 
     // Apply our conditional state. If we fail to apply the conditional state

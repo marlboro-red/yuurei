@@ -1719,7 +1719,7 @@ fn reloadConfig(
         switch (target) {
             .app => try self.core_app.updateConfig(self, &self.config),
             .surface => |core_surface| try core_surface.updateConfig(
-                &self.config,
+                core_surface.rt_surface.configForReload(&self.config),
             ),
         }
         return;
@@ -1728,16 +1728,6 @@ fn reloadConfig(
     // Load our configuration
     var config = try Config.load(self.core_app.alloc);
     errdefer config.deinit();
-
-    // Call into our app to update
-    switch (target) {
-        .app => try self.core_app.updateConfig(self, &config),
-        .surface => |core_surface| try core_surface.updateConfig(&config),
-    }
-
-    // Update the existing config, be sure to clean up the old one.
-    self.config.deinit();
-    self.config = config;
 
     // Profile overlay files may have changed; rescan on next use. An
     // open dropdown holds pointers into the old list's arena, so close
@@ -1755,6 +1745,30 @@ fn reloadConfig(
         self.profiles_list = null;
     }
     self.startWslScan();
+
+    // Resolve fresh overlays before updating any core surfaces. Soft
+    // reloads above reuse the cached config without reading files again.
+    const list = self.ensureProfiles();
+    for (self.core_app.surfaces.items) |surface| {
+        if (target == .surface and target.surface != surface.core()) continue;
+        const profile = if (surface.profile_name) |name|
+            @constCast(list).bySavedName(name)
+        else
+            null;
+        surface.refreshProfile(profile) catch |err| {
+            log.warn("profile reload failed; keeping previous config err={}", .{err});
+        };
+    }
+
+    switch (target) {
+        .app => try self.core_app.updateConfig(self, &config),
+        .surface => |core_surface| try core_surface.updateConfig(
+            core_surface.rt_surface.configForReload(&config),
+        ),
+    }
+
+    self.config.deinit();
+    self.config = config;
 
     // Window-level transparency/blur are applied by the apprt (not the
     // renderer), so re-apply them here for background-opacity /

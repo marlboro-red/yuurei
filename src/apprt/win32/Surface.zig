@@ -83,6 +83,10 @@ title_text: ?[:0]const u8 = null,
 /// app allocator); splits inherit it. Null = the base configuration.
 profile_name: ?[:0]const u8 = null,
 
+/// Keep the effective profile configuration for soft (theme) reloads.
+/// Hard reloads rebuild it from the base files and current profile overlay.
+profile_config: ?configpkg.Config = null,
+
 /// The terminal-area cursor, set by the mouse_shape action and applied
 /// by the Window on WM_SETCURSOR. System cursors are shared objects
 /// and are never destroyed.
@@ -290,7 +294,78 @@ pub fn init(
         self,
     );
     errdefer self.core_surface.deinit();
+    if (spawn_opts.profile != null) {
+        self.profile_config = profile_base;
+        profile_base = null;
+    }
     perf.mark("surface-init-end");
+}
+
+pub fn configForReload(self: *Self, base: *const configpkg.Config) *const configpkg.Config {
+    return if (self.profile_config) |*cfg| cfg else base;
+}
+
+/// On failure retain the previous overlay rather than stripping a live
+/// surface's settings. A removed profile intentionally returns to the base.
+pub fn refreshProfile(self: *Self, profile: ?*const profiles.Profile) !void {
+    const replacement = if (profile) |p|
+        try self.app.spawnConfig(.{ .profile = p })
+    else
+        null;
+    if (self.profile_config) |*cfg| cfg.deinit();
+    self.profile_config = replacement;
+}
+
+test "windows profile reload preserves overlays across soft and hard reloads" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var td = try internal_os.TempDir.init();
+    defer td.deinit();
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var core_app: @import("../../App.zig") = undefined;
+    core_app.alloc = alloc;
+    var app: App = undefined;
+    app.core_app = &core_app;
+    var surface: Self = undefined;
+    surface.app = &app;
+    surface.profile_config = null;
+    defer if (surface.profile_config) |*cfg| cfg.deinit();
+    var base = try configpkg.Config.default(alloc);
+    defer base.deinit();
+
+    const writeProfile = struct {
+        fn write(dir: std.Io.Dir, text: []const u8) !void {
+            const file = try dir.createFile(global.io(), "profile.conf", .{ .truncate = true });
+            defer file.close(global.io());
+            var buf: [256]u8 = undefined;
+            var writer = file.writer(global.io(), &buf);
+            try writer.interface.writeAll(text);
+            try writer.interface.flush();
+        }
+    }.write;
+    try writeProfile(td.dir, "background = #112233\nconfirm-close-surface = false\n");
+    const path = path_buf[0..try td.dir.realPathFile(global.io(), "profile.conf", &path_buf)];
+    const path_z = try alloc.dupeZ(u8, path);
+    defer alloc.free(path_z);
+    const profile: profiles.Profile = .{ .name = "test", .hint = "", .source = .{ .file = path_z } };
+    try surface.refreshProfile(&profile);
+    try testing.expectEqual(@as(u8, 0x11), surface.configForReload(&base).background.r);
+    try testing.expectEqual(.false, surface.configForReload(&base).@"confirm-close-surface");
+
+    try writeProfile(td.dir, "background = #445566\nconfirm-close-surface = true\n");
+    // A soft reload must use the last loaded overlay, not reread the file.
+    try testing.expectEqual(@as(u8, 0x11), surface.configForReload(&base).background.r);
+    try surface.refreshProfile(&profile);
+    try testing.expectEqual(@as(u8, 0x44), surface.configForReload(&base).background.r);
+    try testing.expectEqual(.true, surface.configForReload(&base).@"confirm-close-surface");
+
+    // Missing/unreadable overlays preserve the old config on failure.
+    try std.Io.Dir.deleteFileAbsolute(global.io(), path);
+    try testing.expectError(error.FileNotFound, surface.refreshProfile(&profile));
+    try testing.expectEqual(@as(u8, 0x44), surface.configForReload(&base).background.r);
+    // Removing the profile from discovery intentionally falls back to base.
+    try surface.refreshProfile(null);
+    try testing.expect(surface.configForReload(&base) == &base);
 }
 
 pub fn deinit(self: *Self) void {
@@ -305,6 +380,7 @@ pub fn deinit(self: *Self) void {
 
     if (self.title_text) |t| self.core_surface.alloc.free(t);
     if (self.profile_name) |n| self.app.core_app.alloc.free(n);
+    if (self.profile_config) |*cfg| cfg.deinit();
 
     // Remove ourselves from the list of known surfaces in the app.
     self.app.core_app.deleteSurface(self);
