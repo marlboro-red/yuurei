@@ -143,9 +143,12 @@ function Assert-Pending($Pending, [string]$Cache) {
     return $zip
 }
 function Test-Running([string]$Executable) {
+    $canonical = [IO.Path]::GetFullPath($Executable)
     foreach ($process in [Diagnostics.Process]::GetProcessesByName('ghostty')) {
         try {
-            if ($process.MainModule.FileName -ieq $Executable) { return $true }
+            # Windows PowerShell's full-path normalization expands existing
+            # DOS 8.3 aliases. Compare both sides in the same representation.
+            if ([IO.Path]::GetFullPath($process.MainModule.FileName) -ieq $canonical) { return $true }
         } catch {
             # Unknown/inaccessible instances are conservatively treated as busy.
             if (!$process.HasExited) { return $true }

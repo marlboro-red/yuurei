@@ -9,6 +9,7 @@ const Allocator = std.mem.Allocator;
 const L = std.unicode.utf8ToUtf16LeStringLiteral;
 const log = std.log.scoped(.win32_update);
 extern "kernel32" fn GetSystemDirectoryW([*]u16, u32) callconv(.winapi) u32;
+extern "kernel32" fn GetLongPathNameW([*:0]const u16, [*]u16, u32) callconv(.winapi) u32;
 extern "kernel32" fn WaitForSingleObject(w.HANDLE, u32) callconv(.winapi) u32;
 extern "shell32" fn IsUserAnAdmin() callconv(.winapi) w.BOOL;
 const State = enum { idle, checking, available, downloading, ready, failed, unsupported };
@@ -100,7 +101,13 @@ fn paths(self: *Updater, alloc: Allocator) !void {
     var buf: [32768]u16 = undefined;
     const n = w.GetModuleFileNameW(null, &buf, buf.len);
     if (n == 0 or n >= buf.len) return error.ExecutablePath;
-    const exe = try std.unicode.utf16LeToUtf8Alloc(alloc, buf[0..n]);
+    buf[n] = 0;
+    var long_buf: [32768]u16 = undefined;
+    const long_n = GetLongPathNameW(buf[0..n :0], &long_buf, long_buf.len);
+    if (long_n == 0 or long_n >= long_buf.len) return error.ExecutablePath;
+    // Short-path launches must share the same pending update/cache as long
+    // paths, including when a different isolated host closes last.
+    const exe = try std.unicode.utf16LeToUtf8Alloc(alloc, long_buf[0..long_n]);
     defer alloc.free(exe);
     if (!std.ascii.eqlIgnoreCase(std.fs.path.basename(exe), "ghostty.exe")) return error.NotPortablePackage;
     const bin = std.fs.path.dirname(exe) orelse return error.NotPortablePackage;

@@ -111,6 +111,7 @@ $busy = Make-Installation 'busy'
 $process = Start-Process -FilePath (Join-Path $busy 'bin/ghostty.exe') -WindowStyle Hidden -PassThru
 try {
     Wait-Running $process (Join-Path $busy 'bin/ghostty.exe')
+    Assert (Test-Running ([IO.Path]::GetFullPath((Join-Path $busy 'bin/ghostty.exe')))) 'Running-process detection depends on short versus long path spelling.'
     Assert (!(Install-Package $pending $cache $busy)) 'Updated a running instance.'
     Assert ([IO.File]::ReadAllText((Join-Path $busy 'share/theme')) -eq 'original') 'Busy installation changed.'
 } finally { Stop-Process -Id $process.Id -ErrorAction SilentlyContinue; $process.WaitForExit(); $process.Dispose() }
