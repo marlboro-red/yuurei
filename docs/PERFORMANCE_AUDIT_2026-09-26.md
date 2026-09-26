@@ -4,6 +4,10 @@ Scope: Yuurei's Win32 runtime, WGL/DXGI integration, ConPTY lifecycle,
 Windows font discovery, settings/inspector windows, and build configuration.
 Upstream Ghostty was merged through `69bf1ac87` in `f56cfd411` first.
 
+The [graphics-memory follow-up](PERFORMANCE_CONTEXT_FOLLOWUP_2026-09-26.md)
+records a further custom-shader retention fix, context/worker experiments,
+and stronger rendering validation.
+
 ## Measured findings and fixes
 
 1. **High: unnecessary graphics allocations after the upstream merge.**

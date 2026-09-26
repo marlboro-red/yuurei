@@ -1,0 +1,340 @@
+{
+  "description": "Warm, serial ReleaseFast two-pass custom shader workload. Candidate includes 65a48f4a7. Private commit and working set exclude child processes and dedicated GPU memory.",
+  "shader_comparison": {
+    "baseline": {
+      "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty-before-context-work.exe",
+      "sha256": "5C072B53F23235A24ADF0209AC4EAD1C12C75EE4C9A4D4432816AF3CF10C2160",
+      "startup_window_ms": 91.7083,
+      "window_width": 1600,
+      "window_height": 1200,
+      "tabs_only": true,
+      "cycles": 20,
+      "idle_seconds": 3,
+      "shader_workload": true,
+      "switch_samples": 30,
+      "samples": [
+        {
+          "phase": "one-tab",
+          "private_mib": 164.51,
+          "working_mib": 83.34,
+          "handles": 356,
+          "threads": 14,
+          "gdi": 25,
+          "user": 23,
+          "cpu_one_core_percent": 0.0
+        },
+        {
+          "phase": "eight-tabs",
+          "private_mib": 689.55,
+          "working_mib": 236.67,
+          "handles": 665,
+          "threads": 42,
+          "gdi": 39,
+          "user": 65,
+          "cpu_one_core_percent": 0.0
+        },
+        {
+          "phase": "after-tab-switches",
+          "private_mib": 726.58,
+          "working_mib": 261.81,
+          "handles": 665,
+          "threads": 42,
+          "gdi": 39,
+          "user": 65,
+          "cpu_one_core_percent": 0.0
+        }
+      ],
+      "artifact_run": "1de76d9a683d4912bff28680009804e3",
+      "tab_dispatch_to_present_ms": [
+        8,
+        7,
+        9,
+        9,
+        7,
+        6,
+        9,
+        10,
+        9,
+        9,
+        18,
+        9,
+        8,
+        7,
+        8,
+        13,
+        7,
+        9,
+        9,
+        14,
+        6,
+        6,
+        7,
+        15,
+        8,
+        6,
+        7,
+        13,
+        10,
+        6
+      ]
+    },
+    "candidate": {
+      "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty.exe",
+      "sha256": "63AC3C4B82DF4A5B7C3DCE13E5DECDB33EAC587BBF84E7BF4275E274B02D4BEB",
+      "startup_window_ms": 110.049,
+      "window_width": 1600,
+      "window_height": 1200,
+      "tabs_only": true,
+      "cycles": 20,
+      "idle_seconds": 3,
+      "shader_workload": true,
+      "switch_samples": 30,
+      "samples": [
+        {
+          "phase": "one-tab",
+          "private_mib": 165.26,
+          "working_mib": 83.28,
+          "handles": 356,
+          "threads": 14,
+          "gdi": 25,
+          "user": 23,
+          "cpu_one_core_percent": 0.0
+        },
+        {
+          "phase": "eight-tabs",
+          "private_mib": 600.55,
+          "working_mib": 236.71,
+          "handles": 665,
+          "threads": 42,
+          "gdi": 39,
+          "user": 65,
+          "cpu_one_core_percent": 0.0
+        },
+        {
+          "phase": "after-tab-switches",
+          "private_mib": 629.23,
+          "working_mib": 257.72,
+          "handles": 665,
+          "threads": 42,
+          "gdi": 39,
+          "user": 65,
+          "cpu_one_core_percent": 0.0
+        }
+      ],
+      "artifact_run": "dabd9fba09b14a00b72f938b49dda9b4",
+      "tab_dispatch_to_present_ms": [
+        9,
+        7,
+        9,
+        9,
+        16,
+        10,
+        6,
+        11,
+        17,
+        19,
+        8,
+        7,
+        18,
+        8,
+        9,
+        9,
+        20,
+        9,
+        7,
+        8,
+        17,
+        12,
+        14,
+        9,
+        8,
+        7,
+        9,
+        9,
+        23,
+        9
+      ]
+    }
+  },
+  "wgl_probe": {
+    "description": "Eight hidden 1200x800 native windows, built-in shaders compiled and detached. Same windows retained in every variant. Standalone Python experiment; not application savings.",
+    "variants": [
+      {
+        "mode": "contexts and workers retained",
+        "private_mib": 354.8,
+        "working_mib": 197.8
+      },
+      {
+        "mode": "inactive contexts deleted, workers retained",
+        "private_mib": 328.12,
+        "working_mib": 186.14
+      },
+      {
+        "mode": "inactive contexts deleted, workers exited",
+        "private_mib": 194.45,
+        "working_mib": 73.14
+      },
+      {
+        "mode": "inactive contexts retained unbound, workers exited",
+        "private_mib": 216.93,
+        "working_mib": 88.94
+      }
+    ]
+  },
+  "plain_comparison": {
+    "baseline": {
+      "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty-before-context-work.exe",
+      "sha256": "5C072B53F23235A24ADF0209AC4EAD1C12C75EE4C9A4D4432816AF3CF10C2160",
+      "startup_window_ms": 106.6166,
+      "window_width": 1600,
+      "window_height": 1200,
+      "tabs_only": true,
+      "cycles": 20,
+      "idle_seconds": 3,
+      "shader_workload": false,
+      "switch_samples": 30,
+      "samples": [
+        {
+          "phase": "one-tab",
+          "private_mib": 142.82,
+          "working_mib": 72.69,
+          "handles": 356,
+          "threads": 14,
+          "gdi": 25,
+          "user": 23,
+          "cpu_one_core_percent": 0.0
+        },
+        {
+          "phase": "eight-tabs",
+          "private_mib": 571.47,
+          "working_mib": 222.41,
+          "handles": 665,
+          "threads": 42,
+          "gdi": 39,
+          "user": 65,
+          "cpu_one_core_percent": 0.0
+        },
+        {
+          "phase": "after-tab-switches",
+          "private_mib": 598.23,
+          "working_mib": 245.33,
+          "handles": 665,
+          "threads": 42,
+          "gdi": 39,
+          "user": 65,
+          "cpu_one_core_percent": 1.037
+        }
+      ],
+      "artifact_run": "dace9ee6eca842598d1968eef13a9d59",
+      "tab_dispatch_to_present_ms": [
+        6,
+        7,
+        7,
+        5,
+        6,
+        17,
+        17,
+        8,
+        7,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        5,
+        15,
+        6,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5
+      ]
+    },
+    "candidate": {
+      "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty.exe",
+      "sha256": "63AC3C4B82DF4A5B7C3DCE13E5DECDB33EAC587BBF84E7BF4275E274B02D4BEB",
+      "startup_window_ms": 108.2378,
+      "window_width": 1600,
+      "window_height": 1200,
+      "tabs_only": true,
+      "cycles": 20,
+      "idle_seconds": 3,
+      "shader_workload": false,
+      "switch_samples": 30,
+      "samples": [
+        {
+          "phase": "one-tab",
+          "private_mib": 142.29,
+          "working_mib": 72.68,
+          "handles": 356,
+          "threads": 14,
+          "gdi": 25,
+          "user": 23,
+          "cpu_one_core_percent": 0.0
+        },
+        {
+          "phase": "eight-tabs",
+          "private_mib": 570.54,
+          "working_mib": 222.5,
+          "handles": 665,
+          "threads": 42,
+          "gdi": 39,
+          "user": 65,
+          "cpu_one_core_percent": 0.0
+        },
+        {
+          "phase": "after-tab-switches",
+          "private_mib": 598.8,
+          "working_mib": 247.37,
+          "handles": 665,
+          "threads": 42,
+          "gdi": 39,
+          "user": 65,
+          "cpu_one_core_percent": 0.0
+        }
+      ],
+      "artifact_run": "03e88ffcf9c34be682dee1b275f315fc",
+      "tab_dispatch_to_present_ms": [
+        6,
+        5,
+        5,
+        8,
+        5,
+        5,
+        5,
+        5,
+        8,
+        6,
+        6,
+        7,
+        18,
+        7,
+        6,
+        21,
+        6,
+        5,
+        5,
+        10,
+        5,
+        6,
+        7,
+        5,
+        6,
+        7,
+        6,
+        6,
+        8,
+        16
+      ]
+    }
+  }
+}

@@ -148,3 +148,23 @@ before claiming rendering correctness. With `GHOSTTY_PERF_TRACE=1`, lifecycle
 logs also report process-wide private commit and working set around startup,
 shader initialization and frame-resource release. Concurrent allocations make
 these stage samples unsuitable as exact per-object accounting.
+
+Use `resources.ps1 -TabsOnly -ShaderWorkload -SwitchSamples 30` to exercise
+two custom-shader passes. This catches retained ping-pong textures that the
+plain-terminal workload does not allocate. Warm each executable once before
+comparing it, and run all builds, GUI checks and measurements serially.
+
+The WGL probe can separate inactive context and worker lifetimes:
+
+```powershell
+python bench/wgl-memory.py --shaders --detach --retire-inactive
+python bench/wgl-memory.py --shaders --detach --retire-inactive --exit-retired-workers
+python bench/wgl-memory.py --shaders --detach --retire-inactive --exit-retired-workers --retain-retired-contexts
+```
+
+Each variant retains the native windows. The first deletes old contexts but
+keeps their workers alive; the second also ends those workers; the third
+ends the workers while retaining their unbound contexts and GL objects.
+These are isolated prototypes, not application modes or tab-switch benchmarks.
+The native smoke runner now checks the known terminal background and text
+pixels in composed-screen captures, including restoration after shader stress.

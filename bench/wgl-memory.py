@@ -122,11 +122,19 @@ def main():
     parser.add_argument("--detach", action="store_true")
     parser.add_argument("--release-compiler", action="store_true")
     parser.add_argument("--core", action="store_true")
+    parser.add_argument("--retire-inactive", action="store_true",
+                        help="delete each previous context while retaining its window and worker")
+    parser.add_argument("--exit-retired-workers", action="store_true",
+                        help="also exit workers whose contexts have been retired")
+    parser.add_argument("--retain-retired-contexts", action="store_true",
+                        help="unbind retired contexts but keep their GL objects alive")
     parser.add_argument("--count", type=int, default=8)
     opts = parser.parse_args()
     if not 1 <= opts.count <= 64:
         parser.error("count must be between 1 and 64")
-    resources, workers, errors = [], [], []
+    if (opts.exit_retired_workers or opts.retain_retired_contexts) and not opts.retire_inactive:
+        parser.error("retired worker/context options require --retire-inactive")
+    resources, workers, errors, retirees = [], [], [], []
     stop = threading.Event()
     create_core = None
     try:
@@ -150,8 +158,13 @@ def main():
                 check(delete(ctx))
                 ctx = resources[-1][2] = replacement
             ready = threading.Event()
+            retire = threading.Event()
+            retired = threading.Event()
+            resource = resources[-1]
+            retirees.append((retire, retired))
 
-            def render(dc=dc, ctx=ctx, ready=ready):
+            def render(dc=dc, ctx=ctx, ready=ready, retire=retire,
+                       retired=retired, resource=resource):
                 try:
                     check(current(dc, ctx))
                     if opts.shaders:
@@ -165,8 +178,18 @@ def main():
                     errors.append(str(ex))
                 finally:
                     ready.set()
-                stop.wait()
-                current(None, None)
+                retire.wait()
+                try:
+                    check(current(None, None))
+                    if not opts.retain_retired_contexts:
+                        check(delete(ctx))
+                        resource[2] = None
+                except Exception as ex:
+                    errors.append(str(ex))
+                finally:
+                    retired.set()
+                if not opts.exit_retired_workers:
+                    stop.wait()
 
             thread = threading.Thread(target=render)
             workers.append(thread)
@@ -175,10 +198,22 @@ def main():
                 raise RuntimeError("WGL probe timed out")
             if errors:
                 raise RuntimeError(errors[0])
+            if opts.retire_inactive and i > 0:
+                retirees[i-1][0].set()
+                if not retirees[i-1][1].wait(10):
+                    raise RuntimeError("WGL retirement timed out")
+                if opts.exit_retired_workers:
+                    workers[i-1].join(10)
+                    if workers[i-1].is_alive():
+                        raise RuntimeError("WGL worker exit timed out")
+                if errors:
+                    raise RuntimeError(errors[0])
             time.sleep(0.2)
             sample(f"contexts-{i + 1}")
     finally:
         stop.set()
+        for retire, _ in retirees:
+            retire.set()
         for thread in workers:
             thread.join()
         for hwnd, dc, ctx in reversed(resources):

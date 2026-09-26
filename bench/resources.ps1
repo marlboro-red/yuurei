@@ -6,6 +6,7 @@ param(
     [ValidateRange(1,60)][int]$IdleSeconds = 5,
     [switch]$TabsOnly,
     [switch]$ProbeHiddenHosts,
+    [switch]$ShaderWorkload,
     [ValidateRange(0,1000)][int]$SwitchSamples = 0,
     [ValidateRange(0,16384)][int]$Width = 0,
     [ValidateRange(0,16384)][int]$Height = 0
@@ -86,6 +87,13 @@ keybind = f11=inspector:toggle
 keybind = f7=text:exit\r
 keybind = f6=next_tab
 '@ | Set-Content (Join-Path $run 'ghostty/config')
+if ($ShaderWorkload) {
+    $shader = Join-Path $run 'passthrough.glsl'
+    'void mainImage(out vec4 color, in vec2 coord) { color = texture(iChannel0, coord/iResolution.xy); }' | Set-Content -LiteralPath $shader
+    $shaderConfig = $shader.Replace('\','/')
+    # Two passes exercise both ping-pong textures and intermediate FBOs.
+    "custom-shader = $shaderConfig`ncustom-shader = $shaderConfig`ncustom-shader-animation = false" | Add-Content (Join-Path $run 'ghostty/config')
+}
 $rows = [Collections.Generic.List[object]]::new()
 function Find-Window([string]$Class) {
     for ($i=0; $i -lt 200; $i++) {
@@ -125,6 +133,7 @@ function Save-Results {
         startup_window_ms=$startup.Elapsed.TotalMilliseconds
         window_width=$rect.right-$rect.left; window_height=$rect.bottom-$rect.top
         tabs_only=[bool]$TabsOnly; cycles=$Cycles; idle_seconds=$IdleSeconds
+        shader_workload=[bool]$ShaderWorkload
         switch_samples=$SwitchSamples; samples=$rows
     } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $run 'results.json')
 }
