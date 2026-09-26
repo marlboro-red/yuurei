@@ -31,10 +31,13 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
 
-      - name: Build core (apprt=none, native Windows)
-        run: zig build -Dapp-runtime=none
+      # The internal embedding library requires EGL and is not a Windows
+      # product. Build the supported terminal library independently; the
+      # native executable below covers the full Windows renderer/runtime.
+      - name: Build terminal library (native Windows)
+        run: zig build -Demit-lib-vt
 
-      - name: Build exe (apprt=win32 skeleton)
+      - name: Build exe (apprt=win32)
         run: zig build -Dapp-runtime=win32
 
       - name: Smoke test exe
