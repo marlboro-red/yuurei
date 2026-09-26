@@ -1944,16 +1944,33 @@ pub const ReadThread = struct {
         };
         defer crash.sentry.thread_state = null;
 
-        // Note: a 64KB buffer was tried here and measured neutral on a
-        // 10MB burst (ConPTY emits small chunks; the wall time is
-        // dominated by conhost's own re-render inside the ConPTY).
-        var buf: [1024]u8 = undefined;
+        // Batch burst output to reduce ReadFile calls, mutex acquisitions,
+        // and renderer notifications. Pipe reads return available bytes;
+        // they don't wait to fill this buffer before delivering typed input.
+        // The bounded override is for performance comparisons only.
+        var buf: [128 * 1024]u8 = undefined;
+        const read_size: usize = size: {
+            const value = global.environ().getWindows(std.unicode.utf8ToUtf16LeStringLiteral("GHOSTTY_PTY_READ_KIB")) orelse break :size buf.len;
+            inline for (.{ 1, 4, 16, 64, 128 }) |kib| {
+                if (std.mem.eql(u16, value, std.unicode.utf8ToUtf16LeStringLiteral(std.fmt.comptimePrint("{d}", .{kib})))) break :size kib * 1024;
+            }
+            break :size buf.len;
+        };
 
         // Per-second read/parse statistics (GHOSTTY_PERF_TRACE):
         // chunk count, byte volume, and time spent inside the parser —
         // the discriminator between "conhost feeds us slowly" and
         // "our parse is the bottleneck" during bursts.
         const tracing = perf.isEnabled();
+        const stats = tracing or global.environ().getWindows(std.unicode.utf8ToUtf16LeStringLiteral("GHOSTTY_IO_STATS")) != null;
+        var total_bytes: u64 = 0;
+        var total_chunks: u64 = 0;
+        var total_parse_ns: u64 = 0;
+        var total_lock_ns: u64 = 0;
+        var total_handoff_ns: u64 = 0;
+        defer if (stats) log.info("io totals read-size={d} bytes={d} chunks={d} parse-ns={d} lock-ns={d} handoff-ns={d}", .{
+            read_size, total_bytes, total_chunks, total_parse_ns, total_lock_ns, total_handoff_ns,
+        });
         var stat_start: i128 = 0;
         var stat_bytes: u64 = 0;
         var stat_chunks: u64 = 0;
@@ -1964,7 +1981,7 @@ pub const ReadThread = struct {
         while (true) {
             while (true) {
                 var n: windows.DWORD = 0;
-                if (windows.exp.kernel32.ReadFile(fd, &buf, buf.len, &n, null) == windows.FALSE) {
+                if (windows.exp.kernel32.ReadFile(fd, &buf, @intCast(read_size), &n, null) == windows.FALSE) {
                     const err = windows.GetLastError();
                     switch (err) {
                         // Check for a quit signal
@@ -2005,7 +2022,7 @@ pub const ReadThread = struct {
                     perf.mark("first-pty-output");
                 }
 
-                if (tracing) {
+                if (stats) {
                     const t0 = std.Io.Timestamp.now(global.io(), .awake).toNanoseconds();
                     if (stat_start == 0) stat_start = t0;
                     if (perf.sinceKeyMs()) |ms| {
@@ -2013,13 +2030,17 @@ pub const ReadThread = struct {
                     }
                     var timing: termio.Termio.OutputTiming = .{};
                     io.processOutputMeasured(buf[0..n], &timing);
+                    total_bytes += n;
+                    total_chunks += 1;
+                    total_parse_ns += timing.parse_ns;
+                    total_lock_ns += timing.lock_ns;
                     perf.ptyData();
                     const t1 = std.Io.Timestamp.now(global.io(), .awake).toNanoseconds();
                     stat_parse_ns += timing.parse_ns;
                     stat_lock_ns += timing.lock_ns;
                     stat_bytes += n;
                     stat_chunks += 1;
-                    if (t1 - stat_start >= std.time.ns_per_s) {
+                    if (tracing and t1 - stat_start >= std.time.ns_per_s) {
                         const wall_ns: u64 = @intCast(t1 - stat_start);
                         log.info(
                             "perf: io {d} KB/s in {d} chunks (avg {d} B), parse {d}% lock-wait {d}% of wall",
@@ -2044,7 +2065,9 @@ pub const ReadThread = struct {
                 // See threadMainPosix: hand the renderer state mutex
                 // off if the renderer is waiting, since this loop
                 // would otherwise starve it under heavy output.
+                const handoff_start = if (stats) std.Io.Timestamp.now(global.io(), .awake) else undefined;
                 io.renderer_state.yieldToDemand(global.io());
+                if (stats) total_handoff_ns += @intCast(handoff_start.durationTo(.now(global.io(), .awake)).nanoseconds);
             }
 
             var quit_bytes: windows.DWORD = 0;

@@ -422,10 +422,8 @@ const WindowsPty = struct {
         //     _ = windows.CloseHandle(pty.in_pipe);
         // }
 
-        // Note: a 128KB nSize was tried here (the default is 4KB) and
-        // measured neutral on a 10MB burst, same as enlarging the read
-        // buffer — burst wall time is dominated by conhost's re-render
-        // inside the ConPTY, not by anything on our side of the pipe.
+        // Keep the system pipe capacity. Enlarging this to 128 KiB did not
+        // consistently improve bursts with the reader already using 128 KiB.
         if (windows.exp.kernel32.CreatePipe(&pty.out_pipe, &pty.out_pipe_pty, null, 0) == windows.FALSE) {
             return windows.unexpectedError(windows.GetLastError());
         }
