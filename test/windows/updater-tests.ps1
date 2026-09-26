@@ -166,7 +166,8 @@ $job.manual = $true
 $process = Start-Process -FilePath (Join-Path $busy 'bin/ghostty.exe') -WindowStyle Hidden -PassThru
 try {
     Wait-Running $process (Join-Path $busy 'bin/ghostty.exe')
-    Assert ((Invoke-Update $job).state -eq 'ready') 'Installation did not defer for another host.'
+    $deferredResult = Invoke-Update $job
+    Assert ($deferredResult.state -eq 'ready') ("Installation did not defer for another host: " + ($deferredResult | ConvertTo-Json -Compress) + "; fixture exited=$($process.HasExited); root=$($job.root); pending=$([IO.File]::Exists((Join-Path $flowCache 'pending.json')))")
     Assert ((Read-Json (Join-Path $flowCache 'pending.json')).manual) 'Deferred install lost explicit permission.'
 } finally { Stop-Process -Id $process.Id -ErrorAction SilentlyContinue; $process.WaitForExit(); $process.Dispose() }
 $job.manual = $false
