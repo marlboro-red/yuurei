@@ -29,6 +29,9 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
 
+      - name: Updater transaction tests
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File test/windows/updater-tests.ps1
+
       # -Dcpu pins a portable ISA baseline. Without it Zig targets the CI
       # runner's native CPU, and windows-latest runners often have AVX-512;
       # the resulting binary dies with STATUS_ILLEGAL_INSTRUCTION on any

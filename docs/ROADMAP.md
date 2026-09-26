@@ -111,8 +111,8 @@ actually hits the gap:
 
 - [ ] ARM64 (after x64 stops changing; Zig cross-compiles, CI needs an
       ARM runner or cross-built release artifacts)
-- Auto-update: intentionally absent (portable zip, GitHub-only). The
-  cheap middle ground would be an update-available notification.
+- Auto-update: implemented for portable releases, with daily checks, verified
+  downloads, installation after exit, and rollback. See [UPDATES.md](UPDATES.md).
 - Packaging/signing/winget: **non-goals by choice**, revisit only if
   the SmartScreen wall measurably costs adoption.
 

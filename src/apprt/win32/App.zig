@@ -27,6 +27,7 @@ const Scrollbar = @import("Scrollbar.zig");
 const SearchBar = @import("SearchBar.zig");
 const SettingsWindow = @import("SettingsWindow.zig");
 const RendererPool = @import("RendererPool.zig");
+const Updater = @import("Updater.zig");
 const winapi = @import("winapi.zig");
 
 const log = std.log.scoped(.win32);
@@ -52,6 +53,7 @@ thread_id: winapi.DWORD,
 windows: std.ArrayList(*Window) = .empty,
 instance: ?*@import("instance.zig").Server = null,
 renderer_pool: ?*RendererPool = null,
+updater: Updater = .{},
 
 /// The quick terminal window, if it has been summoned. It may be
 /// hidden; toggling shows/hides it.
@@ -536,6 +538,7 @@ fn prewarmThreadMain(self: *App) void {
 }
 
 pub fn terminate(self: *App) void {
+    self.updater.deinit(self.core_app.alloc, self.config.@"windows-auto-update");
     if (self.wsl_thread) |t| t.join();
     if (self.wsl_result) |*l| l.deinit();
     // Prewarm teardown before anything it touches: join the thread,
@@ -875,6 +878,7 @@ fn toggleQuickTerminal(self: *App) !void {
 
 /// Run the event loop. This doesn't return until the app exits.
 pub fn run(self: *App) !void {
+    self.updater.init();
     while (true) {
         // Block until at least one message arrives. wakeup() posts a
         // WM_NULL thread message so cross-thread ticks land here too.
@@ -915,6 +919,9 @@ pub fn run(self: *App) !void {
         // here (not inline in EstablishPtyHandoff) so that call returns
         // to conhost immediately; see App.pending_handoffs.
         self.pollWslScan();
+        if (self.updater.poll(self.core_app.alloc, self.config.@"windows-auto-update")) {
+            if (self.settings) |settings| settings.refreshUpdates();
+        }
         self.drainHandoffs();
 
         self.drainUrls();

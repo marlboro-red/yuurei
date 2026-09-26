@@ -142,7 +142,7 @@ function Assert-CategoryHighlight([int]$Selected, [bool]$Light = $false) {
     $bitmap = [Drawing.Bitmap]::new(1, 1)
     $graphics = [Drawing.Graphics]::FromImage($bitmap)
     try {
-        foreach ($id in 20,21,22,23) {
+        foreach ($id in 20,21,22,23,24) {
             $r = New-Object SettingsNative+Rect
             [void][SettingsNative]::GetWindowRect((Control $id), [ref]$r)
             $graphics.CopyFromScreen($r.right - 20, [int](($r.top + $r.bottom)/2), 0, 0, $bitmap.Size)
@@ -157,7 +157,7 @@ function Check-CategoryHighlights([bool]$Light = $false) {
     [void][SettingsNative]::SetWindowPos($script:settings, -1, 0, 0, 0, 0, 0x13)
     Start-Sleep -Milliseconds 200
     try {
-        foreach ($id in 21,22,23,20) { Click $id; Assert-CategoryHighlight $id $Light }
+        foreach ($id in 21,22,23,24,20) { Click $id; Assert-CategoryHighlight $id $Light }
         Edit 10 'folder'
         Assert-CategoryHighlight -1 $Light
         Edit 10 ''
@@ -342,7 +342,7 @@ try {
     [void][SettingsNative]::PostMessage((Control 10), 0x100, 9, 0)
     Start-Sleep -Milliseconds 100
     Assert ([SettingsNative]::Focus($script:settings) -eq (Control 20)) 'Tab should move from search to categories'
-    foreach ($id in 20,21,22,23) {
+    foreach ($id in 20,21,22,23,24) {
         [void][SettingsNative]::PostMessage((Control $id), 0x100, 9, 0)
         Start-Sleep -Milliseconds 60
     }

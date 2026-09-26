@@ -79,12 +79,16 @@ Everything below works today, verified live on Windows 11.
   config in place and reloads live), terminal inspector, scrollbars, and find
   in terminal (Ctrl+Shift+F) with live match counts.
 - Quick terminal with system-wide global hotkeys (`global:` keybinds).
+- Automatic updates for portable releases: daily background checks and verified
+  downloads from GitHub Releases, installed after all instances close. Settings
+  > Updates provides manual checks and the `windows-auto-update` toggle. See
+  [updating Yuurei](docs/UPDATES.md).
 - Native toast notifications, taskbar progress (OSC 9;4), background opacity
   and blur, mouse-hide-while-typing.
 
 **In progress / not yet done:** default-terminal handoff (functionally
 complete and verified live, shipped gated off pending a soak test), UIA
-accessibility, per-pixel transparency, auto-update, packaging /
+accessibility, per-pixel transparency, packaging /
 code-signing / winget (non-goals by choice), and ARM64. See
 [`docs/ROADMAP.md`](docs/ROADMAP.md) for the live list.
 

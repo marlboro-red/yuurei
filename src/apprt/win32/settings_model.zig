@@ -4,13 +4,14 @@ const Config = @import("../../config.zig").Config;
 const global = @import("../../global.zig");
 const Allocator = std.mem.Allocator;
 
-pub const Category = enum { appearance, terminal, windows, input };
-pub const categories = [_][]const u8{ "Appearance", "Terminal", "Windows & tabs", "Input" };
+pub const Category = enum { appearance, terminal, windows, input, updates };
+pub const categories = [_][]const u8{ "Appearance", "Terminal", "Windows & tabs", "Input", "Updates" };
 pub const descriptions = [_][]const u8{
     "Themes, fonts, and transparency.",
     "Shell startup, cursor, and closing behavior.",
     "Session restore, tab bar, and directory inheritance.",
     "Mouse, clipboard, and keyboard behavior.",
+    "Release updates and installation status.",
 };
 pub const Kind = enum { text, choice, toggle, theme, font };
 pub const Field = struct {
@@ -42,6 +43,7 @@ pub const fields = [_]Field{
     .{ .key = "mouse-hide-while-typing", .title = "Hide pointer while typing", .description = "Hide until the next mouse movement.", .category = .input, .kind = .toggle },
     .{ .key = "copy-on-select", .title = "Copy selected text", .description = "Copy selections directly to the Windows clipboard.", .category = .input, .kind = .choice, .choices = &.{ "none", "clipboard" } },
     .{ .key = "win32-input-mode", .title = "Windows keyboard compatibility", .description = "Preserve modifiers such as Shift+Enter in console apps.", .category = .input, .kind = .toggle, .restart = true },
+    .{ .key = "windows-auto-update", .title = "Automatic updates", .description = "Download daily. Install after all Yuurei instances close.", .category = .updates, .kind = .toggle },
 };
 
 pub fn choiceLabel(index: usize, raw: []const u8) []const u8 {

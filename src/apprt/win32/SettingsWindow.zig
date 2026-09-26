@@ -19,6 +19,7 @@ const id_revert = 12;
 const id_open = 13;
 const id_prev = 14;
 const id_next = 15;
+const id_update = 16;
 const id_category = 20;
 const id_field = 100;
 const id_reset = 200;
@@ -74,7 +75,7 @@ resets: [count]?winapi.HWND = @splat(null),
 reset: [count]bool = @splat(false),
 dirty: [count]bool = @splat(false),
 rows: [count]?winapi.RECT = @splat(null),
-nav: [4]?winapi.HWND = @splat(null),
+nav: [model.categories.len]?winapi.HWND = @splat(null),
 search: ?winapi.HWND = null,
 search_label: ?winapi.HWND = null,
 save_button: ?winapi.HWND = null,
@@ -82,6 +83,7 @@ revert_button: ?winapi.HWND = null,
 open_button: ?winapi.HWND = null,
 prev_button: ?winapi.HWND = null,
 next_button: ?winapi.HWND = null,
+update_button: ?winapi.HWND = null,
 font: ?*anyopaque = null,
 heading_font: ?*anyopaque = null,
 small_font: ?*anyopaque = null,
@@ -135,6 +137,7 @@ pub fn create(alloc: Allocator, window: *Window) !*SettingsWindow {
     self.open_button = try self.button("Open config file", id_open);
     self.prev_button = try self.button("Previous", id_prev);
     self.next_button = try self.button("Next", id_next);
+    self.update_button = try self.button("Check for updates", id_update);
     for (model.fields, 0..) |field, i| {
         // Real labels precede controls for native accessibility.
         self.labels[i] = try self.child(L("STATIC"), field.title, 0, 300 + i);
@@ -176,6 +179,7 @@ pub fn create(alloc: Allocator, window: *Window) !*SettingsWindow {
     try self.load();
     self.ready = true;
     self.layout();
+    self.refreshUpdates();
     _ = winapi.ShowWindow(self.hwnd, winapi.SW_SHOWDEFAULT);
     _ = winapi.SetFocus(self.search.?);
     return self;
@@ -183,6 +187,15 @@ pub fn create(alloc: Allocator, window: *Window) !*SettingsWindow {
 
 fn s(self: *const SettingsWindow, v: i32) i32 {
     return @intCast(@divTrunc(@as(i64, v) * winapi.GetDpiForWindow(self.hwnd), 96));
+}
+
+pub fn refreshUpdates(self: *SettingsWindow) void {
+    const updater = &self.app.updater;
+    const enabled = self.app.config.@"windows-auto-update";
+    self.setText(self.update_button.?, updater.buttonLabel(enabled));
+    _ = ui.EnableWindow(self.update_button.?, if (updater.buttonEnabled(enabled)) 1 else 0);
+    _ = winapi.InvalidateRect(self.hwnd, null, 0);
+    _ = winapi.InvalidateRect(self.update_button.?, null, 0);
 }
 fn child(self: *SettingsWindow, class: [*:0]const u16, title: []const u8, style: u32, id: usize) !winapi.HWND {
     const wide = try std.unicode.utf8ToUtf16LeAllocZ(self.arena.allocator(), title);
@@ -362,6 +375,7 @@ fn save(self: *SettingsWindow) void {
     self.refreshStyle();
     self.layout();
     self.message(if (restart) "Saved. Shell and input changes apply to new terminals." else "Settings saved.", false);
+    self.refreshUpdates();
 }
 fn confirmDiscard(self: *SettingsWindow) bool {
     if (!self.anyDirty()) return true;
@@ -396,6 +410,7 @@ fn layout(self: *SettingsWindow) void {
     self.move(self.revert_button, self.width - self.s(262), self.height - self.s(57), self.s(84), self.s(36), true);
     self.move(self.prev_button, side + pad, self.height - self.s(108), self.s(88), self.s(28), true);
     self.move(self.next_button, side + pad + self.s(98), self.height - self.s(108), self.s(72), self.s(28), true);
+    self.move(self.update_button, side + pad + self.s(16), self.s(368), self.s(174), self.s(36), self.query_len == 0 and self.category == @intFromEnum(model.Category.updates));
     var matching: [count]usize = undefined;
     var n: usize = 0;
     for (model.fields, 0..) |field, i| {
@@ -439,7 +454,7 @@ fn layout(self: *SettingsWindow) void {
         self.tabOrder(self.controls[i]);
         self.tabOrder(self.resets[i]);
     }
-    for ([_]?winapi.HWND{ self.prev_button, self.next_button, self.revert_button, self.save_button, self.open_button }) |h| self.tabOrder(h);
+    for ([_]?winapi.HWND{ self.update_button, self.prev_button, self.next_button, self.revert_button, self.save_button, self.open_button }) |h| self.tabOrder(h);
     if (focused) |h| {
         if (ui.IsChild(self.hwnd, h) != 0) {
             _ = winapi.SetFocus(if (winapi.IsWindowVisible(h) != 0 and ui.IsWindowEnabled(h) != 0) h else self.search.?);
@@ -525,8 +540,14 @@ fn paint(self: *SettingsWindow, hdc: winapi.HDC) void {
         self.text(hdc, "No settings found", self.rect(270, 195, 400, 36), p.text, self.heading_font, 0);
         self.text(hdc, "Search by setting name, description, or config key.", self.rect(270, 240, 520, 30), p.muted, self.font, 0);
     }
-    self.text(hdc, "BASE CONFIGURATION", self.rect(28, 344, 168, 24), p.accent, self.small_font, 0);
-    self.text(hdc, "Applies across yuurei.\nProfiles keep their own overrides.", self.rect(28, 374, 162, 74), p.muted, self.font, 0x10);
+    if (self.query_len == 0 and self.category == @intFromEnum(model.Category.updates)) {
+        box(hdc, .{ .left = self.s(246), .top = self.s(268), .right = self.width - self.s(28), .bottom = self.s(422) }, p.card, p.border);
+        const version = @import("Updater.zig").releaseTag(@import("../../build_config.zig").version_string) orelse "Development build";
+        self.text(hdc, version, self.rect(262, 282, 450, 24), p.text, self.font, 0);
+        self.text(hdc, self.app.updater.message(), .{ .left = self.s(262), .top = self.s(316), .right = self.width - self.s(44), .bottom = self.s(362) }, p.muted, self.font, 0x10);
+    }
+    self.text(hdc, "BASE CONFIGURATION", self.rect(28, 362, 168, 24), p.accent, self.small_font, 0);
+    self.text(hdc, "Applies across yuurei.\nProfiles keep their own overrides.", self.rect(28, 390, 162, 74), p.muted, self.font, 0x10);
     if (self.height >= self.s(700)) {
         self.preview(hdc);
         self.text(hdc, "Ctrl+F  Search    Ctrl+S  Save", self.rect(28, 617, 170, 30), p.muted, self.small_font, 0);
@@ -540,7 +561,7 @@ fn paint(self: *SettingsWindow, hdc: winapi.HDC) void {
 fn drawButton(self: *SettingsWindow, item: *const ui.DrawItem) void {
     const p = self.palette;
     const disabled = item.state & 4 != 0;
-    const selected = item.id >= id_category and item.id < id_category + 4 and self.category == item.id - id_category and self.query_len == 0;
+    const selected = item.id >= id_category and item.id < id_category + model.categories.len and self.category == item.id - id_category and self.query_len == 0;
     const primary = item.id == id_save and !disabled;
     const bg = if (primary) p.accent else if (selected or item.state & 1 != 0) p.selected else if (item.id < id_category) p.card else p.sidebar;
     fill(item.hdc, item.rect, if (item.id >= id_reset) p.card else if (item.id >= id_category) p.sidebar else p.bg);
@@ -724,7 +745,7 @@ pub fn wndProc(hwnd: winapi.HWND, msg: winapi.UINT, wp: winapi.WPARAM, lp: winap
                 @memcpy(self.query[0..self.query_len], value[0..self.query_len]);
                 self.offset = 0;
                 self.layout();
-            } else if (id >= id_category and id < id_category + 4 and notification == 0) {
+            } else if (id >= id_category and id < id_category + model.categories.len and notification == 0) {
                 self.category = id - id_category;
                 self.offset = 0;
                 self.setText(self.search.?, "");
@@ -759,6 +780,10 @@ pub fn wndProc(hwnd: winapi.HWND, msg: winapi.UINT, wp: winapi.WPARAM, lp: winap
                 },
                 id_prev => self.page(false),
                 id_next => self.page(true),
+                id_update => {
+                    self.app.updater.click(self.app.core_app.alloc, self.app.config.@"windows-auto-update");
+                    self.refreshUpdates();
+                },
                 id_open => {
                     const a = self.app.core_app.alloc;
                     const quoted = std.fmt.allocPrint(a, "\"{s}\"", .{self.path}) catch return 0;

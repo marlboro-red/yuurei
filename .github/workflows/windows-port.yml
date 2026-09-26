@@ -31,6 +31,9 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
 
+      - name: Updater transaction tests
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File test/windows/updater-tests.ps1
+
       # The internal embedding library requires EGL and is not a Windows
       # product. Build the supported terminal library independently; the
       # native executable below covers the full Windows renderer/runtime.

@@ -2115,6 +2115,13 @@ keybind: Keybinds = .{},
 /// as its focused pane).
 @"windows-restore-session": bool = false,
 
+/// Windows (yuurei): check GitHub Releases daily and download newer stable
+/// portable releases in the background. Verified updates install on normal
+/// exit once all instances using this installation have closed. Shells are
+/// never closed by the updater. Disable to use manual checks in Settings.
+/// Source builds and elevated instances do not update automatically.
+@"windows-auto-update": bool = true,
+
 /// Windows only (yuurei): honor ConPTY's win32-input-mode request
 /// (DECSET 9001). When enabled (the default), keyboard input is encoded
 /// as full-fidelity Win32 key records (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`) so
