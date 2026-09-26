@@ -1,5 +1,7 @@
 # Windows Terminal performance follow-up
 
+Implemented follow-up: [drawable parking, Unicode row copies and the overlapped-read experiment](PERFORMANCE_PRIORITIES_2026-09-26.md).
+
 The [initial comparison](PERFORMANCE_WINDOWS_TERMINAL_2026-09-26.md) identified
 two Windows Terminal advantages: private commit and bulk-output throughput.
 This investigation isolates both on the same machine and matched profiles.

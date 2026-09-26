@@ -239,3 +239,32 @@ python bench/wgl-memory.py --pool-size 2 --count 8 --width 1600 --height 1200 --
 The latter resizes inactive drawables and presents once at the smaller size,
 retaining their contexts and programs. It is a research prototype, not a
 Yuurei option. See the [follow-up research](../docs/PERFORMANCE_WINDOWS_TERMINAL_RESEARCH_2026-09-26.md).
+
+The application now has an experimental equivalent: `GHOSTTY_PARK_DRAWABLES=1`
+parks inactive WGL hosts at 64 × 64, preserves their logical terminal grid,
+and waits for a restored frame before showing them. It is off by default,
+ignored with flip-model presentation, and requires further GPU/display testing.
+Compare `resources.ps1 -TabsOnly -SwitchSamples 40 -GracefulExit` with the
+variable unset and set. Presentation tracing does not include the later UI
+show/compositor latency. `settings-smoke.ps1 -GraphicsStress` also checks rapid
+tab switching, zoom restoration and minimize/restore.
+
+`compare-terminal-stream.py --data-dir <directory> --output <json> <before.exe>
+<after.exe>` runs serial process timing trials on pre-generated `ascii.txt`,
+`unicode.txt`, `cjk.txt`, `greek.txt`, `emoji.txt` and `combining.txt` corpora.
+It records corpus/binary hashes, five samples after one warmup, and medians.
+Timings include startup and file IO; they exclude ConPTY and rendering.
+
+`sample-windows-benchmark.py --output <json> -- <benchmark.exe> +terminal-stream
+--terminal-rows=29 --terminal-cols=85 --chunk-size=131072 --data=<file>` samples
+the newly launched benchmark's main thread and resolves local PDB symbols.
+Use 64-bit Python with matching PDBs. It samples leaf instruction addresses
+using brief suspension and a requested 1 ms interval, not inclusive CPU stacks
+or inlined functions. Do not use a sampled run as a throughput measurement.
+
+`prototypes/windows-overlapped-read.patch` preserves the rejected two-buffer
+ConPTY experiment against the synchronous reader. It is not part of the
+application build. Apply only in an isolated research checkout, rebuild, and
+set `GHOSTTY_OVERLAPPED_READ=1`. The prototype uses a stop event and waits for
+cancellation completion before freeing buffers. Its measured gain was too
+small to justify shipping the extra machinery.

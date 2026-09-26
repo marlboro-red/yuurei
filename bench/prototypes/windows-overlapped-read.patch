@@ -1,0 +1,295 @@
+diff --git a/src/pty.zig b/src/pty.zig
+index 2bdcf1cd3..e9ec7c4a0 100644
+--- a/src/pty.zig
++++ b/src/pty.zig
+@@ -344,6 +344,7 @@ const WindowsPty = struct {
+     /// ConPTY-side pipe ends (`*_pipe_pty`) belong to conhost and must not
+     /// be closed by us. False for a normal (self-created) pty.
+     handoff: bool = false,
++    output_overlapped: bool = false,
+ 
+     pub const OpenError = error{Unexpected};
+ 
+@@ -422,9 +423,39 @@ const WindowsPty = struct {
+         //     _ = windows.CloseHandle(pty.in_pipe);
+         // }
+ 
+-        // Keep the system pipe capacity. Enlarging this to 128 KiB did not
+-        // consistently improve bursts with the reader already using 128 KiB.
+-        if (windows.exp.kernel32.CreatePipe(&pty.out_pipe, &pty.out_pipe_pty, null, 0) == windows.FALSE) {
++        const overlap_value = @import("global.zig").environ().getWindows(std.unicode.utf8ToUtf16LeStringLiteral("GHOSTTY_OVERLAPPED_READ"));
++        pty.output_overlapped = overlap_value != null and std.mem.eql(u16, overlap_value.?, &.{'1'});
++        if (pty.output_overlapped) {
++            // Separate name from the input pipe. First-instance ownership
++            // prevents attaching to an existing server with this name.
++            const out_path = std.fmt.bufPrintZ(&pipe_path_buf, "\\\\.\\pipe\\LOCAL\\ghostty-output-{d}-{d}", .{
++                windows.GetCurrentProcessId(), pipe_name_counter.fetchAdd(1, .monotonic),
++            }) catch unreachable;
++            const len = std.unicode.utf8ToUtf16Le(&pipe_path_buf_w, out_path) catch unreachable;
++            pipe_path_buf_w[len] = 0;
++            pty.out_pipe = windows.exp.kernel32.CreateNamedPipeW(
++                pipe_path_buf_w[0..len :0].ptr,
++                0x1 | windows.FILE_FLAG_FIRST_PIPE_INSTANCE | windows.FILE_FLAG_OVERLAPPED,
++                windows.PIPE_TYPE_BYTE | 0x8, // PIPE_REJECT_REMOTE_CLIENTS
++                1,
++                4096,
++                4096,
++                0,
++                &security_attributes,
++            );
++            if (pty.out_pipe == windows.INVALID_HANDLE_VALUE) return windows.unexpectedError(windows.GetLastError());
++            errdefer _ = windows.exp.kernel32.CloseHandle(pty.out_pipe);
++            pty.out_pipe_pty = windows.exp.kernel32.CreateFileW(
++                pipe_path_buf_w[0..len :0].ptr,
++                0x40000000, // GENERIC_WRITE
++                0,
++                &security_attributes_read,
++                windows.OPEN_EXISTING,
++                windows.FILE_ATTRIBUTE_NORMAL,
++                null,
++            );
++            if (pty.out_pipe_pty == windows.INVALID_HANDLE_VALUE) return windows.unexpectedError(windows.GetLastError());
++        } else if (windows.exp.kernel32.CreatePipe(&pty.out_pipe, &pty.out_pipe_pty, null, 0) == windows.FALSE) {
+             return windows.unexpectedError(windows.GetLastError());
+         }
+         errdefer {
+diff --git a/src/termio/Exec.zig b/src/termio/Exec.zig
+index cedf2f17b..ac3795570 100644
+--- a/src/termio/Exec.zig
++++ b/src/termio/Exec.zig
+@@ -18,6 +18,7 @@ const crash = @import("../crash/main.zig");
+ const fastmem = @import("../fastmem.zig");
+ const internal_os = @import("../os/main.zig");
+ const perf = @import("../perf.zig");
++const WindowsRead = @import("WindowsRead.zig");
+ const renderer = @import("../renderer.zig");
+ const shell_integration = @import("shell_integration.zig");
+ const terminal = @import("../terminal/main.zig");
+@@ -166,10 +167,21 @@ pub fn threadEnter(
+         false;
+ 
+     // Start our read thread
++    const read_stop = if (comptime builtin.os.tag == .windows) stop: {
++        if (self.subprocess.pty) |*p| if (p.output_overlapped)
++            break :stop WindowsRead.CreateEventW(null, windows.TRUE, windows.FALSE, null) orelse return error.CreateEventFailed;
++        break :stop null;
++    } else null;
++    errdefer if (read_stop) |event| {
++        _ = windows.exp.kernel32.CloseHandle(event);
++    };
+     const read_thread = try std.Thread.spawn(
+         if (builtin.os.tag == .windows) windows.worker_thread_config else .{},
+         if (builtin.os.tag == .windows) ReadThread.threadMainWindows else ReadThread.threadMainPosix,
+-        .{ pty_fds.read, io, pipe[0], reader_handoff },
++        if (builtin.os.tag == .windows)
++            .{ pty_fds.read, io, pipe[0], WindowsReadOptions{ .handoff = reader_handoff, .stop = read_stop } }
++        else
++            .{ pty_fds.read, io, pipe[0], reader_handoff },
+     );
+     read_thread.setName(global.io(), "io-reader") catch {};
+ 
+@@ -181,6 +193,7 @@ pub fn threadEnter(
+         .read_thread = read_thread,
+         .read_thread_pipe = pipe[1],
+         .read_thread_fd = pty_fds.read,
++        .read_thread_stop = read_stop,
+         .termios_timer = termios_timer,
+     } };
+ 
+@@ -240,7 +253,9 @@ pub fn threadExit(self: *Exec, td: *termio.Termio.ThreadData) void {
+ 
+     if (comptime builtin.os.tag == .windows) {
+         // Interrupt the blocking read so the thread can see the quit message
+-        if (windows.exp.kernel32.CancelIoEx(exec.read_thread_fd, null) == windows.FALSE) {
++        if (exec.read_thread_stop) |event| {
++            _ = WindowsRead.SetEvent(event);
++        } else if (windows.exp.kernel32.CancelIoEx(exec.read_thread_fd, null) == windows.FALSE) {
+             switch (windows.GetLastError()) {
+                 .NOT_FOUND => {},
+                 else => |err| log.warn("error interrupting read thread err={}", .{err}),
+@@ -558,6 +573,7 @@ pub const ThreadData = struct {
+     read_thread: std.Thread,
+     read_thread_pipe: posix.fd_t,
+     read_thread_fd: posix.fd_t,
++    read_thread_stop: ?windows.HANDLE = null,
+ 
+     /// The timer to detect termios state changes.
+     termios_timer: xev.Timer,
+@@ -570,6 +586,9 @@ pub const ThreadData = struct {
+ 
+     pub fn deinit(self: *ThreadData, alloc: Allocator) void {
+         internal_os.pipeClose(self.read_thread_pipe);
++        if (comptime builtin.os.tag == .windows) {
++            if (self.read_thread_stop) |event| _ = windows.exp.kernel32.CloseHandle(event);
++        }
+ 
+         // Clear our write pool. We know we aren't ever going to do
+         // any more IO since we stop our data stream below so we can just
+@@ -1458,6 +1477,8 @@ const Subprocess = struct {
+ /// We use basic poll/read syscalls here because we are only
+ /// monitoring two fds and this is still much faster and lower
+ /// overhead than any async mechanism.
++const WindowsReadOptions = struct { handoff: bool, stop: ?windows.HANDLE };
++
+ pub const ReadThread = struct {
+     /// The number of buffers rotated between the gather and parse
+     /// stages. The gather stage can run at most this many batches
+@@ -1933,7 +1954,8 @@ pub const ReadThread = struct {
+         return true;
+     }
+ 
+-    fn threadMainWindows(fd: posix.fd_t, io: *termio.Termio, quit: posix.fd_t, handoff: bool) void {
++    fn threadMainWindows(fd: posix.fd_t, io: *termio.Termio, quit: posix.fd_t, opts: WindowsReadOptions) void {
++        const handoff = opts.handoff;
+         // Always close our end of the pipe when we exit.
+         defer internal_os.pipeClose(quit);
+ 
+@@ -1957,6 +1979,19 @@ pub const ReadThread = struct {
+             break :size buf.len;
+         };
+ 
++        const overlapped: ?*WindowsRead = if (opts.stop) |stop| reader: {
++            const ptr = std.heap.c_allocator.create(WindowsRead) catch return;
++            ptr.* = WindowsRead.init(fd, stop, read_size) catch {
++                std.heap.c_allocator.destroy(ptr);
++                return;
++            };
++            break :reader ptr;
++        } else null;
++        defer if (overlapped) |reader| {
++            reader.deinit();
++            std.heap.c_allocator.destroy(reader);
++        };
++
+         // Per-second read/parse statistics (GHOSTTY_PERF_TRACE):
+         // chunk count, byte volume, and time spent inside the parser —
+         // the discriminator between "conhost feeds us slowly" and
+@@ -1981,8 +2016,22 @@ pub const ReadThread = struct {
+         while (true) {
+             while (true) {
+                 var n: windows.DWORD = 0;
+-                if (windows.exp.kernel32.ReadFile(fd, &buf, @intCast(read_size), &n, null) == windows.FALSE) {
+-                    const err = windows.GetLastError();
++                var output: []const u8 = undefined;
++                const read_error: ?std.os.windows.Win32Error = read: {
++                    if (overlapped) |reader| switch (reader.next()) {
++                        .data => |data| {
++                            output = data;
++                            n = @intCast(data.len);
++                        },
++                        .failure => |err| break :read err,
++                    } else {
++                        if (windows.exp.kernel32.ReadFile(fd, &buf, @intCast(read_size), &n, null) == windows.FALSE)
++                            break :read windows.GetLastError();
++                        output = buf[0..n];
++                    }
++                    break :read null;
++                };
++                if (read_error) |err| {
+                     switch (err) {
+                         // Check for a quit signal
+                         .OPERATION_ABORTED => break,
+@@ -2029,7 +2078,7 @@ pub const ReadThread = struct {
+                         log.info("perf: ptychunk key+{d}ms {d}B", .{ ms, n });
+                     }
+                     var timing: termio.Termio.OutputTiming = .{};
+-                    io.processOutputMeasured(buf[0..n], &timing);
++                    io.processOutputMeasured(output, &timing);
+                     total_bytes += n;
+                     total_chunks += 1;
+                     total_parse_ns += timing.parse_ns;
+@@ -2059,7 +2108,7 @@ pub const ReadThread = struct {
+                         stat_lock_ns = 0;
+                     }
+                 } else {
+-                    @call(.always_inline, termio.Termio.processOutput, .{ io, buf[0..n] });
++                    @call(.always_inline, termio.Termio.processOutput, .{ io, output });
+                 }
+ 
+                 // See threadMainPosix: hand the renderer state mutex
+--- /dev/null
++++ b/src/termio/WindowsRead.zig
+@@ -0,0 +1,83 @@
++//! Bounded overlapped output reader for self-created ConPTY pipes.
++//! One buffer is parsed while the other read is in flight. The stop event
++//! prevents a cancellation race between checking shutdown and issuing a read.
++const Self = @This();
++const std = @import("std");
++const windows = @import("../os/windows.zig");
++const Win32Error = std.os.windows.Win32Error;
++
++pub extern "kernel32" fn CreateEventW(?*windows.SECURITY_ATTRIBUTES, windows.BOOL, windows.BOOL, ?[*:0]const u16) callconv(.winapi) ?windows.HANDLE;
++pub extern "kernel32" fn SetEvent(windows.HANDLE) callconv(.winapi) windows.BOOL;
++extern "kernel32" fn ResetEvent(windows.HANDLE) callconv(.winapi) windows.BOOL;
++extern "kernel32" fn GetOverlappedResult(windows.HANDLE, *windows.OVERLAPPED, *windows.DWORD, windows.BOOL) callconv(.winapi) windows.BOOL;
++extern "kernel32" fn WaitForMultipleObjects(windows.DWORD, [*]const windows.HANDLE, windows.BOOL, windows.DWORD) callconv(.winapi) windows.DWORD;
++
++fd: windows.HANDLE,
++stop: windows.HANDLE,
++event: windows.HANDLE,
++overlapped: windows.OVERLAPPED = std.mem.zeroes(windows.OVERLAPPED),
++buffers: [2][128 * 1024]u8 = undefined,
++size: windows.DWORD,
++index: u1 = 0,
++started: bool = false,
++pending: bool = false,
++failure: ?Win32Error = null,
++
++pub const Result = union(enum) { data: []const u8, failure: Win32Error };
++
++pub fn init(fd: windows.HANDLE, stop: windows.HANDLE, size: usize) !Self {
++    const event = CreateEventW(null, windows.TRUE, windows.FALSE, null) orelse return error.CreateEventFailed;
++    return .{ .fd = fd, .stop = stop, .event = event, .size = @intCast(size) };
++}
++
++pub fn deinit(self: *Self) void {
++    // OVERLAPPED and its buffer must outlive cancellation completion.
++    if (self.pending) {
++        _ = windows.exp.kernel32.CancelIoEx(self.fd, &self.overlapped);
++        var ignored: windows.DWORD = 0;
++        _ = GetOverlappedResult(self.fd, &self.overlapped, &ignored, windows.TRUE);
++    }
++    _ = windows.exp.kernel32.CloseHandle(self.event);
++}
++
++fn issue(self: *Self) void {
++    if (windows.exp.kernel32.WaitForSingleObject(self.stop, 0) == 0) {
++        self.failure = .OPERATION_ABORTED;
++        return;
++    }
++    _ = ResetEvent(self.event);
++    self.overlapped = std.mem.zeroes(windows.OVERLAPPED);
++    self.overlapped.hEvent = self.event;
++    self.pending = true;
++    if (windows.exp.kernel32.ReadFile(self.fd, &self.buffers[self.index], self.size, null, &self.overlapped) == windows.FALSE) {
++        const err = windows.GetLastError();
++        if (err != .IO_PENDING) {
++            self.pending = false;
++            self.failure = err;
++        }
++    }
++}
++
++pub fn next(self: *Self) Result {
++    if (!self.started) {
++        self.started = true;
++        self.issue();
++    }
++    if (self.failure) |err| return .{ .failure = err };
++    const handles = [_]windows.HANDLE{ self.stop, self.event };
++    switch (WaitForMultipleObjects(handles.len, &handles, windows.FALSE, windows.INFINITE)) {
++        0 => return .{ .failure = .OPERATION_ABORTED },
++        1 => {},
++        else => return .{ .failure = windows.GetLastError() },
++    }
++    var n: windows.DWORD = 0;
++    if (GetOverlappedResult(self.fd, &self.overlapped, &n, windows.FALSE) == windows.FALSE) {
++        self.pending = false;
++        return .{ .failure = windows.GetLastError() };
++    }
++    self.pending = false;
++    const result = self.buffers[self.index][0..n];
++    self.index ^= 1;
++    self.issue();
++    return .{ .data = result };
++}

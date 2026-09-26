@@ -51,7 +51,7 @@ pub const Options = struct {
     data: ?[]const u8 = null,
 
     /// Match platform read sizes without rebuilding the benchmark. Windows
-    /// currently parses 1 KiB chunks; POSIX gathers up to 64 KiB.
+    /// currently parses up to 128 KiB chunks; POSIX gathers up to 64 KiB.
     @"chunk-size": usize = 64 * 1024,
 };
 
@@ -137,9 +137,9 @@ fn step(ptr: *anyopaque) Benchmark.Error!void {
     var f_reader = f.reader(global.io(), &.{});
     const r = &f_reader.interface;
 
-    if (self.opts.@"chunk-size" == 0 or self.opts.@"chunk-size" > 64 * 1024)
+    if (self.opts.@"chunk-size" == 0 or self.opts.@"chunk-size" > 128 * 1024)
         return error.BenchmarkFailed;
-    var buf: [64 * 1024]u8 = undefined;
+    var buf: [128 * 1024]u8 = undefined;
     while (true) {
         const n = r.readSliceShort(buf[0..self.opts.@"chunk-size"]) catch {
             log.warn("error reading data file err={?}", .{f_reader.err});

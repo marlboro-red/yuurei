@@ -273,7 +273,7 @@ try {
         Sample 'after-output'
         Capture 'after-output'
     }
-    [ordered]@{ terminal=$Terminal; executable=(Resolve-Path $Executable).Path; sha256=(Get-FileHash $Executable -Algorithm SHA256).Hash; version=$app.MainModule.FileVersionInfo.FileVersion; width=$rect.right-$rect.left; height=$rect.bottom-$rect.top; shell=$command; font='Consolas 12'; history_lines=10000; yuurei_config=$YuureiConfig; read_kib_override=$env:GHOSTTY_PTY_READ_KIB; io_stats=$env:GHOSTTY_IO_STATS; output_cost=$outputCost; samples=$rows } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $run 'resources.json')
+    [ordered]@{ terminal=$Terminal; executable=(Resolve-Path $Executable).Path; sha256=(Get-FileHash $Executable -Algorithm SHA256).Hash; version=$app.MainModule.FileVersionInfo.FileVersion; width=$rect.right-$rect.left; height=$rect.bottom-$rect.top; shell=$command; font='Consolas 12'; history_lines=10000; yuurei_config=$YuureiConfig; read_kib_override=$env:GHOSTTY_PTY_READ_KIB; io_stats=$env:GHOSTTY_IO_STATS; park_drawables=$env:GHOSTTY_PARK_DRAWABLES; overlapped_read=$env:GHOSTTY_OVERLAPPED_READ; output_cost=$outputCost; samples=$rows } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $run 'resources.json')
     Write-Host "RESULTS=$run HWND=$hwnd PID=$($app.Id)"
 } finally {
     if (!$KeepOpen -and $app -and !$app.HasExited) {

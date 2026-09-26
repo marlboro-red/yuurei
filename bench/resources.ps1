@@ -152,6 +152,7 @@ function Save-Results {
         shader_workload=[bool]$ShaderWorkload
         busy_workload=[bool]$BusyWorkload
         renderer_workers=$RendererWorkers
+        park_drawables=$env:GHOSTTY_PARK_DRAWABLES
         switch_samples=$SwitchSamples; samples=$rows
     } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $run 'results.json')
 }

@@ -1,0 +1,4656 @@
+{
+  "date": "2026-09-26",
+  "prior_report": "performance-windows-terminal-research-2026-09-26.json",
+  "implementation_commits": {
+    "parking": "60512eef0",
+    "row_copy": "06fe5e24a"
+  },
+  "tests": {
+    "initial_lib_vt": 648,
+    "final_clone": 97,
+    "windows_passed": 119,
+    "windows_skipped": 1,
+    "parking_graphics_smoke": "passed",
+    "expanded_parking_graphics_smoke": "passed",
+    "default_graphics_smoke": "passed",
+    "dedicated_rendering_smoke": "passed after bounded settling",
+    "dedicated_initial_failure": "Forty queued switches left zero visible hosts at the fixed 800 ms check; restoration completed after an additional 100 ms on recheck.",
+    "parking_lifecycle_graceful_exit": "passed"
+  },
+  "limitations": "One Windows/NVIDIA machine. Producer writes are not final-pixel times. Leaf sampling is wall clock and perturbs execution. Private commit differs from resident physical memory.",
+  "profiles": {
+    "unicode-profile-1ms": {
+      "command": [
+        "./zig-out/bin/ghostty-bench.exe",
+        "+terminal-stream",
+        "--terminal-rows=29",
+        "--terminal-cols=85",
+        "--chunk-size=131072",
+        "--data=C:\\Users\\parkc\\AppData\\Local\\Temp/yuurei-priorities/unicode.txt"
+      ],
+      "exit_code": 0,
+      "method": "1 ms requested wall-clock leaf samples; suspension perturbs execution; no inline attribution",
+      "samples": 696,
+      "functions": [
+        [
+          "clonePartialRowFrom",
+          271
+        ],
+        [
+          "printSliceFill__anon_181479",
+          95
+        ],
+        [
+          "printSlice",
+          68
+        ],
+        [
+          "ZwUnlockVirtualMemory",
+          42
+        ],
+        [
+          "appendGrapheme",
+          41
+        ],
+        [
+          "simdutf::haswell::implementation::convert_utf8_to_utf32_with_errors",
+          34
+        ],
+        [
+          "NtFreeVirtualMemory",
+          23
+        ],
+        [
+          "cursorScrollAbove",
+          20
+        ],
+        [
+          "memset_repmovs",
+          16
+        ],
+        [
+          "NtReadFile",
+          12
+        ],
+        [
+          "NtAllocateVirtualMemory",
+          11
+        ],
+        [
+          "step",
+          11
+        ],
+        [
+          "NtSetInformationVirtualMemory",
+          9
+        ],
+        [
+          "strncpy",
+          8
+        ],
+        [
+          "findFreeChunks",
+          7
+        ],
+        [
+          "ZwQueryVirtualMemory",
+          5
+        ],
+        [
+          "print",
+          4
+        ],
+        [
+          "ZwWriteFile",
+          3
+        ],
+        [
+          "simdutf::scalar::`anonymous namespace'::utf8_to_utf32::rewind_and_convert_with_errors",
+          3
+        ],
+        [
+          "ghostty::N_AVX2::DecodeNonAsciiUntilControlSeq<hwy::N_AVX2::Simd<unsigned char,32,0> >",
+          3
+        ],
+        [
+          "index",
+          2
+        ],
+        [
+          "vt__anon_180016",
+          2
+        ],
+        [
+          "grow",
+          2
+        ],
+        [
+          "memcpy",
+          1
+        ],
+        [
+          "vt__anon_179678",
+          1
+        ],
+        [
+          "increaseCapacity",
+          1
+        ],
+        [
+          "DiscardVirtualMemory",
+          1
+        ]
+      ],
+      "executable_sha256": "30c3b3f51be410e58d0ca169390ad66572f7cb3df4a973af524c66e5ec4b8462"
+    },
+    "unicode-profile-final": {
+      "command": [
+        "./zig-out/bin/ghostty-bench.exe",
+        "+terminal-stream",
+        "--terminal-rows=29",
+        "--terminal-cols=85",
+        "--chunk-size=131072",
+        "--data=C:\\Users\\parkc\\AppData\\Local\\Temp/yuurei-priorities/unicode.txt"
+      ],
+      "exit_code": 0,
+      "method": "1 ms requested wall-clock leaf samples; suspension perturbs execution; no inline attribution",
+      "samples": 554,
+      "functions": [
+        [
+          "clonePartialRowFrom",
+          115
+        ],
+        [
+          "printSliceFill__anon_181479",
+          105
+        ],
+        [
+          "printSlice",
+          67
+        ],
+        [
+          "ZwUnlockVirtualMemory",
+          43
+        ],
+        [
+          "simdutf::haswell::implementation::convert_utf8_to_utf32_with_errors",
+          30
+        ],
+        [
+          "appendGrapheme",
+          27
+        ],
+        [
+          "NtFreeVirtualMemory",
+          27
+        ],
+        [
+          "cursorScrollAbove",
+          20
+        ],
+        [
+          "memset_repmovs",
+          19
+        ],
+        [
+          "NtReadFile",
+          18
+        ],
+        [
+          "step",
+          12
+        ],
+        [
+          "ZwQueryVirtualMemory",
+          10
+        ],
+        [
+          "memcpy",
+          9
+        ],
+        [
+          "strncpy",
+          8
+        ],
+        [
+          "NtAllocateVirtualMemory",
+          7
+        ],
+        [
+          "NtSetInformationVirtualMemory",
+          6
+        ],
+        [
+          "findFreeChunks",
+          5
+        ],
+        [
+          "grow",
+          4
+        ],
+        [
+          "ZwWriteFile",
+          4
+        ],
+        [
+          "print",
+          3
+        ],
+        [
+          "ghostty::N_AVX2::DecodeNonAsciiUntilControlSeq<hwy::N_AVX2::Simd<unsigned char,32,0> >",
+          3
+        ],
+        [
+          "index",
+          3
+        ],
+        [
+          "enforce",
+          2
+        ],
+        [
+          "simdutf::scalar::`anonymous namespace'::utf8_to_utf32::rewind_and_convert_with_errors",
+          2
+        ],
+        [
+          "simdutf::convert_utf8_to_utf32_with_errors",
+          1
+        ],
+        [
+          "increaseCapacity",
+          1
+        ],
+        [
+          "destroyNode",
+          1
+        ],
+        [
+          "vt__anon_180016",
+          1
+        ],
+        [
+          "RtlReleaseSRWLockExclusive",
+          1
+        ]
+      ],
+      "executable_sha256": "81a6e4fc85537f337744f9fb7988f304cb5a4acc07edd73d5ac529f4fd7efb45"
+    },
+    "unicode-profile-repeat": {
+      "command": [
+        "./zig-out/bin/ghostty-bench.exe",
+        "+terminal-stream",
+        "--terminal-rows=29",
+        "--terminal-cols=85",
+        "--chunk-size=131072",
+        "--data=C:\\Users\\parkc\\AppData\\Local\\Temp/yuurei-priorities/unicode.txt"
+      ],
+      "exit_code": 0,
+      "method": "1 ms requested wall-clock leaf samples; suspension perturbs execution; no inline attribution",
+      "samples": 678,
+      "functions": [
+        [
+          "clonePartialRowFrom",
+          258
+        ],
+        [
+          "printSliceFill__anon_181479",
+          92
+        ],
+        [
+          "printSlice",
+          72
+        ],
+        [
+          "appendGrapheme",
+          41
+        ],
+        [
+          "ZwUnlockVirtualMemory",
+          40
+        ],
+        [
+          "NtFreeVirtualMemory",
+          25
+        ],
+        [
+          "cursorScrollAbove",
+          24
+        ],
+        [
+          "simdutf::haswell::implementation::convert_utf8_to_utf32_with_errors",
+          23
+        ],
+        [
+          "NtAllocateVirtualMemory",
+          16
+        ],
+        [
+          "NtReadFile",
+          12
+        ],
+        [
+          "step",
+          11
+        ],
+        [
+          "NtSetInformationVirtualMemory",
+          10
+        ],
+        [
+          "memset_repmovs",
+          10
+        ],
+        [
+          "ZwQueryVirtualMemory",
+          7
+        ],
+        [
+          "strncpy",
+          7
+        ],
+        [
+          "findFreeChunks",
+          5
+        ],
+        [
+          "memcpy",
+          5
+        ],
+        [
+          "print",
+          4
+        ],
+        [
+          "enforce",
+          3
+        ],
+        [
+          "ghostty::N_AVX2::DecodeNonAsciiUntilControlSeq<hwy::N_AVX2::Simd<unsigned char,32,0> >",
+          3
+        ],
+        [
+          "increaseCapacity",
+          3
+        ],
+        [
+          "grow",
+          2
+        ],
+        [
+          "ZwWriteFile",
+          2
+        ],
+        [
+          "operate",
+          1
+        ],
+        [
+          "readVec",
+          1
+        ],
+        [
+          "simdutf::scalar::`anonymous namespace'::utf8_to_utf32::rewind_and_convert_with_errors",
+          1
+        ]
+      ],
+      "executable_sha256": "30c3b3f51be410e58d0ca169390ad66572f7cb3df4a973af524c66e5ec4b8462"
+    },
+    "unicode-profile": {
+      "command": [
+        "./zig-out/bin/ghostty-bench.exe",
+        "+terminal-stream",
+        "--terminal-rows=29",
+        "--terminal-cols=85",
+        "--chunk-size=131072",
+        "--data=C:\\Users\\parkc\\AppData\\Local\\Temp/yuurei-priorities/unicode.txt"
+      ],
+      "exit_code": 0,
+      "method": "1 ms requested wall-clock leaf samples; suspension perturbs execution; no inline attribution",
+      "samples": 44,
+      "functions": [
+        [
+          "clonePartialRowFrom",
+          18
+        ],
+        [
+          "printSliceFill__anon_181479",
+          9
+        ],
+        [
+          "printSlice",
+          4
+        ],
+        [
+          "simdutf::haswell::implementation::convert_utf8_to_utf32_with_errors",
+          3
+        ],
+        [
+          "NtFreeVirtualMemory",
+          3
+        ],
+        [
+          "ZwUnlockVirtualMemory",
+          2
+        ],
+        [
+          "memset_repmovs",
+          1
+        ],
+        [
+          "simdutf::scalar::`anonymous namespace'::utf8_to_utf32::rewind_and_convert_with_errors",
+          1
+        ],
+        [
+          "vt__anon_179678",
+          1
+        ],
+        [
+          "ZwQueryVirtualMemory",
+          1
+        ],
+        [
+          "step",
+          1
+        ]
+      ],
+      "executable_sha256": "30c3b3f51be410e58d0ca169390ad66572f7cb3df4a973af524c66e5ec4b8462"
+    }
+  },
+  "stream_comparison": {
+    "method": "Compare serial process timings on pre-generated terminal-stream corpora.\n\nInputs must already exist; generation and profiling must run separately.\nTimings include process startup, file IO and terminal state updates, not GPU\nrendering or ConPTY. Each executable receives one warmup then repeated trials.\n",
+    "rows": 29,
+    "columns": 85,
+    "chunk_size": 131072,
+    "corpora": {
+      "ascii": {
+        "bytes": 69000000,
+        "sha256": "594e6658124dbb632f547a8bb678906efefe8cfa578290ea976061896a801846"
+      },
+      "unicode": {
+        "bytes": 87000000,
+        "sha256": "ca0413042c08d4b12deb04385b7dbe18978ef3d104a9fa98691e0aed19f066f8"
+      },
+      "cjk": {
+        "bytes": 81000000,
+        "sha256": "6f1b64dd5fc1971fadfaecc9cfe39ea74494b6e4bb3ac4d8f90ecf7ec53334dc"
+      },
+      "greek": {
+        "bytes": 103000000,
+        "sha256": "145e742ea59c9c11c3ecaf7e13c23660822ab2cb94c937e1615bf888c5c7ae9d"
+      },
+      "emoji": {
+        "bytes": 61000000,
+        "sha256": "66a5ac842934ae458593264ba6d4332c848c771ff068b741cf4ca7fae216b2ba"
+      },
+      "combining": {
+        "bytes": 65000000,
+        "sha256": "0902935039f31cea19d8a2c7d353c521d9a26124d9bd454835db6f43f36fb625"
+      }
+    },
+    "trials": [
+      {
+        "corpus": "ascii",
+        "executable": "zig-out\\bin\\ghostty-bench-before-row-copy.exe",
+        "sha256": "30c3b3f51be410e58d0ca169390ad66572f7cb3df4a973af524c66e5ec4b8462",
+        "samples_ms": [
+          95.94040000229143,
+          96.01130000373814,
+          97.0112000068184,
+          95.72420000040438,
+          96.70710000500549
+        ],
+        "median_ms": 96.01130000373814
+      },
+      {
+        "corpus": "ascii",
+        "executable": "zig-out\\bin\\ghostty-bench.exe",
+        "sha256": "2790d995da8ce0bae59ad66487948b49f664b632a623c0e355494b4e2ed21fc8",
+        "samples_ms": [
+          95.48899999936111,
+          93.93770000315271,
+          95.07369999482762,
+          95.0103999930434,
+          95.42959999816958
+        ],
+        "median_ms": 95.07369999482762
+      },
+      {
+        "corpus": "unicode",
+        "executable": "zig-out\\bin\\ghostty-bench-before-row-copy.exe",
+        "sha256": "30c3b3f51be410e58d0ca169390ad66572f7cb3df4a973af524c66e5ec4b8462",
+        "samples_ms": [
+          723.511399992276,
+          720.3540999908,
+          723.2886999991024,
+          724.4827999966219,
+          721.7027000006055
+        ],
+        "median_ms": 723.2886999991024
+      },
+      {
+        "corpus": "unicode",
+        "executable": "zig-out\\bin\\ghostty-bench.exe",
+        "sha256": "2790d995da8ce0bae59ad66487948b49f664b632a623c0e355494b4e2ed21fc8",
+        "samples_ms": [
+          610.5737000034424,
+          606.2753000005614,
+          614.4842000067001,
+          610.4399000032572,
+          600.703700009035
+        ],
+        "median_ms": 610.4399000032572
+      },
+      {
+        "corpus": "cjk",
+        "executable": "zig-out\\bin\\ghostty-bench-before-row-copy.exe",
+        "sha256": "30c3b3f51be410e58d0ca169390ad66572f7cb3df4a973af524c66e5ec4b8462",
+        "samples_ms": [
+          261.7764000024181,
+          261.0867000039434,
+          260.2262000000337,
+          264.85500000126194,
+          260.46629999473225
+        ],
+        "median_ms": 261.0867000039434
+      },
+      {
+        "corpus": "cjk",
+        "executable": "zig-out\\bin\\ghostty-bench.exe",
+        "sha256": "2790d995da8ce0bae59ad66487948b49f664b632a623c0e355494b4e2ed21fc8",
+        "samples_ms": [
+          260.54459999431856,
+          264.7979000030318,
+          262.73619999119546,
+          259.4004999991739,
+          259.29649999307003
+        ],
+        "median_ms": 260.54459999431856
+      },
+      {
+        "corpus": "greek",
+        "executable": "zig-out\\bin\\ghostty-bench-before-row-copy.exe",
+        "sha256": "30c3b3f51be410e58d0ca169390ad66572f7cb3df4a973af524c66e5ec4b8462",
+        "samples_ms": [
+          174.4237999955658,
+          174.26630000409205,
+          174.50790001021232,
+          172.47520000091754,
+          173.87179999786895
+        ],
+        "median_ms": 174.26630000409205
+      },
+      {
+        "corpus": "greek",
+        "executable": "zig-out\\bin\\ghostty-bench.exe",
+        "sha256": "2790d995da8ce0bae59ad66487948b49f664b632a623c0e355494b4e2ed21fc8",
+        "samples_ms": [
+          173.59639999631327,
+          174.37330000393558,
+          173.11099999642465,
+          173.12089999904856,
+          179.8826000012923
+        ],
+        "median_ms": 173.59639999631327
+      },
+      {
+        "corpus": "emoji",
+        "executable": "zig-out\\bin\\ghostty-bench-before-row-copy.exe",
+        "sha256": "30c3b3f51be410e58d0ca169390ad66572f7cb3df4a973af524c66e5ec4b8462",
+        "samples_ms": [
+          313.23700000939425,
+          328.51219999429304,
+          312.2628999990411,
+          310.84600000758655,
+          310.52919999638107
+        ],
+        "median_ms": 312.2628999990411
+      },
+      {
+        "corpus": "emoji",
+        "executable": "zig-out\\bin\\ghostty-bench.exe",
+        "sha256": "2790d995da8ce0bae59ad66487948b49f664b632a623c0e355494b4e2ed21fc8",
+        "samples_ms": [
+          309.66159999661613,
+          310.9335000044666,
+          309.670400005416,
+          309.3216000124812,
+          311.6253000043798
+        ],
+        "median_ms": 309.670400005416
+      },
+      {
+        "corpus": "combining",
+        "executable": "zig-out\\bin\\ghostty-bench-before-row-copy.exe",
+        "sha256": "30c3b3f51be410e58d0ca169390ad66572f7cb3df4a973af524c66e5ec4b8462",
+        "samples_ms": [
+          1397.9296999896178,
+          1347.085600005812,
+          1377.9271999956109,
+          1385.1110999967204,
+          1325.853799993638
+        ],
+        "median_ms": 1377.9271999956109
+      },
+      {
+        "corpus": "combining",
+        "executable": "zig-out\\bin\\ghostty-bench.exe",
+        "sha256": "2790d995da8ce0bae59ad66487948b49f664b632a623c0e355494b4e2ed21fc8",
+        "samples_ms": [
+          1299.9200000049314,
+          1322.1994000050472,
+          1434.0249999950174,
+          1306.900700001279,
+          1299.754199993913
+        ],
+        "median_ms": 1306.900700001279
+      }
+    ]
+  },
+  "application_trials": [
+    {
+      "run": "a0fc92decc584a7c8985f40078a78a83",
+      "parking": false,
+      "overlapped": true,
+      "io_stats": false,
+      "row_copy": false,
+      "resources": {
+        "terminal": "yuurei",
+        "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty.exe",
+        "sha256": "2CBC85CCB358704580A547D01BBBE5B1D1A2EF04F60C90BD05692FA6BEC32F2C",
+        "version": "0.2.15",
+        "width": 1600,
+        "height": 1200,
+        "shell": "cmd.exe /D /Q /K \"C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\a0fc92decc584a7c8985f40078a78a83\\init.cmd\"",
+        "font": "Consolas 12",
+        "history_lines": 10000,
+        "yuurei_config": [],
+        "read_kib_override": null,
+        "io_stats": null,
+        "output_cost": {
+          "terminal_cpu_ms": 2437.5,
+          "threads_before": [
+            {
+              "id": 26368,
+              "name": "",
+              "cpu_ms": 140.625
+            },
+            {
+              "id": 29484,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 27100,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 17856,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 26236,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 9420,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 18460,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 29672,
+              "name": "renderer-pool",
+              "cpu_ms": 234.375
+            },
+            {
+              "id": 2220,
+              "name": "",
+              "cpu_ms": 109.375
+            },
+            {
+              "id": 19264,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 10092,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 29004,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 24936,
+              "name": "io",
+              "cpu_ms": 15.625
+            },
+            {
+              "id": 17744,
+              "name": "io-reader",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 29500,
+              "name": "renderer-pool",
+              "cpu_ms": 343.75
+            },
+            {
+              "id": 13216,
+              "name": "",
+              "cpu_ms": 171.875
+            },
+            {
+              "id": 25880,
+              "name": "io",
+              "cpu_ms": 15.625
+            },
+            {
+              "id": 28248,
+              "name": "io-reader",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 20360,
+              "name": "io",
+              "cpu_ms": 15.625
+            },
+            {
+              "id": 26844,
+              "name": "io-reader",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 7628,
+              "name": "io",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 27192,
+              "name": "io-reader",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 6684,
+              "name": "io",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 3368,
+              "name": "io-reader",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 11124,
+              "name": "io",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 27388,
+              "name": "io-reader",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 19200,
+              "name": "io",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 28384,
+              "name": "io-reader",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 9204,
+              "name": "io",
+              "cpu_ms": 15.625
+            },
+            {
+              "id": 21644,
+              "name": "io-reader",
+              "cpu_ms": 0.0
+            }
+          ],
+          "threads_after": [
+            {
+              "id": 26368,
+              "name": "",
+              "cpu_ms": 171.875
+            },
+            {
+              "id": 29484,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 27100,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 17856,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 26236,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 18460,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 29672,
+              "name": "renderer-pool",
+              "cpu_ms": 234.375
+            },
+            {
+              "id": 2220,
+              "name": "",
+              "cpu_ms": 109.375
+            },
+            {
+              "id": 19264,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 10092,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 29004,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 24936,
+              "name": "io",
+              "cpu_ms": 15.625
+            },
+            {
+              "id": 17744,
+              "name": "io-reader",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 29500,
+              "name": "renderer-pool",
+              "cpu_ms": 1593.75
+            },
+            {
+              "id": 13216,
+              "name": "",
+              "cpu_ms": 609.375
+            },
+            {
+              "id": 25880,
+              "name": "io",
+              "cpu_ms": 15.625
+            },
+            {
+              "id": 28248,
+              "name": "io-reader",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 20360,
+              "name": "io",
+              "cpu_ms": 15.625
+            },
+            {
+              "id": 26844,
+              "name": "io-reader",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 7628,
+              "name": "io",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 27192,
+              "name": "io-reader",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 6684,
+              "name": "io",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 3368,
+              "name": "io-reader",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 11124,
+              "name": "io",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 27388,
+              "name": "io-reader",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 19200,
+              "name": "io",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 28384,
+              "name": "io-reader",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 9204,
+              "name": "io",
+              "cpu_ms": 15.625
+            },
+            {
+              "id": 21644,
+              "name": "io-reader",
+              "cpu_ms": 718.75
+            },
+            {
+              "id": 2208,
+              "name": "",
+              "cpu_ms": 0.0
+            },
+            {
+              "id": 18140,
+              "name": "",
+              "cpu_ms": 0.0
+            }
+          ],
+          "wall_ms": 31580.0855
+        },
+        "samples": [
+          {
+            "phase": "one-tab",
+            "private_mib": 139.953125,
+            "working_mib": 76.90625,
+            "handles": 394,
+            "threads": 14,
+            "cpu_one_core_percent": 0.0,
+            "children": [
+              {
+                "working_mib": 11.01953125,
+                "pid": 27504,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28125
+              },
+              {
+                "working_mib": 7.4921875,
+                "pid": 14416,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 6.78125
+              }
+            ]
+          },
+          {
+            "phase": "eight-tabs",
+            "private_mib": 369.9296875,
+            "working_mib": 135.1328125,
+            "handles": 565,
+            "threads": 30,
+            "cpu_one_core_percent": 0.0,
+            "children": [
+              {
+                "working_mib": 11.01953125,
+                "pid": 27504,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28125
+              },
+              {
+                "working_mib": 7.4921875,
+                "pid": 14416,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 6.78125
+              },
+              {
+                "working_mib": 11.015625,
+                "pid": 24136,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.27734375
+              },
+              {
+                "working_mib": 7.48828125,
+                "pid": 28036,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 6.78515625
+              },
+              {
+                "working_mib": 11.01171875,
+                "pid": 25460,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.2734375
+              },
+              {
+                "working_mib": 7.4921875,
+                "pid": 13252,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 6.78515625
+              },
+              {
+                "working_mib": 11.03125,
+                "pid": 25940,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.2890625
+              },
+              {
+                "working_mib": 7.48828125,
+                "pid": 7868,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 6.78125
+              },
+              {
+                "working_mib": 11.01171875,
+                "pid": 13536,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28125
+              },
+              {
+                "working_mib": 7.484375,
+                "pid": 11100,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 6.76953125
+              },
+              {
+                "working_mib": 11.015625,
+                "pid": 2760,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.27734375
+              },
+              {
+                "working_mib": 7.48828125,
+                "pid": 27612,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 6.78125
+              },
+              {
+                "working_mib": 11.00390625,
+                "pid": 26432,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.2734375
+              },
+              {
+                "working_mib": 7.484375,
+                "pid": 26680,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 6.76953125
+              },
+              {
+                "working_mib": 11.01171875,
+                "pid": 26916,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.27734375
+              },
+              {
+                "working_mib": 7.484375,
+                "pid": 24384,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 6.765625
+              }
+            ]
+          },
+          {
+            "phase": "after-output",
+            "private_mib": 379.56640625,
+            "working_mib": 133.8984375,
+            "handles": 564,
+            "threads": 31,
+            "cpu_one_core_percent": 0.0,
+            "children": [
+              {
+                "working_mib": 11.01953125,
+                "pid": 27504,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28125
+              },
+              {
+                "working_mib": 7.44921875,
+                "pid": 14416,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 3.765625
+              },
+              {
+                "working_mib": 11.015625,
+                "pid": 24136,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.27734375
+              },
+              {
+                "working_mib": 7.4453125,
+                "pid": 28036,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 3.765625
+              },
+              {
+                "working_mib": 11.01171875,
+                "pid": 25460,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.2734375
+              },
+              {
+                "working_mib": 7.44921875,
+                "pid": 13252,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 3.765625
+              },
+              {
+                "working_mib": 11.03125,
+                "pid": 25940,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.2890625
+              },
+              {
+                "working_mib": 7.4453125,
+                "pid": 7868,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 3.76171875
+              },
+              {
+                "working_mib": 11.01171875,
+                "pid": 13536,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28125
+              },
+              {
+                "working_mib": 7.44140625,
+                "pid": 11100,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 3.75
+              },
+              {
+                "working_mib": 11.015625,
+                "pid": 2760,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.27734375
+              },
+              {
+                "working_mib": 7.4453125,
+                "pid": 27612,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 3.765625
+              },
+              {
+                "working_mib": 11.00390625,
+                "pid": 26432,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.2734375
+              },
+              {
+                "working_mib": 7.44140625,
+                "pid": 26680,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 3.75390625
+              },
+              {
+                "working_mib": 11.359375,
+                "pid": 26916,
+                "parent": 11892,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.62890625
+              },
+              {
+                "working_mib": 13.21875,
+                "pid": 24384,
+                "parent": 11892,
+                "name": "cmd.exe",
+                "private_mib": 11.25
+              }
+            ]
+          }
+        ]
+      },
+      "output-results": {
+        "size": {
+          "rows": 29,
+          "columns": 85
+        },
+        "samples": [
+          {
+            "iteration": 0,
+            "bytes": 6900000,
+            "writer_ms": 35.974,
+            "warmup": true,
+            "kind": "ascii"
+          },
+          {
+            "iteration": 1,
+            "bytes": 6900000,
+            "writer_ms": 28.7403,
+            "warmup": false,
+            "kind": "ascii"
+          },
+          {
+            "iteration": 2,
+            "bytes": 6900000,
+            "writer_ms": 28.5171,
+            "warmup": false,
+            "kind": "ascii"
+          },
+          {
+            "iteration": 3,
+            "bytes": 6900000,
+            "writer_ms": 28.2486,
+            "warmup": false,
+            "kind": "ascii"
+          },
+          {
+            "iteration": 0,
+            "bytes": 5100000,
+            "writer_ms": 66.3241,
+            "warmup": true,
+            "kind": "color"
+          },
+          {
+            "iteration": 1,
+            "bytes": 5100000,
+            "writer_ms": 67.3112,
+            "warmup": false,
+            "kind": "color"
+          },
+          {
+            "iteration": 2,
+            "bytes": 5100000,
+            "writer_ms": 64.8221,
+            "warmup": false,
+            "kind": "color"
+          },
+          {
+            "iteration": 3,
+            "bytes": 5100000,
+            "writer_ms": 65.1176,
+            "warmup": false,
+            "kind": "color"
+          },
+          {
+            "iteration": 0,
+            "bytes": 8700000,
+            "writer_ms": 123.146,
+            "warmup": true,
+            "kind": "unicode"
+          },
+          {
+            "iteration": 1,
+            "bytes": 8700000,
+            "writer_ms": 121.6167,
+            "warmup": false,
+            "kind": "unicode"
+          },
+          {
+            "iteration": 2,
+            "bytes": 8700000,
+            "writer_ms": 122.4282,
+            "warmup": false,
+            "kind": "unicode"
+          },
+          {
+            "iteration": 3,
+            "bytes": 8700000,
+            "writer_ms": 121.868,
+            "warmup": false,
+            "kind": "unicode"
+          }
+        ]
+      }
+    },
+    {
+      "run": "e727b60f685d444fab0c8b0267f44dea",
+      "parking": false,
+      "overlapped": true,
+      "io_stats": true,
+      "row_copy": false,
+      "resources": {
+        "terminal": "yuurei",
+        "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty.exe",
+        "sha256": "2CBC85CCB358704580A547D01BBBE5B1D1A2EF04F60C90BD05692FA6BEC32F2C",
+        "version": "0.2.15",
+        "width": 1600,
+        "height": 1200,
+        "shell": "cmd.exe /D /Q /K \"C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\e727b60f685d444fab0c8b0267f44dea\\init.cmd\"",
+        "font": "Consolas 12",
+        "history_lines": 10000,
+        "yuurei_config": [],
+        "read_kib_override": null,
+        "io_stats": "1",
+        "output_cost": {
+          "wall_ms": 31572.9465,
+          "threads_before": [
+            {
+              "id": 2084,
+              "cpu_ms": 140.625,
+              "name": ""
+            },
+            {
+              "id": 17516,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 22980,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 7888,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 2836,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 23200,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 28908,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 1948,
+              "cpu_ms": 203.125,
+              "name": "renderer-pool"
+            },
+            {
+              "id": 7544,
+              "cpu_ms": 140.625,
+              "name": ""
+            },
+            {
+              "id": 25912,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 13280,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 18464,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 11908,
+              "cpu_ms": 0.0,
+              "name": "io"
+            },
+            {
+              "id": 25316,
+              "cpu_ms": 0.0,
+              "name": "io-reader"
+            },
+            {
+              "id": 11104,
+              "cpu_ms": 234.375,
+              "name": "renderer-pool"
+            },
+            {
+              "id": 404,
+              "cpu_ms": 156.25,
+              "name": ""
+            },
+            {
+              "id": 12360,
+              "cpu_ms": 0.0,
+              "name": "io"
+            },
+            {
+              "id": 15732,
+              "cpu_ms": 0.0,
+              "name": "io-reader"
+            },
+            {
+              "id": 7984,
+              "cpu_ms": 0.0,
+              "name": "io"
+            },
+            {
+              "id": 14812,
+              "cpu_ms": 0.0,
+              "name": "io-reader"
+            },
+            {
+              "id": 18516,
+              "cpu_ms": 0.0,
+              "name": "io"
+            },
+            {
+              "id": 18984,
+              "cpu_ms": 0.0,
+              "name": "io-reader"
+            },
+            {
+              "id": 28176,
+              "cpu_ms": 15.625,
+              "name": "io"
+            },
+            {
+              "id": 14416,
+              "cpu_ms": 0.0,
+              "name": "io-reader"
+            },
+            {
+              "id": 28036,
+              "cpu_ms": 0.0,
+              "name": "io"
+            },
+            {
+              "id": 14064,
+              "cpu_ms": 0.0,
+              "name": "io-reader"
+            },
+            {
+              "id": 7868,
+              "cpu_ms": 0.0,
+              "name": "io"
+            },
+            {
+              "id": 5224,
+              "cpu_ms": 0.0,
+              "name": "io-reader"
+            },
+            {
+              "id": 13536,
+              "cpu_ms": 0.0,
+              "name": "io"
+            },
+            {
+              "id": 25684,
+              "cpu_ms": 0.0,
+              "name": "io-reader"
+            }
+          ],
+          "terminal_cpu_ms": 2421.875,
+          "threads_after": [
+            {
+              "id": 2084,
+              "cpu_ms": 140.625,
+              "name": ""
+            },
+            {
+              "id": 17516,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 22980,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 7888,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 2836,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 28908,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 1948,
+              "cpu_ms": 203.125,
+              "name": "renderer-pool"
+            },
+            {
+              "id": 7544,
+              "cpu_ms": 140.625,
+              "name": ""
+            },
+            {
+              "id": 25912,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 13280,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 18464,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 11908,
+              "cpu_ms": 0.0,
+              "name": "io"
+            },
+            {
+              "id": 25316,
+              "cpu_ms": 0.0,
+              "name": "io-reader"
+            },
+            {
+              "id": 11104,
+              "cpu_ms": 1421.875,
+              "name": "renderer-pool"
+            },
+            {
+              "id": 404,
+              "cpu_ms": 687.5,
+              "name": ""
+            },
+            {
+              "id": 12360,
+              "cpu_ms": 0.0,
+              "name": "io"
+            },
+            {
+              "id": 15732,
+              "cpu_ms": 0.0,
+              "name": "io-reader"
+            },
+            {
+              "id": 7984,
+              "cpu_ms": 0.0,
+              "name": "io"
+            },
+            {
+              "id": 14812,
+              "cpu_ms": 0.0,
+              "name": "io-reader"
+            },
+            {
+              "id": 18516,
+              "cpu_ms": 0.0,
+              "name": "io"
+            },
+            {
+              "id": 18984,
+              "cpu_ms": 0.0,
+              "name": "io-reader"
+            },
+            {
+              "id": 28176,
+              "cpu_ms": 15.625,
+              "name": "io"
+            },
+            {
+              "id": 14416,
+              "cpu_ms": 0.0,
+              "name": "io-reader"
+            },
+            {
+              "id": 28036,
+              "cpu_ms": 0.0,
+              "name": "io"
+            },
+            {
+              "id": 14064,
+              "cpu_ms": 0.0,
+              "name": "io-reader"
+            },
+            {
+              "id": 7868,
+              "cpu_ms": 0.0,
+              "name": "io"
+            },
+            {
+              "id": 5224,
+              "cpu_ms": 0.0,
+              "name": "io-reader"
+            },
+            {
+              "id": 13536,
+              "cpu_ms": 0.0,
+              "name": "io"
+            },
+            {
+              "id": 25684,
+              "cpu_ms": 703.125,
+              "name": "io-reader"
+            },
+            {
+              "id": 29064,
+              "cpu_ms": 0.0,
+              "name": ""
+            },
+            {
+              "id": 15720,
+              "cpu_ms": 0.0,
+              "name": ""
+            }
+          ]
+        },
+        "samples": [
+          {
+            "phase": "one-tab",
+            "private_mib": 138.8203125,
+            "working_mib": 76.71484375,
+            "handles": 394,
+            "threads": 14,
+            "cpu_one_core_percent": 0.0,
+            "children": [
+              {
+                "parent": 18424,
+                "pid": 356,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28125,
+                "working_mib": 11.015625
+              },
+              {
+                "parent": 18424,
+                "pid": 18056,
+                "name": "cmd.exe",
+                "private_mib": 6.765625,
+                "working_mib": 7.47265625
+              }
+            ]
+          },
+          {
+            "phase": "eight-tabs",
+            "private_mib": 368.92578125,
+            "working_mib": 135.06640625,
+            "handles": 565,
+            "threads": 30,
+            "cpu_one_core_percent": 0.0,
+            "children": [
+              {
+                "parent": 18424,
+                "pid": 356,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28125,
+                "working_mib": 11.015625
+              },
+              {
+                "parent": 18424,
+                "pid": 18056,
+                "name": "cmd.exe",
+                "private_mib": 6.765625,
+                "working_mib": 7.47265625
+              },
+              {
+                "parent": 18424,
+                "pid": 17576,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.27734375,
+                "working_mib": 11.0078125
+              },
+              {
+                "parent": 18424,
+                "pid": 320,
+                "name": "cmd.exe",
+                "private_mib": 6.7734375,
+                "working_mib": 7.47265625
+              },
+              {
+                "parent": 18424,
+                "pid": 22564,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28125,
+                "working_mib": 11.0234375
+              },
+              {
+                "parent": 18424,
+                "pid": 25344,
+                "name": "cmd.exe",
+                "private_mib": 6.7734375,
+                "working_mib": 7.47265625
+              },
+              {
+                "parent": 18424,
+                "pid": 13940,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.2734375,
+                "working_mib": 11.0234375
+              },
+              {
+                "parent": 18424,
+                "pid": 28064,
+                "name": "cmd.exe",
+                "private_mib": 6.76953125,
+                "working_mib": 7.47265625
+              },
+              {
+                "parent": 18424,
+                "pid": 28652,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28125,
+                "working_mib": 11.0234375
+              },
+              {
+                "parent": 18424,
+                "pid": 28648,
+                "name": "cmd.exe",
+                "private_mib": 6.76953125,
+                "working_mib": 7.47265625
+              },
+              {
+                "parent": 18424,
+                "pid": 25880,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.2734375,
+                "working_mib": 11.015625
+              },
+              {
+                "parent": 18424,
+                "pid": 22204,
+                "name": "cmd.exe",
+                "private_mib": 6.76171875,
+                "working_mib": 7.46875
+              },
+              {
+                "parent": 18424,
+                "pid": 7628,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28515625,
+                "working_mib": 11.0234375
+              },
+              {
+                "parent": 18424,
+                "pid": 6784,
+                "name": "cmd.exe",
+                "private_mib": 6.7734375,
+                "working_mib": 7.48046875
+              },
+              {
+                "parent": 18424,
+                "pid": 27816,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.27734375,
+                "working_mib": 11.0078125
+              },
+              {
+                "parent": 18424,
+                "pid": 27612,
+                "name": "cmd.exe",
+                "private_mib": 6.76953125,
+                "working_mib": 7.47265625
+              }
+            ]
+          },
+          {
+            "phase": "after-output",
+            "private_mib": 378.61328125,
+            "working_mib": 133.984375,
+            "handles": 564,
+            "threads": 31,
+            "cpu_one_core_percent": 0.0,
+            "children": [
+              {
+                "parent": 18424,
+                "pid": 356,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28125,
+                "working_mib": 11.015625
+              },
+              {
+                "parent": 18424,
+                "pid": 18056,
+                "name": "cmd.exe",
+                "private_mib": 3.74609375,
+                "working_mib": 7.4296875
+              },
+              {
+                "parent": 18424,
+                "pid": 17576,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.27734375,
+                "working_mib": 11.0078125
+              },
+              {
+                "parent": 18424,
+                "pid": 320,
+                "name": "cmd.exe",
+                "private_mib": 3.75390625,
+                "working_mib": 7.4296875
+              },
+              {
+                "parent": 18424,
+                "pid": 22564,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28125,
+                "working_mib": 11.0234375
+              },
+              {
+                "parent": 18424,
+                "pid": 25344,
+                "name": "cmd.exe",
+                "private_mib": 3.75390625,
+                "working_mib": 7.4296875
+              },
+              {
+                "parent": 18424,
+                "pid": 13940,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.2734375,
+                "working_mib": 11.0234375
+              },
+              {
+                "parent": 18424,
+                "pid": 28064,
+                "name": "cmd.exe",
+                "private_mib": 3.75,
+                "working_mib": 7.4296875
+              },
+              {
+                "parent": 18424,
+                "pid": 28652,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28125,
+                "working_mib": 11.0234375
+              },
+              {
+                "parent": 18424,
+                "pid": 28648,
+                "name": "cmd.exe",
+                "private_mib": 3.75,
+                "working_mib": 7.4296875
+              },
+              {
+                "parent": 18424,
+                "pid": 25880,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.2734375,
+                "working_mib": 11.015625
+              },
+              {
+                "parent": 18424,
+                "pid": 22204,
+                "name": "cmd.exe",
+                "private_mib": 3.74609375,
+                "working_mib": 7.42578125
+              },
+              {
+                "parent": 18424,
+                "pid": 7628,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28515625,
+                "working_mib": 11.0234375
+              },
+              {
+                "parent": 18424,
+                "pid": 6784,
+                "name": "cmd.exe",
+                "private_mib": 3.75390625,
+                "working_mib": 7.43359375
+              },
+              {
+                "parent": 18424,
+                "pid": 27816,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.625,
+                "working_mib": 11.3515625
+              },
+              {
+                "parent": 18424,
+                "pid": 27612,
+                "name": "cmd.exe",
+                "private_mib": 10.0625,
+                "working_mib": 13
+              }
+            ]
+          }
+        ]
+      },
+      "output-results": {
+        "size": {
+          "rows": 29,
+          "columns": 85
+        },
+        "samples": [
+          {
+            "bytes": 6900000,
+            "writer_ms": 35.102,
+            "warmup": true,
+            "iteration": 0,
+            "kind": "ascii"
+          },
+          {
+            "bytes": 6900000,
+            "writer_ms": 29.4126,
+            "warmup": false,
+            "iteration": 1,
+            "kind": "ascii"
+          },
+          {
+            "bytes": 6900000,
+            "writer_ms": 28.8521,
+            "warmup": false,
+            "iteration": 2,
+            "kind": "ascii"
+          },
+          {
+            "bytes": 6900000,
+            "writer_ms": 28.4865,
+            "warmup": false,
+            "iteration": 3,
+            "kind": "ascii"
+          },
+          {
+            "bytes": 5100000,
+            "writer_ms": 69.8293,
+            "warmup": true,
+            "iteration": 0,
+            "kind": "color"
+          },
+          {
+            "bytes": 5100000,
+            "writer_ms": 76.1876,
+            "warmup": false,
+            "iteration": 1,
+            "kind": "color"
+          },
+          {
+            "bytes": 5100000,
+            "writer_ms": 66.3917,
+            "warmup": false,
+            "iteration": 2,
+            "kind": "color"
+          },
+          {
+            "bytes": 5100000,
+            "writer_ms": 65.3368,
+            "warmup": false,
+            "iteration": 3,
+            "kind": "color"
+          },
+          {
+            "bytes": 8700000,
+            "writer_ms": 122.6332,
+            "warmup": true,
+            "iteration": 0,
+            "kind": "unicode"
+          },
+          {
+            "bytes": 8700000,
+            "writer_ms": 124.0243,
+            "warmup": false,
+            "iteration": 1,
+            "kind": "unicode"
+          },
+          {
+            "bytes": 8700000,
+            "writer_ms": 122.0373,
+            "warmup": false,
+            "iteration": 2,
+            "kind": "unicode"
+          },
+          {
+            "bytes": 8700000,
+            "writer_ms": 122.6027,
+            "warmup": false,
+            "iteration": 3,
+            "kind": "unicode"
+          }
+        ]
+      },
+      "io_totals": [
+        "io totals read-size=131072 bytes=243 chunks=10 parse-ns=340800 lock-ns=1100 handoff-ns=200",
+        "io totals read-size=131072 bytes=243 chunks=10 parse-ns=59700 lock-ns=900 handoff-ns=400",
+        "io totals read-size=131072 bytes=243 chunks=10 parse-ns=56900 lock-ns=900 handoff-ns=400",
+        "io totals read-size=131072 bytes=243 chunks=10 parse-ns=354700 lock-ns=700 handoff-ns=200",
+        "io totals read-size=131072 bytes=243 chunks=10 parse-ns=50900 lock-ns=900 handoff-ns=400",
+        "io totals read-size=131072 bytes=243 chunks=10 parse-ns=56300 lock-ns=1000 handoff-ns=400",
+        "io totals read-size=131072 bytes=243 chunks=10 parse-ns=243600 lock-ns=900 handoff-ns=100",
+        "io totals read-size=131072 bytes=82801086 chunks=1242 parse-ns=819040000 lock-ns=105200 handoff-ns=1228200"
+      ]
+    },
+    {
+      "run": "35b5ac356eb546c69840258731c2b94a",
+      "parking": false,
+      "overlapped": false,
+      "io_stats": true,
+      "row_copy": false,
+      "resources": {
+        "terminal": "yuurei",
+        "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty.exe",
+        "sha256": "2CBC85CCB358704580A547D01BBBE5B1D1A2EF04F60C90BD05692FA6BEC32F2C",
+        "version": "0.2.15",
+        "width": 1600,
+        "height": 1200,
+        "shell": "cmd.exe /D /Q /K \"C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\35b5ac356eb546c69840258731c2b94a\\init.cmd\"",
+        "font": "Consolas 12",
+        "history_lines": 10000,
+        "yuurei_config": [],
+        "read_kib_override": null,
+        "io_stats": "1",
+        "output_cost": {
+          "threads_after": [
+            {
+              "cpu_ms": 109.375,
+              "name": "",
+              "id": 7972
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 25412
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 27804
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 29684
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 19344
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 9292
+            },
+            {
+              "cpu_ms": 218.75,
+              "name": "renderer-pool",
+              "id": 9388
+            },
+            {
+              "cpu_ms": 187.5,
+              "name": "",
+              "id": 29504
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 2108
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 26552
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 25436
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 8892
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 29340
+            },
+            {
+              "cpu_ms": 1453.125,
+              "name": "renderer-pool",
+              "id": 9692
+            },
+            {
+              "cpu_ms": 703.125,
+              "name": "",
+              "id": 1524
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 18764
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 23420
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 8944
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 26712
+            },
+            {
+              "cpu_ms": 15.625,
+              "name": "io",
+              "id": 7872
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 2340
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 13748
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 24364
+            },
+            {
+              "cpu_ms": 15.625,
+              "name": "io",
+              "id": 28356
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 29016
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 7940
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 26876
+            },
+            {
+              "cpu_ms": 15.625,
+              "name": "io",
+              "id": 16516
+            },
+            {
+              "cpu_ms": 781.25,
+              "name": "io-reader",
+              "id": 26860
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 23960
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 22488
+            }
+          ],
+          "wall_ms": 31600.6949,
+          "threads_before": [
+            {
+              "cpu_ms": 109.375,
+              "name": "",
+              "id": 7972
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 25412
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 27804
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 29684
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 19344
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 11484
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 9292
+            },
+            {
+              "cpu_ms": 218.75,
+              "name": "renderer-pool",
+              "id": 9388
+            },
+            {
+              "cpu_ms": 187.5,
+              "name": "",
+              "id": 29504
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 2108
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 26552
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 25436
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 8892
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 29340
+            },
+            {
+              "cpu_ms": 234.375,
+              "name": "renderer-pool",
+              "id": 9692
+            },
+            {
+              "cpu_ms": 203.125,
+              "name": "",
+              "id": 1524
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 18764
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 23420
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 8944
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 26712
+            },
+            {
+              "cpu_ms": 15.625,
+              "name": "io",
+              "id": 7872
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 2340
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 13748
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 24364
+            },
+            {
+              "cpu_ms": 15.625,
+              "name": "io",
+              "id": 28356
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 29016
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 7940
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 26876
+            },
+            {
+              "cpu_ms": 15.625,
+              "name": "io",
+              "id": 16516
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 26860
+            }
+          ],
+          "terminal_cpu_ms": 2515.625
+        },
+        "samples": [
+          {
+            "phase": "one-tab",
+            "private_mib": 139.37890625,
+            "working_mib": 76.45703125,
+            "handles": 392,
+            "threads": 14,
+            "cpu_one_core_percent": 1.03872185558203,
+            "children": [
+              {
+                "private_mib": 2.26953125,
+                "working_mib": 11.015625,
+                "pid": 27556,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.7578125,
+                "working_mib": 7.46875,
+                "pid": 15060,
+                "parent": 6536,
+                "name": "cmd.exe"
+              }
+            ]
+          },
+          {
+            "phase": "eight-tabs",
+            "private_mib": 367.76953125,
+            "working_mib": 134.10546875,
+            "handles": 549,
+            "threads": 30,
+            "cpu_one_core_percent": 0.0,
+            "children": [
+              {
+                "private_mib": 2.26953125,
+                "working_mib": 11.015625,
+                "pid": 27556,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.7578125,
+                "working_mib": 7.46875,
+                "pid": 15060,
+                "parent": 6536,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.28515625,
+                "working_mib": 11.015625,
+                "pid": 1480,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.7734375,
+                "working_mib": 7.47265625,
+                "pid": 7696,
+                "parent": 6536,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.27734375,
+                "working_mib": 11.015625,
+                "pid": 16332,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.765625,
+                "working_mib": 7.47265625,
+                "pid": 380,
+                "parent": 6536,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.27734375,
+                "working_mib": 11.01953125,
+                "pid": 26420,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.76953125,
+                "working_mib": 7.46875,
+                "pid": 7072,
+                "parent": 6536,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.26171875,
+                "working_mib": 11.0078125,
+                "pid": 28620,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.765625,
+                "working_mib": 7.4765625,
+                "pid": 6592,
+                "parent": 6536,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.2734375,
+                "working_mib": 11.01171875,
+                "pid": 2132,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.76953125,
+                "working_mib": 7.4765625,
+                "pid": 4844,
+                "parent": 6536,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.27734375,
+                "working_mib": 11.00390625,
+                "pid": 6840,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.76171875,
+                "working_mib": 7.46875,
+                "pid": 23056,
+                "parent": 6536,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.2734375,
+                "working_mib": 11.0078125,
+                "pid": 27116,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.75390625,
+                "working_mib": 7.47265625,
+                "pid": 25188,
+                "parent": 6536,
+                "name": "cmd.exe"
+              }
+            ]
+          },
+          {
+            "phase": "after-output",
+            "private_mib": 377.203125,
+            "working_mib": 132.67578125,
+            "handles": 548,
+            "threads": 31,
+            "cpu_one_core_percent": 0.0,
+            "children": [
+              {
+                "private_mib": 2.26953125,
+                "working_mib": 11.015625,
+                "pid": 27556,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 3.73828125,
+                "working_mib": 7.42578125,
+                "pid": 15060,
+                "parent": 6536,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.28515625,
+                "working_mib": 11.015625,
+                "pid": 1480,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 3.75390625,
+                "working_mib": 7.4296875,
+                "pid": 7696,
+                "parent": 6536,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.27734375,
+                "working_mib": 11.015625,
+                "pid": 16332,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 3.75,
+                "working_mib": 7.4296875,
+                "pid": 380,
+                "parent": 6536,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.27734375,
+                "working_mib": 11.01953125,
+                "pid": 26420,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 3.75390625,
+                "working_mib": 7.4296875,
+                "pid": 7072,
+                "parent": 6536,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.26171875,
+                "working_mib": 11.0078125,
+                "pid": 28620,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 3.75,
+                "working_mib": 7.43359375,
+                "pid": 6592,
+                "parent": 6536,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.2734375,
+                "working_mib": 11.01171875,
+                "pid": 2132,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 3.75390625,
+                "working_mib": 7.43359375,
+                "pid": 4844,
+                "parent": 6536,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.27734375,
+                "working_mib": 11.00390625,
+                "pid": 6840,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 3.7421875,
+                "working_mib": 7.42578125,
+                "pid": 23056,
+                "parent": 6536,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.625,
+                "working_mib": 11.35546875,
+                "pid": 27116,
+                "parent": 6536,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 10.0625,
+                "working_mib": 13.01953125,
+                "pid": 25188,
+                "parent": 6536,
+                "name": "cmd.exe"
+              }
+            ]
+          }
+        ]
+      },
+      "output-results": {
+        "size": {
+          "columns": 85,
+          "rows": 29
+        },
+        "samples": [
+          {
+            "writer_ms": 36.8966,
+            "bytes": 6900000,
+            "iteration": 0,
+            "warmup": true,
+            "kind": "ascii"
+          },
+          {
+            "writer_ms": 30.0178,
+            "bytes": 6900000,
+            "iteration": 1,
+            "warmup": false,
+            "kind": "ascii"
+          },
+          {
+            "writer_ms": 29.3063,
+            "bytes": 6900000,
+            "iteration": 2,
+            "warmup": false,
+            "kind": "ascii"
+          },
+          {
+            "writer_ms": 29.3253,
+            "bytes": 6900000,
+            "iteration": 3,
+            "warmup": false,
+            "kind": "ascii"
+          },
+          {
+            "writer_ms": 65.9812,
+            "bytes": 5100000,
+            "iteration": 0,
+            "warmup": true,
+            "kind": "color"
+          },
+          {
+            "writer_ms": 66.1504,
+            "bytes": 5100000,
+            "iteration": 1,
+            "warmup": false,
+            "kind": "color"
+          },
+          {
+            "writer_ms": 67.3761,
+            "bytes": 5100000,
+            "iteration": 2,
+            "warmup": false,
+            "kind": "color"
+          },
+          {
+            "writer_ms": 66.9989,
+            "bytes": 5100000,
+            "iteration": 3,
+            "warmup": false,
+            "kind": "color"
+          },
+          {
+            "writer_ms": 125.3582,
+            "bytes": 8700000,
+            "iteration": 0,
+            "warmup": true,
+            "kind": "unicode"
+          },
+          {
+            "writer_ms": 125.2592,
+            "bytes": 8700000,
+            "iteration": 1,
+            "warmup": false,
+            "kind": "unicode"
+          },
+          {
+            "writer_ms": 124.9877,
+            "bytes": 8700000,
+            "iteration": 2,
+            "warmup": false,
+            "kind": "unicode"
+          },
+          {
+            "writer_ms": 124.4853,
+            "bytes": 8700000,
+            "iteration": 3,
+            "warmup": false,
+            "kind": "unicode"
+          }
+        ]
+      },
+      "io_totals": [
+        "io totals read-size=131072 bytes=243 chunks=10 parse-ns=325100 lock-ns=900 handoff-ns=200",
+        "io totals read-size=131072 bytes=243 chunks=10 parse-ns=73000 lock-ns=1200 handoff-ns=800",
+        "io totals read-size=131072 bytes=243 chunks=10 parse-ns=55400 lock-ns=1000 handoff-ns=100",
+        "io totals read-size=131072 bytes=243 chunks=10 parse-ns=48600 lock-ns=1200 handoff-ns=300",
+        "io totals read-size=131072 bytes=243 chunks=10 parse-ns=53200 lock-ns=600 handoff-ns=400",
+        "io totals read-size=131072 bytes=243 chunks=10 parse-ns=54900 lock-ns=900 handoff-ns=100",
+        "io totals read-size=131072 bytes=243 chunks=10 parse-ns=49600 lock-ns=700 handoff-ns=500",
+        "io totals read-size=131072 bytes=82801086 chunks=1241 parse-ns=804817900 lock-ns=114100 handoff-ns=1173200"
+      ]
+    },
+    {
+      "run": "d012343ced1047eb921ea9ec221f22ae",
+      "parking": false,
+      "overlapped": false,
+      "io_stats": false,
+      "row_copy": true,
+      "resources": {
+        "terminal": "yuurei",
+        "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty.exe",
+        "sha256": "8C5F1668E8D46E60EC2885145AB7B6056820E4F5754B2BC539A3059131CFEFDB",
+        "version": "0.2.15",
+        "width": 1600,
+        "height": 1200,
+        "shell": "cmd.exe /D /Q /K \"C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\d012343ced1047eb921ea9ec221f22ae\\init.cmd\"",
+        "font": "Consolas 12",
+        "history_lines": 10000,
+        "yuurei_config": [],
+        "read_kib_override": null,
+        "io_stats": null,
+        "park_drawables": null,
+        "overlapped_read": null,
+        "output_cost": {
+          "terminal_cpu_ms": 2250.0,
+          "threads_before": [
+            {
+              "cpu_ms": 156.25,
+              "id": 28244,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 14432,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 18164,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 13736,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 26284,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 22520,
+              "name": ""
+            },
+            {
+              "cpu_ms": 234.375,
+              "id": 16072,
+              "name": "renderer-pool"
+            },
+            {
+              "cpu_ms": 109.375,
+              "id": 17444,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 28164,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 26564,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 22704,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 15720,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 18168,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 500.0,
+              "id": 29176,
+              "name": "renderer-pool"
+            },
+            {
+              "cpu_ms": 421.875,
+              "id": 24628,
+              "name": ""
+            },
+            {
+              "cpu_ms": 15.625,
+              "id": 27076,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 5140,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 15.625,
+              "id": 23632,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 18764,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 22164,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 7892,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 29172,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 1724,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 29424,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 28384,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 18108,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 5088,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 28140,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 10140,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 7920,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 27924,
+              "name": ""
+            }
+          ],
+          "threads_after": [
+            {
+              "cpu_ms": 187.5,
+              "id": 28244,
+              "name": ""
+            },
+            {
+              "cpu_ms": 15.625,
+              "id": 26284,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 22520,
+              "name": ""
+            },
+            {
+              "cpu_ms": 234.375,
+              "id": 16072,
+              "name": "renderer-pool"
+            },
+            {
+              "cpu_ms": 125.0,
+              "id": 17444,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 28164,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 26564,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 22704,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 15720,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 18168,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 1640.625,
+              "id": 29176,
+              "name": "renderer-pool"
+            },
+            {
+              "cpu_ms": 828.125,
+              "id": 24628,
+              "name": ""
+            },
+            {
+              "cpu_ms": 15.625,
+              "id": 27076,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 5140,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 15.625,
+              "id": 23632,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 18764,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 22164,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 7892,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 29172,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 1724,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 29424,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 28384,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 18108,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 5088,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 28140,
+              "name": "io"
+            },
+            {
+              "cpu_ms": 640.625,
+              "id": 10140,
+              "name": "io-reader"
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 7920,
+              "name": ""
+            },
+            {
+              "cpu_ms": 0.0,
+              "id": 27924,
+              "name": ""
+            }
+          ],
+          "wall_ms": 31573.8233
+        },
+        "samples": [
+          {
+            "phase": "one-tab",
+            "private_mib": 140.01171875,
+            "working_mib": 76.359375,
+            "handles": 392,
+            "threads": 14,
+            "cpu_one_core_percent": 0.0,
+            "children": [
+              {
+                "private_mib": 2.2734375,
+                "working_mib": 11.01171875,
+                "pid": 10500,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.77734375,
+                "working_mib": 7.484375,
+                "pid": 25352,
+                "parent": 16176,
+                "name": "cmd.exe"
+              }
+            ]
+          },
+          {
+            "phase": "eight-tabs",
+            "private_mib": 367.99609375,
+            "working_mib": 134.3046875,
+            "handles": 549,
+            "threads": 30,
+            "cpu_one_core_percent": 0.5208568413387724,
+            "children": [
+              {
+                "private_mib": 2.2734375,
+                "working_mib": 11.01171875,
+                "pid": 10500,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.77734375,
+                "working_mib": 7.484375,
+                "pid": 25352,
+                "parent": 16176,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.2734375,
+                "working_mib": 11.00390625,
+                "pid": 25028,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.7734375,
+                "working_mib": 7.484375,
+                "pid": 19272,
+                "parent": 16176,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.2734375,
+                "working_mib": 11.0078125,
+                "pid": 26936,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.78515625,
+                "working_mib": 7.484375,
+                "pid": 28216,
+                "parent": 16176,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.27734375,
+                "working_mib": 11.02734375,
+                "pid": 23420,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.7890625,
+                "working_mib": 7.48828125,
+                "pid": 14572,
+                "parent": 16176,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.27734375,
+                "working_mib": 11.00390625,
+                "pid": 27712,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.765625,
+                "working_mib": 7.484375,
+                "pid": 11976,
+                "parent": 16176,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.26953125,
+                "working_mib": 11,
+                "pid": 19264,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.78125,
+                "working_mib": 7.48828125,
+                "pid": 2472,
+                "parent": 16176,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.28125,
+                "working_mib": 11.01171875,
+                "pid": 7932,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.76171875,
+                "working_mib": 7.484375,
+                "pid": 5792,
+                "parent": 16176,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.2734375,
+                "working_mib": 11.00390625,
+                "pid": 3060,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 6.78515625,
+                "working_mib": 7.48828125,
+                "pid": 21488,
+                "parent": 16176,
+                "name": "cmd.exe"
+              }
+            ]
+          },
+          {
+            "phase": "after-output",
+            "private_mib": 379.1796875,
+            "working_mib": 134.75,
+            "handles": 548,
+            "threads": 28,
+            "cpu_one_core_percent": 0.5207353309440497,
+            "children": [
+              {
+                "private_mib": 2.25,
+                "working_mib": 11,
+                "pid": 10500,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 3.7578125,
+                "working_mib": 7.44140625,
+                "pid": 25352,
+                "parent": 16176,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.25,
+                "working_mib": 10.9921875,
+                "pid": 25028,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 3.75390625,
+                "working_mib": 7.44140625,
+                "pid": 19272,
+                "parent": 16176,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.26953125,
+                "working_mib": 11.00390625,
+                "pid": 26936,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 3.76953125,
+                "working_mib": 7.44140625,
+                "pid": 28216,
+                "parent": 16176,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.24609375,
+                "working_mib": 11.01171875,
+                "pid": 23420,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 3.76953125,
+                "working_mib": 7.4453125,
+                "pid": 14572,
+                "parent": 16176,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.25390625,
+                "working_mib": 10.9921875,
+                "pid": 27712,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 3.75,
+                "working_mib": 7.44140625,
+                "pid": 11976,
+                "parent": 16176,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.2421875,
+                "working_mib": 10.98828125,
+                "pid": 19264,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 3.765625,
+                "working_mib": 7.4453125,
+                "pid": 2472,
+                "parent": 16176,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.25390625,
+                "working_mib": 10.99609375,
+                "pid": 7932,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 3.74609375,
+                "working_mib": 7.4453125,
+                "pid": 5792,
+                "parent": 16176,
+                "name": "cmd.exe"
+              },
+              {
+                "private_mib": 2.62890625,
+                "working_mib": 11.3671875,
+                "pid": 3060,
+                "parent": 16176,
+                "name": "OpenConsole.exe"
+              },
+              {
+                "private_mib": 10.16015625,
+                "working_mib": 13.08984375,
+                "pid": 21488,
+                "parent": 16176,
+                "name": "cmd.exe"
+              }
+            ]
+          }
+        ]
+      },
+      "latency": {
+        "label": "test",
+        "n": 40,
+        "skipped": 0,
+        "timeouts": 0,
+        "median_ms": 18.31625,
+        "p95_ms": 19.073600000000003,
+        "p99_ms": 19.2345,
+        "samples_ms": [
+          17.5306,
+          18.3296,
+          17.357,
+          18.3777,
+          19.0161,
+          18.3352,
+          16.787200000000002,
+          18.3714,
+          19.2345,
+          18.3204,
+          18.7898,
+          18.4968,
+          16.901,
+          18.2213,
+          18.1785,
+          18.363300000000002,
+          17.096600000000002,
+          18.355800000000002,
+          17.0811,
+          18.2544,
+          18.303,
+          18.4477,
+          18.3121,
+          18.2027,
+          18.758000000000003,
+          18.2432,
+          18.4572,
+          17.184900000000003,
+          19.0121,
+          18.826800000000002,
+          18.605900000000002,
+          14.4931,
+          19.2272,
+          18.201900000000002,
+          18.0439,
+          18.4772,
+          17.6214,
+          18.2469,
+          19.073600000000003,
+          18.0092
+        ]
+      },
+      "output-results": {
+        "size": {
+          "rows": 29,
+          "columns": 85
+        },
+        "samples": [
+          {
+            "bytes": 6900000,
+            "kind": "ascii",
+            "iteration": 0,
+            "writer_ms": 35.7182,
+            "warmup": true
+          },
+          {
+            "bytes": 6900000,
+            "kind": "ascii",
+            "iteration": 1,
+            "writer_ms": 28.7912,
+            "warmup": false
+          },
+          {
+            "bytes": 6900000,
+            "kind": "ascii",
+            "iteration": 2,
+            "writer_ms": 29.8949,
+            "warmup": false
+          },
+          {
+            "bytes": 6900000,
+            "kind": "ascii",
+            "iteration": 3,
+            "writer_ms": 28.4838,
+            "warmup": false
+          },
+          {
+            "bytes": 5100000,
+            "kind": "color",
+            "iteration": 0,
+            "writer_ms": 66.4923,
+            "warmup": true
+          },
+          {
+            "bytes": 5100000,
+            "kind": "color",
+            "iteration": 1,
+            "writer_ms": 64.8652,
+            "warmup": false
+          },
+          {
+            "bytes": 5100000,
+            "kind": "color",
+            "iteration": 2,
+            "writer_ms": 66.6891,
+            "warmup": false
+          },
+          {
+            "bytes": 5100000,
+            "kind": "color",
+            "iteration": 3,
+            "writer_ms": 65.403,
+            "warmup": false
+          },
+          {
+            "bytes": 8700000,
+            "kind": "unicode",
+            "iteration": 0,
+            "writer_ms": 109.9338,
+            "warmup": true
+          },
+          {
+            "bytes": 8700000,
+            "kind": "unicode",
+            "iteration": 1,
+            "writer_ms": 109.2098,
+            "warmup": false
+          },
+          {
+            "bytes": 8700000,
+            "kind": "unicode",
+            "iteration": 2,
+            "writer_ms": 110.2192,
+            "warmup": false
+          },
+          {
+            "bytes": 8700000,
+            "kind": "unicode",
+            "iteration": 3,
+            "writer_ms": 110.1337,
+            "warmup": false
+          }
+        ]
+      }
+    },
+    {
+      "run": "606f6625c7574533ac2d67c881aafa47",
+      "parking": true,
+      "overlapped": false,
+      "io_stats": false,
+      "row_copy": true,
+      "resources": {
+        "terminal": "yuurei",
+        "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty.exe",
+        "sha256": "8C5F1668E8D46E60EC2885145AB7B6056820E4F5754B2BC539A3059131CFEFDB",
+        "version": "0.2.15",
+        "width": 1600,
+        "height": 1200,
+        "shell": "cmd.exe /D /Q /K \"C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\606f6625c7574533ac2d67c881aafa47\\init.cmd\"",
+        "font": "Consolas 12",
+        "history_lines": 10000,
+        "yuurei_config": [],
+        "read_kib_override": null,
+        "io_stats": null,
+        "park_drawables": "1",
+        "overlapped_read": null,
+        "output_cost": {
+          "wall_ms": 31569.3676,
+          "terminal_cpu_ms": 2109.375,
+          "threads_before": [
+            {
+              "cpu_ms": 218.75,
+              "name": "",
+              "id": 20352
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 27364
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 19176
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 20740
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 20336
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 9692
+            },
+            {
+              "cpu_ms": 281.25,
+              "name": "renderer-pool",
+              "id": 25440
+            },
+            {
+              "cpu_ms": 234.375,
+              "name": "",
+              "id": 16560
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 10000
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 13536
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 29648
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 26976
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 6380
+            },
+            {
+              "cpu_ms": 468.75,
+              "name": "renderer-pool",
+              "id": 700
+            },
+            {
+              "cpu_ms": 390.625,
+              "name": "",
+              "id": 26252
+            },
+            {
+              "cpu_ms": 15.625,
+              "name": "io",
+              "id": 26336
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 27092
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 26780
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 1552
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 27968
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 17576
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 22204
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 29136
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 27424
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 29608
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 28352
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 26648
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 2380
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 22748
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 27128
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 27308
+            }
+          ],
+          "threads_after": [
+            {
+              "cpu_ms": 218.75,
+              "name": "",
+              "id": 20352
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 20336
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 9692
+            },
+            {
+              "cpu_ms": 281.25,
+              "name": "renderer-pool",
+              "id": 25440
+            },
+            {
+              "cpu_ms": 250.0,
+              "name": "",
+              "id": 16560
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 10000
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 13536
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 29648
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 26976
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 6380
+            },
+            {
+              "cpu_ms": 1609.375,
+              "name": "renderer-pool",
+              "id": 700
+            },
+            {
+              "cpu_ms": 718.75,
+              "name": "",
+              "id": 26252
+            },
+            {
+              "cpu_ms": 15.625,
+              "name": "io",
+              "id": 26336
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 27092
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 26780
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 1552
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 27968
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 17576
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 22204
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 29136
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 27424
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 29608
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 28352
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io-reader",
+              "id": 26648
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "io",
+              "id": 2380
+            },
+            {
+              "cpu_ms": 625.0,
+              "name": "io-reader",
+              "id": 22748
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 27128
+            },
+            {
+              "cpu_ms": 0.0,
+              "name": "",
+              "id": 27308
+            }
+          ]
+        },
+        "samples": [
+          {
+            "phase": "one-tab",
+            "private_mib": 140.05078125,
+            "working_mib": 83.47265625,
+            "handles": 393,
+            "threads": 14,
+            "cpu_one_core_percent": 0.0,
+            "children": [
+              {
+                "parent": 7912,
+                "working_mib": 11.015625,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.27734375,
+                "pid": 28132
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.48828125,
+                "name": "cmd.exe",
+                "private_mib": 6.76953125,
+                "pid": 26856
+              }
+            ]
+          },
+          {
+            "phase": "eight-tabs",
+            "private_mib": 225.5546875,
+            "working_mib": 141.109375,
+            "handles": 550,
+            "threads": 30,
+            "cpu_one_core_percent": 0.0,
+            "children": [
+              {
+                "parent": 7912,
+                "working_mib": 11.015625,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.27734375,
+                "pid": 28132
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.48828125,
+                "name": "cmd.exe",
+                "private_mib": 6.76953125,
+                "pid": 26856
+              },
+              {
+                "parent": 7912,
+                "working_mib": 11.0234375,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.2890625,
+                "pid": 29148
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.48828125,
+                "name": "cmd.exe",
+                "private_mib": 6.7890625,
+                "pid": 27044
+              },
+              {
+                "parent": 7912,
+                "working_mib": 11.01953125,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28125,
+                "pid": 2668
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.48828125,
+                "name": "cmd.exe",
+                "private_mib": 6.78515625,
+                "pid": 14008
+              },
+              {
+                "parent": 7912,
+                "working_mib": 11.015625,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.27734375,
+                "pid": 23476
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.48828125,
+                "name": "cmd.exe",
+                "private_mib": 6.7890625,
+                "pid": 27400
+              },
+              {
+                "parent": 7912,
+                "working_mib": 11.02734375,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28125,
+                "pid": 24924
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.48828125,
+                "name": "cmd.exe",
+                "private_mib": 6.7734375,
+                "pid": 25460
+              },
+              {
+                "parent": 7912,
+                "working_mib": 11.01171875,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.2890625,
+                "pid": 9644
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.48828125,
+                "name": "cmd.exe",
+                "private_mib": 6.78515625,
+                "pid": 25568
+              },
+              {
+                "parent": 7912,
+                "working_mib": 11.015625,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.28515625,
+                "pid": 26120
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.484375,
+                "name": "cmd.exe",
+                "private_mib": 6.7734375,
+                "pid": 18420
+              },
+              {
+                "parent": 7912,
+                "working_mib": 11.0234375,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.27734375,
+                "pid": 17720
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.48828125,
+                "name": "cmd.exe",
+                "private_mib": 6.78515625,
+                "pid": 29500
+              }
+            ]
+          },
+          {
+            "phase": "after-output",
+            "private_mib": 238.015625,
+            "working_mib": 142.8046875,
+            "handles": 549,
+            "threads": 28,
+            "cpu_one_core_percent": 0.0,
+            "children": [
+              {
+                "parent": 7912,
+                "working_mib": 11.00390625,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.25,
+                "pid": 28132
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.44140625,
+                "name": "cmd.exe",
+                "private_mib": 3.75,
+                "pid": 26856
+              },
+              {
+                "parent": 7912,
+                "working_mib": 11.0078125,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.26171875,
+                "pid": 29148
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.4453125,
+                "name": "cmd.exe",
+                "private_mib": 3.76953125,
+                "pid": 27044
+              },
+              {
+                "parent": 7912,
+                "working_mib": 11.0078125,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.2578125,
+                "pid": 2668
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.4453125,
+                "name": "cmd.exe",
+                "private_mib": 3.76953125,
+                "pid": 14008
+              },
+              {
+                "parent": 7912,
+                "working_mib": 11,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.25,
+                "pid": 23476
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.4453125,
+                "name": "cmd.exe",
+                "private_mib": 3.7734375,
+                "pid": 27400
+              },
+              {
+                "parent": 7912,
+                "working_mib": 11.01171875,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.25,
+                "pid": 24924
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.4453125,
+                "name": "cmd.exe",
+                "private_mib": 3.75390625,
+                "pid": 25460
+              },
+              {
+                "parent": 7912,
+                "working_mib": 10.99609375,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.26171875,
+                "pid": 9644
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.4453125,
+                "name": "cmd.exe",
+                "private_mib": 3.765625,
+                "pid": 25568
+              },
+              {
+                "parent": 7912,
+                "working_mib": 11,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.25390625,
+                "pid": 26120
+              },
+              {
+                "parent": 7912,
+                "working_mib": 7.44140625,
+                "name": "cmd.exe",
+                "private_mib": 3.75390625,
+                "pid": 18420
+              },
+              {
+                "parent": 7912,
+                "working_mib": 11.37890625,
+                "name": "OpenConsole.exe",
+                "private_mib": 2.62890625,
+                "pid": 17720
+              },
+              {
+                "parent": 7912,
+                "working_mib": 13.12109375,
+                "name": "cmd.exe",
+                "private_mib": 10.15625,
+                "pid": 29500
+              }
+            ]
+          }
+        ]
+      },
+      "latency": {
+        "label": "test",
+        "n": 40,
+        "skipped": 0,
+        "timeouts": 0,
+        "median_ms": 18.22045,
+        "p95_ms": 18.8475,
+        "p99_ms": 19.0046,
+        "samples_ms": [
+          17.9922,
+          17.0817,
+          18.3036,
+          18.1402,
+          18.1116,
+          18.221600000000002,
+          18.4636,
+          18.2666,
+          18.2606,
+          18.8475,
+          16.6635,
+          16.6351,
+          18.116400000000002,
+          18.214000000000002,
+          18.125400000000003,
+          16.45,
+          18.3111,
+          18.1689,
+          18.3184,
+          18.2301,
+          18.319300000000002,
+          17.4955,
+          18.4901,
+          18.8905,
+          18.3454,
+          17.8203,
+          19.0046,
+          18.2502,
+          18.2193,
+          17.0759,
+          18.395500000000002,
+          16.843600000000002,
+          18.3516,
+          16.756700000000002,
+          18.7055,
+          18.3382,
+          17.0684,
+          16.706400000000002,
+          17.0313,
+          18.3582
+        ]
+      },
+      "output-results": {
+        "size": {
+          "columns": 85,
+          "rows": 29
+        },
+        "samples": [
+          {
+            "writer_ms": 35.033,
+            "kind": "ascii",
+            "warmup": true,
+            "iteration": 0,
+            "bytes": 6900000
+          },
+          {
+            "writer_ms": 29.1056,
+            "kind": "ascii",
+            "warmup": false,
+            "iteration": 1,
+            "bytes": 6900000
+          },
+          {
+            "writer_ms": 29.0179,
+            "kind": "ascii",
+            "warmup": false,
+            "iteration": 2,
+            "bytes": 6900000
+          },
+          {
+            "writer_ms": 28.9637,
+            "kind": "ascii",
+            "warmup": false,
+            "iteration": 3,
+            "bytes": 6900000
+          },
+          {
+            "writer_ms": 66.5618,
+            "kind": "color",
+            "warmup": true,
+            "iteration": 0,
+            "bytes": 5100000
+          },
+          {
+            "writer_ms": 65.6268,
+            "kind": "color",
+            "warmup": false,
+            "iteration": 1,
+            "bytes": 5100000
+          },
+          {
+            "writer_ms": 66.4906,
+            "kind": "color",
+            "warmup": false,
+            "iteration": 2,
+            "bytes": 5100000
+          },
+          {
+            "writer_ms": 68.2339,
+            "kind": "color",
+            "warmup": false,
+            "iteration": 3,
+            "bytes": 5100000
+          },
+          {
+            "writer_ms": 110.1616,
+            "kind": "unicode",
+            "warmup": true,
+            "iteration": 0,
+            "bytes": 8700000
+          },
+          {
+            "writer_ms": 108.9534,
+            "kind": "unicode",
+            "warmup": false,
+            "iteration": 1,
+            "bytes": 8700000
+          },
+          {
+            "writer_ms": 109.8354,
+            "kind": "unicode",
+            "warmup": false,
+            "iteration": 2,
+            "bytes": 8700000
+          },
+          {
+            "writer_ms": 109.973,
+            "kind": "unicode",
+            "warmup": false,
+            "iteration": 3,
+            "bytes": 8700000
+          }
+        ]
+      }
+    }
+  ],
+  "resource_trials": [
+    {
+      "run": "0269f5ab43ad45629fe2458c77f9b7a5",
+      "parking": true,
+      "resources": {
+        "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty.exe",
+        "sha256": "0F63043CE053D8F3D2830A7BBC25E7CAAEDC8574F6A45CB9B1F075A76E8C052B",
+        "startup_window_ms": 133.5468,
+        "window_width": 1600,
+        "window_height": 1200,
+        "tabs_only": true,
+        "cycles": 20,
+        "idle_seconds": 2,
+        "shader_workload": false,
+        "busy_workload": false,
+        "renderer_workers": 2,
+        "switch_samples": 40,
+        "samples": [
+          {
+            "phase": "one-tab",
+            "private_mib": 141.07,
+            "working_mib": 80.2,
+            "handles": 358,
+            "threads": 14,
+            "gdi": 25,
+            "user": 23,
+            "cpu_one_core_percent": 0.0
+          },
+          {
+            "phase": "eight-tabs",
+            "private_mib": 269.3,
+            "working_mib": 137.79,
+            "handles": 500,
+            "threads": 30,
+            "gdi": 33,
+            "user": 41,
+            "cpu_one_core_percent": 0.0
+          },
+          {
+            "phase": "after-tab-switches",
+            "private_mib": 238.8,
+            "working_mib": 137.54,
+            "handles": 500,
+            "threads": 30,
+            "gdi": 33,
+            "user": 41,
+            "cpu_one_core_percent": 0.0
+          }
+        ]
+      },
+      "switch_ms": [
+        20,
+        13,
+        11,
+        13,
+        9,
+        10,
+        20,
+        11,
+        20,
+        11,
+        11,
+        20,
+        20,
+        11,
+        13,
+        12,
+        11,
+        22,
+        11,
+        10,
+        22,
+        10,
+        10,
+        18,
+        12,
+        18,
+        21,
+        9,
+        10,
+        9,
+        9,
+        13,
+        10,
+        10,
+        13,
+        18,
+        9,
+        11,
+        11,
+        18
+      ]
+    },
+    {
+      "run": "9263be93a9954379abce20e4413c6abd",
+      "parking": false,
+      "resources": {
+        "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty.exe",
+        "sha256": "8C5F1668E8D46E60EC2885145AB7B6056820E4F5754B2BC539A3059131CFEFDB",
+        "startup_window_ms": 108.28,
+        "window_width": 1600,
+        "window_height": 1200,
+        "tabs_only": true,
+        "cycles": 20,
+        "idle_seconds": 2,
+        "shader_workload": false,
+        "busy_workload": false,
+        "renderer_workers": 2,
+        "park_drawables": null,
+        "switch_samples": 40,
+        "samples": [
+          {
+            "phase": "one-tab",
+            "private_mib": 134.18,
+            "working_mib": 73.27,
+            "handles": 357,
+            "threads": 14,
+            "gdi": 25,
+            "user": 23,
+            "cpu_one_core_percent": 0.0
+          },
+          {
+            "phase": "eight-tabs",
+            "private_mib": 372.19,
+            "working_mib": 130.94,
+            "handles": 499,
+            "threads": 30,
+            "gdi": 33,
+            "user": 41,
+            "cpu_one_core_percent": 0.0
+          },
+          {
+            "phase": "after-tab-switches",
+            "private_mib": 370.75,
+            "working_mib": 129.55,
+            "handles": 499,
+            "threads": 30,
+            "gdi": 33,
+            "user": 41,
+            "cpu_one_core_percent": 0.0
+          }
+        ]
+      },
+      "switch_ms": [
+        5,
+        5,
+        6,
+        5,
+        6,
+        5,
+        5,
+        5,
+        5,
+        6,
+        5,
+        5,
+        5,
+        13,
+        6,
+        7,
+        5,
+        5,
+        5,
+        14,
+        5,
+        5,
+        6,
+        5,
+        5,
+        6,
+        6,
+        7,
+        7,
+        5,
+        5,
+        6,
+        5,
+        5,
+        6,
+        5,
+        5,
+        5,
+        6,
+        5
+      ]
+    },
+    {
+      "run": "47da75100fd54f55a3f733ece54c6c6a",
+      "parking": true,
+      "resources": {
+        "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty.exe",
+        "sha256": "8C5F1668E8D46E60EC2885145AB7B6056820E4F5754B2BC539A3059131CFEFDB",
+        "startup_window_ms": 97.6984,
+        "window_width": 1600,
+        "window_height": 1200,
+        "tabs_only": true,
+        "cycles": 20,
+        "idle_seconds": 2,
+        "shader_workload": false,
+        "busy_workload": false,
+        "renderer_workers": 2,
+        "park_drawables": "1",
+        "switch_samples": 40,
+        "samples": [
+          {
+            "phase": "one-tab",
+            "private_mib": 141.12,
+            "working_mib": 80.2,
+            "handles": 358,
+            "threads": 14,
+            "gdi": 25,
+            "user": 23,
+            "cpu_one_core_percent": 0.0
+          },
+          {
+            "phase": "eight-tabs",
+            "private_mib": 271.89,
+            "working_mib": 137.89,
+            "handles": 500,
+            "threads": 30,
+            "gdi": 33,
+            "user": 41,
+            "cpu_one_core_percent": 0.777
+          },
+          {
+            "phase": "after-tab-switches",
+            "private_mib": 244.17,
+            "working_mib": 137.22,
+            "handles": 500,
+            "threads": 30,
+            "gdi": 33,
+            "user": 41,
+            "cpu_one_core_percent": 0.0
+          }
+        ]
+      },
+      "switch_ms": [
+        10,
+        12,
+        11,
+        10,
+        10,
+        10,
+        10,
+        10,
+        12,
+        13,
+        9,
+        22,
+        23,
+        17,
+        19,
+        19,
+        11,
+        10,
+        11,
+        11,
+        20,
+        11,
+        14,
+        12,
+        21,
+        15,
+        10,
+        19,
+        10,
+        18,
+        10,
+        20,
+        12,
+        14,
+        9,
+        10,
+        14,
+        10,
+        10,
+        10
+      ]
+    }
+  ],
+  "corpus_generation": {
+    "encoding": "UTF-8, no BOM",
+    "repetitions": 1000000,
+    "lines": {
+      "ascii": "The quick brown fox 0123456789 build output repeated for scrollback\r\n",
+      "unicode": "\u65e5\u672c\u8a9e \u0395\u03bb\u03bb\u03b7\u03bd\u03b9\u03ba\u03ac \u041a\u0438\u0440\u0438\u043b\u043b\u0438\u0446\u0430 \u0627\u0644\u0639\u0631\u0628\u064a\u0629 \ud83d\udc7b \ud83d\ude80 combining: e\u0301\r\n",
+      "cjk": "\u65e5\u672c\u8a9e \u65e5\u672c\u8a9e \u65e5\u672c\u8a9e \u65e5\u672c\u8a9e \u65e5\u672c\u8a9e \u65e5\u672c\u8a9e \u65e5\u672c\u8a9e \u65e5\u672c\u8a9e\r\n",
+      "greek": "\u0395\u03bb\u03bb\u03b7\u03bd\u03b9\u03ba\u03ac \u0395\u03bb\u03bb\u03b7\u03bd\u03b9\u03ba\u03ac \u0395\u03bb\u03bb\u03b7\u03bd\u03b9\u03ba\u03ac \u0395\u03bb\u03bb\u03b7\u03bd\u03b9\u03ba\u03ac \u0395\u03bb\u03bb\u03b7\u03bd\u03b9\u03ba\u03ac \u0395\u03bb\u03bb\u03b7\u03bd\u03b9\u03ba\u03ac\r\n",
+      "emoji": "\ud83d\udc7b \ud83d\ude80 \ud83d\udc7b \ud83d\ude80 \ud83d\udc7b \ud83d\ude80 \ud83d\udc7b \ud83d\ude80 \ud83d\udc7b \ud83d\ude80 \ud83d\udc7b \ud83d\ude80\r\n",
+      "combining": "e\u0301 e\u0301 e\u0301 e\u0301 e\u0301 e\u0301 e\u0301 e\u0301 e\u0301 e\u0301 e\u0301 e\u0301 e\u0301 e\u0301 e\u0301 e\u0301\r\n"
+    }
+  },
+  "parking_lifecycle": {
+    "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty.exe",
+    "sha256": "8C5F1668E8D46E60EC2885145AB7B6056820E4F5754B2BC539A3059131CFEFDB",
+    "startup_window_ms": 83.1618,
+    "window_width": 1600,
+    "window_height": 1200,
+    "tabs_only": false,
+    "cycles": 20,
+    "idle_seconds": 2,
+    "shader_workload": false,
+    "busy_workload": false,
+    "renderer_workers": 2,
+    "park_drawables": "1",
+    "switch_samples": 0,
+    "samples": [
+      {
+        "phase": "one-tab",
+        "private_mib": 138.66,
+        "working_mib": 80.11,
+        "handles": 358,
+        "threads": 14,
+        "gdi": 25,
+        "user": 23,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "eight-tabs",
+        "private_mib": 263.04,
+        "working_mib": 137.82,
+        "handles": 500,
+        "threads": 30,
+        "gdi": 33,
+        "user": 41,
+        "cpu_one_core_percent": 1.559
+      },
+      {
+        "phase": "after-eight-tabs",
+        "private_mib": 203.69,
+        "working_mib": 116.33,
+        "handles": 388,
+        "threads": 16,
+        "gdi": 26,
+        "user": 27,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "after-tab-cycles",
+        "private_mib": 240.38,
+        "working_mib": 117.16,
+        "handles": 388,
+        "threads": 16,
+        "gdi": 26,
+        "user": 27,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "after-shell-exit-cycles",
+        "private_mib": 254.16,
+        "working_mib": 117.43,
+        "handles": 386,
+        "threads": 15,
+        "gdi": 26,
+        "user": 27,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "after-settings-cycles",
+        "private_mib": 181.94,
+        "working_mib": 117.9,
+        "handles": 400,
+        "threads": 15,
+        "gdi": 33,
+        "user": 36,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "after-inspector-cycles",
+        "private_mib": 201.79,
+        "working_mib": 130.38,
+        "handles": 418,
+        "threads": 13,
+        "gdi": 33,
+        "user": 36,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "inspector-visible",
+        "private_mib": 207.57,
+        "working_mib": 134.35,
+        "handles": 419,
+        "threads": 13,
+        "gdi": 34,
+        "user": 38,
+        "cpu_one_core_percent": 3.123
+      },
+      {
+        "phase": "inspector-minimized",
+        "private_mib": 207.8,
+        "working_mib": 136.48,
+        "handles": 444,
+        "threads": 17,
+        "gdi": 34,
+        "user": 39,
+        "cpu_one_core_percent": 0.0
+      },
+      {
+        "phase": "inspector-restored",
+        "private_mib": 207.8,
+        "working_mib": 136.56,
+        "handles": 444,
+        "threads": 17,
+        "gdi": 34,
+        "user": 40,
+        "cpu_one_core_percent": 3.12
+      },
+      {
+        "phase": "minimized",
+        "private_mib": 204.61,
+        "working_mib": 134.94,
+        "handles": 443,
+        "threads": 17,
+        "gdi": 33,
+        "user": 38,
+        "cpu_one_core_percent": 0.0
+      }
+    ]
+  }
+}
