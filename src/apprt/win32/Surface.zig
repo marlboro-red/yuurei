@@ -30,6 +30,7 @@ const log = std.log.scoped(.win32);
 /// GDI-painted chrome (tab strip, caption buttons) that the GL swap
 /// chain can't stomp.
 pub const host_class_name = std.unicode.utf8ToUtf16LeStringLiteral("ghostty-host");
+const frame_ready_message = 0x8000 + 51;
 
 /// Window procedure for the GL host child. It renders nothing itself
 /// (the renderer thread owns its pixels) and, being disabled, passes
@@ -41,6 +42,18 @@ pub fn hostWndProc(
     lparam: winapi.LPARAM,
 ) callconv(.winapi) winapi.LRESULT {
     switch (msg) {
+        frame_ready_message => {
+            const ptr = winapi.GetWindowLongPtrW(hwnd, winapi.GWLP_USERDATA);
+            if (ptr != 0) {
+                const self: *Self = @ptrFromInt(@as(usize, @bitCast(ptr)));
+                if (self.pending_show and self.drawable_epoch.load(.acquire) == wparam) {
+                    self.pending_show = false;
+                    self.drawable_show_epoch.store(0, .release);
+                    _ = winapi.ShowWindow(hwnd, 5);
+                }
+            }
+            return 0;
+        },
         winapi.WM_ERASEBKGND => return 1,
         winapi.WM_PAINT => {
             _ = winapi.ValidateRect(hwnd, null);
@@ -63,6 +76,15 @@ core_surface: CoreSurface,
 host: winapi.HWND,
 hdc: winapi.HDC,
 gl_context: winapi.HGLRC,
+
+/// Experimental WGL backing-store retirement. Geometry remains UI-owned;
+/// the draw mutex serializes native resize with rendering. Odd epochs want
+/// visibility; posted frame completions from previous epochs are ignored.
+park_drawable: bool = false,
+parked_size: ?apprt.SurfaceSize = null,
+drawable_epoch: std.atomic.Value(usize) = .init(1),
+drawable_show_epoch: std.atomic.Value(usize) = .init(0),
+pending_show: bool = false,
 
 /// Custom-drawn scrollbar beside the host, fed by the core's
 /// `scrollbar` action (see Scrollbar.zig).
@@ -286,6 +308,10 @@ pub fn init(
         );
     defer config.deinit();
 
+    const parking = global.environ().getWindows(std.unicode.utf8ToUtf16LeStringLiteral("GHOSTTY_PARK_DRAWABLES"));
+    self.park_drawable = !config.@"windows-flip-model" and
+        parking != null and std.mem.eql(u16, parking.?, &.{'1'});
+
     // Initialize our surface now that we have the stable pointer.
     try self.core_surface.init(
         app.core_app.alloc,
@@ -426,7 +452,31 @@ pub fn close(self: *Self, process_active: bool) void {
 
 /// Show or hide the GL host (tab activation).
 pub fn setVisible(self: *Self, visible: bool) void {
-    _ = winapi.ShowWindow(self.host, if (visible) 5 else 0); // SW_SHOW/SW_HIDE
+    var show_now = visible;
+    if (self.park_drawable) {
+        if (!visible) _ = winapi.ShowWindow(self.host, 0);
+        self.core_surface.renderer.draw_mutex.lockUncancelable(global.io());
+        const epoch = self.drawable_epoch.load(.monotonic);
+        if ((epoch & 1 != 0) != visible) {
+            self.drawable_epoch.store((epoch + 2) ^ 1, .release);
+            if (!visible) {
+                self.pending_show = false;
+                self.drawable_show_epoch.store(0, .release);
+                self.parked_size = self.getSize() catch null;
+                _ = winapi.SetWindowPos(self.host, null, 0, 0, 64, 64, winapi.SWP_NOMOVE | winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE);
+            } else {
+                if (self.parked_size) |size| {
+                    _ = winapi.SetWindowPos(self.host, null, 0, 0, @intCast(size.width), @intCast(size.height), winapi.SWP_NOMOVE | winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE);
+                }
+                self.parked_size = null;
+                self.pending_show = true;
+                self.drawable_show_epoch.store(self.drawable_epoch.load(.monotonic), .release);
+            }
+        }
+        show_now = visible and !self.pending_show;
+        self.core_surface.renderer.draw_mutex.unlock(global.io());
+    }
+    _ = winapi.ShowWindow(self.host, if (show_now) 5 else 0); // SW_SHOW/SW_HIDE
     if (self.scrollbar) |sb| {
         _ = winapi.ShowWindow(sb.hwnd, if (visible) 5 else 0);
     }
@@ -435,6 +485,12 @@ pub fn setVisible(self: *Self, visible: bool) void {
     // cells and drawing entirely (it catches up on re-show).
     self.core_surface.occlusionCallback(visible and
         winapi.IsWindowVisible(self.window.hwnd) != 0 and !self.window.minimized) catch {};
+}
+
+/// Render-thread completion; the UI validates this epoch before showing.
+pub fn drawableFrameReady(self: *Self, epoch: usize) void {
+    if (self.park_drawable and epoch & 1 != 0 and self.drawable_show_epoch.load(.acquire) == epoch)
+        _ = winapi.PostMessageW(self.host, frame_ready_message, epoch, 0);
 }
 
 /// Feed core scrollbar state (rows) into our scrollbar.
@@ -485,6 +541,7 @@ pub fn getContentScale(self: *const Self) !apprt.ContentScale {
 }
 
 pub fn getSize(self: *const Self) !apprt.SurfaceSize {
+    if (self.parked_size) |size| return size;
     // The terminal's surface is the GL host child, not the full client
     // area (the title strip is above it).
     var rect: winapi.RECT = undefined;

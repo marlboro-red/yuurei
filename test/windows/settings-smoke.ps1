@@ -17,6 +17,7 @@ public static class SettingsNative {
     [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     public delegate bool EnumProc(IntPtr h, IntPtr l);
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumProc cb, IntPtr l);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h, int id);
@@ -44,6 +45,15 @@ public static class SettingsNative {
         var info = new GuiInfo(); info.size = (uint)Marshal.SizeOf<GuiInfo>();
         if (!GetGUIThreadInfo(thread, ref info)) throw new Exception("GetGUIThreadInfo failed");
         return info.focus;
+    }
+    public static int VisibleHosts(IntPtr window) {
+        int count=0;
+        EnumChildWindows(window,(h,l) => {
+            var name=new StringBuilder(64); GetClassName(h,name,name.Capacity);
+            if (name.ToString()=="ghostty-host" && IsWindowVisible(h)) count++;
+            return true;
+        },IntPtr.Zero);
+        return count;
     }
     public static IntPtr Find(uint process, string name) {
         IntPtr result = IntPtr.Zero;
@@ -133,6 +143,7 @@ $configDir = Join-Path $isolation 'ghostty'
 $config = Join-Path $configDir 'config'
 $initial = "# GUI smoke test`nkeybind = f12=open_config`nwindow-theme = dark`nfont-size = 12`nfont-family = Consolas`nfont-family = Cascadia Mono`nwindows-restore-session = false`nconfirm-close-surface = false`n"
 if ($RenderingChecks) {
+    $initial += "keybind = f1=toggle_split_zoom`nkeybind = f6=next_tab`n"
     $initial += "background = #282c34`nforeground = #ffffff`ncommand = cmd.exe /Q /K echo YUUREI RENDER CHECK`nkeybind = f10=new_tab`nkeybind = f9=close_surface`nkeybind = f8=new_split:right`nkeybind = f11=inspector:toggle`n"
 }
 if ($GraphicsStress) {
@@ -179,6 +190,24 @@ try {
         Start-Sleep -Milliseconds 600
         Capture 'render-tabs-split' -Window $terminal -Desktop
         Assert-TerminalPixels 'render-tabs-split'
+        Assert ([SettingsNative]::VisibleHosts($terminal) -eq 2) 'Both splits must be visible'
+        [void][SettingsNative]::PostMessage($terminal,0x100,0x70,0)
+        Start-Sleep -Milliseconds 300
+        Assert ([SettingsNative]::VisibleHosts($terminal) -eq 1) 'Zoom must hide the other split'
+        # Queue rapid transitions to reject stale frame-completion messages.
+        for ($i=0; $i -lt 40; $i++) { [void][SettingsNative]::PostMessage($terminal,0x100,0x75,0) }
+        Start-Sleep -Milliseconds 800
+        Assert ([SettingsNative]::VisibleHosts($terminal) -eq 1) 'Returning to a zoomed tab must retain zoom'
+        Capture 'render-zoom-restored' -Window $terminal -Desktop
+        Assert-TerminalPixels 'render-zoom-restored'
+        [void][SettingsNative]::ShowWindow($terminal,6)
+        Start-Sleep -Milliseconds 200
+        [void][SettingsNative]::ShowWindow($terminal,9)
+        [void][SettingsNative]::PostMessage($terminal,0x100,0x70,0)
+        Start-Sleep -Milliseconds 500
+        Assert ([SettingsNative]::VisibleHosts($terminal) -eq 2) 'Unzoom must restore both splits'
+        Capture 'render-unzoom-restored' -Window $terminal -Desktop
+        Assert-TerminalPixels 'render-unzoom-restored'
         [void][SettingsNative]::PostMessage($terminal, 0x100, 0x78, 0)
         Start-Sleep -Milliseconds 200
         [void][SettingsNative]::PostMessage($terminal, 0x100, 0x78, 0)

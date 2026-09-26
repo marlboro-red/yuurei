@@ -1123,7 +1123,7 @@ pub fn activateTab(self: *Window, idx: usize) void {
         const active = i == new_idx;
         var it = tab.tree.iterator();
         while (it.next()) |entry| {
-            entry.view.setVisible(active);
+            if (!active) entry.view.setVisible(false);
         }
         if (!active) tab.focused.core_surface.focusCallback(false) catch {};
     }
@@ -1133,6 +1133,8 @@ pub fn activateTab(self: *Window, idx: usize) void {
     tab.focused.core_surface.focusCallback(true) catch {};
     self.scrollTabIntoView(new_idx);
     self.layoutActiveTab();
+    var visible_it = tab.tree.iterator();
+    while (visible_it.next()) |entry| entry.view.setVisible(tab.tree.zoomed == null or entry.view == tab.focused);
     self.syncTitle();
 
     self.syncSearchVisibility();
@@ -1207,11 +1209,26 @@ pub fn layoutActiveTab(self: *Window) void {
     for (tab.tree.nodes, sp.slots) |node, slot| switch (node) {
         .split => {},
         .leaf => |surface| {
-            const x: i32 = @intFromFloat(@as(f32, @floatCast(slot.x)) * area_w);
-            const y: i32 = @intFromFloat(@as(f32, @floatCast(slot.y)) * area_h);
-            const w: i32 = @intFromFloat(@as(f32, @floatCast(slot.width)) * area_w);
-            const h: i32 = @intFromFloat(@as(f32, @floatCast(slot.height)) * area_h);
-            const host_changed = positionChild(self.hwnd, surface.host, x, strip + y, @max(0, w - 2 - sbw), @max(0, h - 2));
+            const zoomed = tab.tree.zoomed != null;
+            if (zoomed and surface != tab.focused) continue;
+            const x: i32 = if (zoomed) 0 else @intFromFloat(@as(f32, @floatCast(slot.x)) * area_w);
+            const y: i32 = if (zoomed) 0 else @intFromFloat(@as(f32, @floatCast(slot.y)) * area_h);
+            const w: i32 = @intFromFloat(if (zoomed) area_w else @as(f32, @floatCast(slot.width)) * area_w);
+            const h: i32 = @intFromFloat(if (zoomed) area_h else @as(f32, @floatCast(slot.height)) * area_h);
+            if (surface.park_drawable) surface.core_surface.renderer.draw_mutex.lockUncancelable(global.io());
+            const host_changed = if (surface.parked_size != null) parked: {
+                const width: u32 = @intCast(@max(0, w - 2 - sbw));
+                const height: u32 = @intCast(@max(0, h - 2));
+                const changed = surface.parked_size.?.width != width or surface.parked_size.?.height != height;
+                surface.parked_size = .{ .width = width, .height = height };
+                _ = positionChild(self.hwnd, surface.host, x, strip + y, 64, 64);
+                break :parked changed;
+            } else positionChild(self.hwnd, surface.host, x, strip + y, @max(0, w - 2 - sbw), @max(0, h - 2));
+            if (host_changed and surface.pending_show) {
+                const epoch = surface.drawable_epoch.fetchAdd(2, .acq_rel) + 2;
+                surface.drawable_show_epoch.store(epoch, .release);
+            }
+            if (surface.park_drawable) surface.core_surface.renderer.draw_mutex.unlock(global.io());
             if (surface.scrollbar) |sb| {
                 _ = positionChild(self.hwnd, sb.hwnd, x + @max(0, w - 2 - sbw), strip + y, sbw, @max(0, h - 2));
             }
@@ -1439,7 +1456,7 @@ pub fn toggleSplitZoom(self: *Window) void {
     // A zoomed surface covers the terminal area; others hide.
     var it = tab.tree.iterator();
     while (it.next()) |entry| {
-        entry.view.setVisible(tab.tree.zoomed == null or entry.view == tab.focused);
+        if (tab.tree.zoomed != null and entry.view != tab.focused) entry.view.setVisible(false);
     }
     if (tab.tree.zoomed != null) zoomed: {
         var client: winapi.RECT = undefined;
@@ -1457,6 +1474,8 @@ pub fn toggleSplitZoom(self: *Window) void {
         const size = tab.focused.getSize() catch break :zoomed;
         tab.focused.core_surface.sizeCallback(size) catch {};
     } else self.layoutActiveTab();
+    it = tab.tree.iterator();
+    while (it.next()) |entry| entry.view.setVisible(tab.tree.zoomed == null or entry.view == tab.focused);
 }
 
 /// Resize the focused split by the given amount (in pixels).

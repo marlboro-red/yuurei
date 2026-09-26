@@ -50,6 +50,7 @@ flip_model: bool,
 last_target: ?Target = null,
 win32_surface: ?*apprt.Surface = null,
 win32_dispatch: if (apprt.runtime == apprt.win32) ?gl.glad.Context else void = if (apprt.runtime == apprt.win32) null else {},
+frame_epoch: usize = 0,
 
 egl_display: if (apprt.runtime == apprt.win32) void else *gl.egl.Display,
 egl_context: if (apprt.runtime == apprt.win32) void else *gl.egl.Context,
@@ -326,7 +327,6 @@ pub fn setViewport(self: *const OpenGL, width: u32, height: u32) void {
 
 /// Actions taken before doing anything in `drawFrame`.
 pub fn drawFrameStart(self: *OpenGL) void {
-    _ = self;
 
     // On win32 we own the GL surface, so we are responsible for keeping
     // the viewport in sync with the window's client area (GTK's GLArea
@@ -335,6 +335,7 @@ pub fn drawFrameStart(self: *OpenGL) void {
     // recovered from the current DC to avoid plumbing a surface pointer
     // through the renderer.
     if (comptime apprt.runtime == apprt.win32) {
+        if (self.win32_surface) |surface| self.frame_epoch = surface.drawable_epoch.load(.acquire);
         const winapi = apprt.win32.winapi;
         const hdc = winapi.wglGetCurrentDC() orelse return;
         const hwnd = winapi.WindowFromDC(hdc) orelse return;
@@ -385,7 +386,8 @@ pub fn drawFrameEnd(self: *OpenGL) void {
         const winapi = apprt.win32.winapi;
         if (winapi.wglGetCurrentDC()) |hdc| {
             const hwnd = winapi.WindowFromDC(hdc);
-            if (hwnd != null and winapi.IsWindowVisible(hwnd.?) == 0) return;
+            const restoring = if (self.win32_surface) |surface| surface.park_drawable and self.frame_epoch & 1 != 0 else false;
+            if (hwnd != null and winapi.IsWindowVisible(hwnd.?) == 0 and !restoring) return;
 
             present: {
                 // Flip-model: copy the rendered frame (GL default
@@ -450,6 +452,8 @@ pub fn drawFrameEnd(self: *OpenGL) void {
             // Legacy path.
             if (winapi.SwapBuffers(hdc) == 0) {
                 log.warn("SwapBuffers failed", .{});
+            } else if (self.win32_surface) |surface| {
+                surface.drawableFrameReady(self.frame_epoch);
             }
 
             // Key-to-present latency tracing (GHOSTTY_PERF_TRACE).
@@ -463,6 +467,22 @@ pub fn drawFrameEnd(self: *OpenGL) void {
             }
         }
     }
+}
+
+/// Called with the draw mutex held after hidden frame resources are released.
+/// One small presentation asks WGL to retire its previous full-size backing.
+pub fn parkHiddenDrawable(self: *OpenGL) void {
+    if (comptime apprt.runtime != apprt.win32) return;
+    const surface = self.win32_surface orelse return;
+    if (!surface.park_drawable or surface.presenter != null or
+        surface.drawable_epoch.load(.acquire) & 1 != 0) return;
+    const ctx = gl.glad.context;
+    ctx.BindFramebuffer.?(gl.c.GL_FRAMEBUFFER, 0);
+    ctx.Viewport.?(0, 0, 64, 64);
+    ctx.Clear.?(gl.c.GL_COLOR_BUFFER_BIT);
+    ctx.Finish.?();
+    if (apprt.win32.winapi.SwapBuffers(surface.hdc) == 0)
+        log.warn("hidden drawable presentation failed", .{});
 }
 
 pub fn initShaders(
