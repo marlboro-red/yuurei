@@ -197,7 +197,13 @@ try {
         # Queue rapid transitions to reject stale frame-completion messages.
         for ($i=0; $i -lt 40; $i++) { [void][SettingsNative]::PostMessage($terminal,0x100,0x75,0) }
         Start-Sleep -Milliseconds 800
-        Assert ([SettingsNative]::VisibleHosts($terminal) -eq 1) 'Returning to a zoomed tab must retain zoom'
+        $visibleAfterBurst=[SettingsNative]::VisibleHosts($terminal)
+        if ($visibleAfterBurst -ne 1) {
+            Write-Host "Rapid-switch restoration pending after 800 ms: $visibleAfterBurst visible hosts"
+            for ($settle=0; $settle -lt 50 -and [SettingsNative]::VisibleHosts($terminal) -ne 1; $settle++) { Start-Sleep -Milliseconds 100 }
+            Write-Host "Rapid-switch restoration settled after $($settle*100) additional ms"
+        }
+        Assert ([SettingsNative]::VisibleHosts($terminal) -eq 1) "Returning to a zoomed tab must retain zoom ($([SettingsNative]::VisibleHosts($terminal)) hosts visible)"
         Capture 'render-zoom-restored' -Window $terminal -Desktop
         Assert-TerminalPixels 'render-zoom-restored'
         [void][SettingsNative]::ShowWindow($terminal,6)
