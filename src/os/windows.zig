@@ -1,12 +1,35 @@
 const std = @import("std");
 const windows = std.os.windows;
 
-/// Zig 0.16 commits the requested stack size on Windows rather than only
-/// reserving address space. Its 16 MiB default costs 48 MiB for a surface's
-/// renderer, I/O dispatcher, and reader. Keep a conservative 4 MiB per worker.
+/// Zig 0.16 passes this as initial commit, leaving stack reservation at the
+/// executable's default (16 MiB in our Windows build). Start with 256 KiB;
+/// Windows commits guard pages on demand as the stack grows. Committing
+/// 4 MiB up front cost 72 MiB for two render workers and eight I/O pairs.
 pub const worker_thread_config: std.Thread.SpawnConfig = .{
-    .stack_size = 4 * 1024 * 1024,
+    .stack_size = 256 * 1024,
 };
+
+test "windows worker stack grows beyond initial commit" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    const Worker = struct {
+        fn run(sum: *usize) void {
+            // Volatile page touches preserve the large frame in ReleaseFast.
+            var storage: [2 * 1024 * 1024]u8 = undefined;
+            const bytes: *volatile [2 * 1024 * 1024]u8 = &storage;
+            var result: usize = 0;
+            var i: usize = 0;
+            while (i < storage.len) : (i += 4096) {
+                bytes[i] = 1;
+                result += bytes[i];
+            }
+            sum.* = result;
+        }
+    };
+    var sum: usize = 0;
+    const thread = try std.Thread.spawn(worker_thread_config, Worker.run, .{&sum});
+    thread.join();
+    try std.testing.expectEqual(@as(usize, 512), sum);
+}
 
 // NOTE: The Windows part of the Zig stdlib is currently in the process of
 // having most of its features removed, with the ultimate goal of switching to
