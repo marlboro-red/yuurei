@@ -921,6 +921,18 @@ pub const Page = struct {
             }
 
             fastmem.copy(Cell, cells, other_cells);
+        } else if (!src_row.styled and !src_row.hyperlink and !src_row.kitty_virtual_placeholder) {
+            // Grapheme-only rows are common in Unicode output. Their plain
+            // cells need no style/hyperlink migration or marker resets.
+            // Preserve incremental copying so allocation failure cannot
+            // leave unowned source grapheme references in later cells.
+            for (cells, other_cells) |*dst_cell, *src_cell| {
+                dst_cell.* = src_cell.*;
+                if (src_cell.hasGrapheme()) {
+                    dst_cell.content_tag = .codepoint;
+                    try self.setGraphemes(dst_row, dst_cell, other.lookupGrapheme(src_cell).?);
+                }
+            }
         } else {
             // We have managed memory, so we have to do a slower copy to
             // get all of that right.
@@ -3447,6 +3459,44 @@ test "Page cloneFrom frees dst graphemes" {
         try testing.expect(!rac.cell.hasGrapheme());
     }
     try testing.expectEqual(@as(usize, 0), page2.graphemeCount());
+}
+
+test "Page cloneRowFrom grapheme-only partial ownership" {
+    var src = try Page.init(.{ .cols = 10, .rows = 2 });
+    defer src.deinit();
+    var dst = try Page.init(.{ .cols = 10, .rows = 2 });
+    defer dst.deinit();
+    for (0..10) |x| {
+        src.getRowAndCell(x, 0).cell.content.codepoint.data = 'a';
+        dst.getRowAndCell(x, 0).cell.content.codepoint.data = 'b';
+    }
+    for ([_]usize{ 3, 7 }) |x| {
+        const rac = src.getRowAndCell(x, 0);
+        try src.appendGrapheme(rac.row, rac.cell, 0x301);
+    }
+    for ([_]usize{ 0, 4, 9 }) |x| {
+        const rac = dst.getRowAndCell(x, 0);
+        try dst.appendGrapheme(rac.row, rac.cell, 0x302);
+    }
+    try dst.clonePartialRowFrom(&src, dst.getRow(0), src.getRow(0), 2, 8);
+    try testing.expectEqual(@as(usize, 4), dst.graphemeCount());
+    for (0..10) |x| {
+        const cell = dst.getRowAndCell(x, 0).cell;
+        try testing.expectEqual(@as(u21, if (x >= 2 and x < 8) 'a' else 'b'), cell.content.codepoint.data);
+        if (x == 3 or x == 7) {
+            try testing.expectEqualSlices(u21, &.{0x301}, dst.lookupGrapheme(cell).?);
+        } else if (x == 0 or x == 9) {
+            try testing.expectEqualSlices(u21, &.{0x302}, dst.lookupGrapheme(cell).?);
+        } else try testing.expect(!cell.hasGrapheme());
+    }
+    try testing.expectEqual(@as(usize, 2), src.graphemeCount());
+
+    // A failed copy must not leave source-owned grapheme references in
+    // the destination, including cells after the allocation failure.
+    var tiny = try Page.init(.{ .cols = 10, .rows = 2, .grapheme_bytes = 0 });
+    defer tiny.deinit();
+    try testing.expectError(error.GraphemeAllocOutOfMemory, tiny.clonePartialRowFrom(&src, tiny.getRow(0), src.getRow(0), 2, 8));
+    for (0..10) |x| try testing.expect(!tiny.getRowAndCell(x, 0).cell.hasGrapheme());
 }
 
 test "Page cloneRowFrom partial" {
