@@ -106,6 +106,25 @@ function Capture([string]$Name, [IntPtr]$Window = $script:settings, [switch]$Des
     try { $bitmap.Save((Join-Path $Artifacts "$Name.png")) } finally { $bitmap.Dispose() }
 }
 
+function Assert-TerminalPixels([string]$Name, [double]$MinBackgroundFraction = 0.8) {
+    # The isolated config has a known background. Check the composed screen,
+    # not just process survival: a successful SwapBuffers can still show a
+    # blank or stale native backbuffer. Sample well inside the terminal area.
+    $bitmap = [Drawing.Bitmap]::new((Join-Path $Artifacts "$Name.png"))
+    try {
+        $matching = 0; $total = 0; $text = 0
+        for ($y=100; $y -lt $bitmap.Height-40; $y+=4) {
+            for ($x=40; $x -lt $bitmap.Width-60; $x+=4) {
+                $c=$bitmap.GetPixel($x,$y); $total++
+                if ([math]::Abs([int]$c.R-40) -le 3 -and [math]::Abs([int]$c.G-44) -le 3 -and [math]::Abs([int]$c.B-52) -le 3) { $matching++ }
+                if ($c.R -gt 180 -and $c.G -gt 180 -and $c.B -gt 180) { $text++ }
+            }
+        }
+        Assert ($matching/$total -gt $MinBackgroundFraction) "$Name has a blank/stale terminal background ($matching/$total matching pixels)"
+        Assert ($text -gt 20) "$Name has no visible terminal text"
+    } finally { $bitmap.Dispose() }
+}
+
 [void](New-Item -ItemType Directory -Force -Path $Artifacts)
 $isolation = Join-Path $Artifacts ([Guid]::NewGuid().ToString('N'))
 $configDir = Join-Path $isolation 'ghostty'
@@ -113,7 +132,7 @@ $configDir = Join-Path $isolation 'ghostty'
 $config = Join-Path $configDir 'config'
 $initial = "# GUI smoke test`nkeybind = f12=open_config`nwindow-theme = dark`nfont-size = 12`nfont-family = Consolas`nfont-family = Cascadia Mono`nwindows-restore-session = false`nconfirm-close-surface = false`n"
 if ($RenderingChecks) {
-    $initial += "command = cmd.exe /Q /K echo YUUREI RENDER CHECK`nkeybind = f10=new_tab`nkeybind = f9=close_surface`nkeybind = f8=new_split:right`nkeybind = f11=inspector:toggle`n"
+    $initial += "background = #282c34`nforeground = #ffffff`ncommand = cmd.exe /Q /K echo YUUREI RENDER CHECK`nkeybind = f10=new_tab`nkeybind = f9=close_surface`nkeybind = f8=new_split:right`nkeybind = f11=inspector:toggle`n"
 }
 if ($GraphicsStress) {
     $bulk = Join-Path $isolation 'bulk.vt'
@@ -123,7 +142,14 @@ if ($GraphicsStress) {
         for ($i=0; $i -lt 20000; $i++) { $writer.WriteLine("$([char]27)[32m$i 日本語 Ελληνικά 👻 build output$([char]27)[0m") }
         $writer.WriteLine('YUUREI BURST COMPLETE')
     } finally { $writer.Dispose() }
-    $command = ('chcp 65001 >nul & type "{0}" & echo done>"{1}"' -f $bulk,$done).Replace('\','\\')
+    $emitter = Join-Path $isolation 'emit.ps1'
+    @'
+param([string]$InputFile, [string]$DoneFile)
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::Write([IO.File]::ReadAllText($InputFile, [Text.Encoding]::UTF8))
+[IO.File]::WriteAllText($DoneFile, 'done')
+'@ | Set-Content -LiteralPath $emitter
+    $command = ('pwsh -NoProfile -File "{0}" "{1}" "{2}"' -f $emitter,$bulk,$done).Replace('\','\\')
     $initial += "keybind = f7=reload_config`nkeybind = f6=next_tab`nkeybind = f5=text:$command\r`n"
 }
 [IO.File]::WriteAllText($config, $initial)
@@ -134,11 +160,13 @@ try {
         [void][SettingsNative]::ShowWindow($terminal, 5)
         Start-Sleep -Milliseconds 600
         Capture 'render-terminal' -Window $terminal -Desktop
+        Assert-TerminalPixels 'render-terminal'
         [void][SettingsNative]::PostMessage($terminal, 0x100, 0x79, 0)
         Start-Sleep -Milliseconds 300
         [void][SettingsNative]::PostMessage($terminal, 0x100, 0x77, 0)
         Start-Sleep -Milliseconds 600
         Capture 'render-tabs-split' -Window $terminal -Desktop
+        Assert-TerminalPixels 'render-tabs-split'
         [void][SettingsNative]::PostMessage($terminal, 0x100, 0x78, 0)
         Start-Sleep -Milliseconds 200
         [void][SettingsNative]::PostMessage($terminal, 0x100, 0x78, 0)
@@ -159,6 +187,7 @@ try {
         [void][SettingsNative]::PostMessage($terminal,0x100,0x76,0)
         Start-Sleep -Milliseconds 750
         Capture 'graphics-shader-single' -Window $terminal -Desktop
+        Assert-TerminalPixels 'graphics-shader-single'
         for ($i=0; $i -lt 7; $i++) {
             [void][SettingsNative]::PostMessage($terminal,0x100,0x79,0)
             Start-Sleep -Milliseconds 350
@@ -182,6 +211,7 @@ try {
         Assert (Test-Path -LiteralPath $done) 'Bulk-output command did not finish'
         Start-Sleep -Seconds 1
         Capture 'graphics-stress' -Window $terminal -Desktop
+        Assert-TerminalPixels 'graphics-stress' -MinBackgroundFraction 0.4
         for ($i=0; $i -lt 10; $i++) {
             [void][SettingsNative]::PostMessage($terminal,0x100,0x78,0)
             Start-Sleep -Milliseconds 250
@@ -190,6 +220,8 @@ try {
         [void][SettingsNative]::PostMessage($terminal,0x100,0x76,0)
         Start-Sleep -Milliseconds 500
         Assert (!$script:appProcess.HasExited) 'Application exited while closing stress surfaces'
+        Capture 'graphics-restored' -Window $terminal -Desktop
+        Assert-TerminalPixels 'graphics-restored'
     }
     [void][SettingsNative]::PostMessage($terminal, 0x100, 0x7B, 0x00580001)
     $script:settings = Wait-Window 'ghostty-settings'
