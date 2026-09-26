@@ -157,6 +157,14 @@ pub const Shaders = struct {
             alloc.free(self.post_pipelines);
         }
     }
+
+    pub fn releaseFrameResources(self: *const Shaders) void {
+        if (self.defunct) return;
+        inline for (pipeline_descs) |pipeline| {
+            @field(self.pipelines, pipeline[0]).releaseFrameResources();
+        }
+        for (self.post_pipelines) |pipeline| pipeline.releaseFrameResources();
+    }
 };
 
 /// The uniforms that are passed to our shaders.

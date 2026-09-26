@@ -1193,7 +1193,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 // frees all GPU resources.
                 sc.deinit();
                 self.swap_chain = null;
-                if (@hasDecl(GraphicsAPI, "gpuResourcesReleased")) self.api.gpuResourcesReleased();
+                if (@hasDecl(GraphicsAPI, "gpuResourcesReleased")) self.api.gpuResourcesReleased(&self.shaders);
                 @import("../perf.zig").memoryMark("frame-resources-released");
             }
 

@@ -75,6 +75,21 @@ pub fn deinit(self: *const Self) void {
     self.program.destroy();
 }
 
+/// The pipeline outlives hidden frame sets. Drop its container references
+/// so deleted custom-shader textures and cell buffers can release storage.
+pub fn releaseFrameResources(self: *const Self) void {
+    const binding = self.fbo.bind(.framebuffer) catch return;
+    defer binding.unbind();
+    binding.texture2D(.color0, .@"2d", .{ .id = 0 }, 0) catch |err| {
+        log.warn("failed to detach frame texture err={}", .{err});
+    };
+    const vao_binding = self.vao.bind() catch return;
+    defer vao_binding.unbind();
+    vao_binding.bindVertexBuffer(0, 0, 0, 0) catch |err| {
+        log.warn("failed to detach frame vertex buffer err={}", .{err});
+    };
+}
+
 fn autoAttribute(
     T: type,
     vaobind: gl.VertexArray.Binding,
