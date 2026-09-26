@@ -1,0 +1,2672 @@
+{
+  "description": "Yuurei versus Windows Terminal: four fresh process memory runs, two initial 40-sample latency/output runs, and a final 40-sample glyph-only latency validation per terminal; all serial on the same machine.",
+  "environment": {
+    "collected": "2026-09-26T14:01:37.3613721+10:00",
+    "os": {
+      "Caption": "Microsoft Windows 11 Home",
+      "Version": "10.0.26200",
+      "BuildNumber": "26200"
+    },
+    "cpu": {
+      "Name": "AMD Ryzen 5 5600X 6-Core Processor             ",
+      "NumberOfCores": 6,
+      "NumberOfLogicalProcessors": 12
+    },
+    "gpu": [
+      {
+        "Name": "NVIDIA GeForce RTX 3060 Ti",
+        "DriverVersion": "32.0.15.6094",
+        "CurrentHorizontalResolution": 3840,
+        "CurrentVerticalResolution": 2160,
+        "CurrentRefreshRate": 59
+      }
+    ],
+    "pwsh": "7.6.6",
+    "windows_terminal": {
+      "Version": "1.24.11911.0"
+    },
+    "portable_zip_sha256": "7691EFEB71C8DD0B95536C84E366FA4CF809A42C534912F9CEFA1056534383BD"
+  },
+  "runs": {
+    "wt": [
+      {
+        "id": "114702c55f49474f85ad228efcd2e676",
+        "artifact_directory": "C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\114702c55f49474f85ad228efcd2e676",
+        "resources": {
+          "terminal": "wt",
+          "executable": "C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\wt\\terminal-1.24.11911.0\\WindowsTerminal.exe",
+          "sha256": "C2159565E068CEE5A0018D89560F4D8D40364E91380DFE27A6FFB2B8B8C8BF89",
+          "version": "1.24.2607.10001",
+          "width": 1600,
+          "height": 1200,
+          "shell": "cmd.exe /D /Q /K \"C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\114702c55f49474f85ad228efcd2e676\\init.cmd\"",
+          "font": "Consolas 12",
+          "history_lines": 10000,
+          "samples": [
+            {
+              "phase": "one-tab",
+              "private_mib": 65.890625,
+              "working_mib": 95.671875,
+              "handles": 840,
+              "threads": 47,
+              "cpu_one_core_percent": 0.5212672535707807,
+              "children": [
+                {
+                  "working_mib": 11.05078125,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 9016,
+                  "private_mib": 2.29296875
+                },
+                {
+                  "working_mib": 7.5,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 27784,
+                  "private_mib": 6.6796875
+                }
+              ]
+            },
+            {
+              "phase": "eight-tabs",
+              "private_mib": 177.109375,
+              "working_mib": 141.328125,
+              "handles": 1594,
+              "threads": 160,
+              "cpu_one_core_percent": 1.0398369349347245,
+              "children": [
+                {
+                  "working_mib": 11.05078125,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 9016,
+                  "private_mib": 2.29296875
+                },
+                {
+                  "working_mib": 7.5,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 27784,
+                  "private_mib": 6.6796875
+                },
+                {
+                  "working_mib": 11.04296875,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 28960,
+                  "private_mib": 2.296875
+                },
+                {
+                  "working_mib": 7.49609375,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 23352,
+                  "private_mib": 6.6875
+                },
+                {
+                  "working_mib": 11.046875,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 28352,
+                  "private_mib": 2.29296875
+                },
+                {
+                  "working_mib": 7.49609375,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 3708,
+                  "private_mib": 6.6875
+                },
+                {
+                  "working_mib": 11.03515625,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 1684,
+                  "private_mib": 2.2890625
+                },
+                {
+                  "working_mib": 7.50390625,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 14468,
+                  "private_mib": 6.6796875
+                },
+                {
+                  "working_mib": 11.046875,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 26544,
+                  "private_mib": 2.29296875
+                },
+                {
+                  "working_mib": 7.49609375,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 1672,
+                  "private_mib": 6.68359375
+                },
+                {
+                  "working_mib": 11.03515625,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 26940,
+                  "private_mib": 2.2890625
+                },
+                {
+                  "working_mib": 7.4921875,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 18496,
+                  "private_mib": 6.6796875
+                },
+                {
+                  "working_mib": 11.04296875,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 28244,
+                  "private_mib": 2.29296875
+                },
+                {
+                  "working_mib": 7.50390625,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 20196,
+                  "private_mib": 6.69921875
+                },
+                {
+                  "working_mib": 11.04296875,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 13028,
+                  "private_mib": 2.29296875
+                },
+                {
+                  "working_mib": 7.5,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 29492,
+                  "private_mib": 6.6953125
+                }
+              ]
+            },
+            {
+              "phase": "after-output",
+              "private_mib": 201.38671875,
+              "working_mib": 160.6796875,
+              "handles": 1573,
+              "threads": 153,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "working_mib": 11.03515625,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 9016,
+                  "private_mib": 2.26171875
+                },
+                {
+                  "working_mib": 7.45703125,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 27784,
+                  "private_mib": 3.66015625
+                },
+                {
+                  "working_mib": 11.02734375,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 28960,
+                  "private_mib": 2.26953125
+                },
+                {
+                  "working_mib": 7.453125,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 23352,
+                  "private_mib": 3.66796875
+                },
+                {
+                  "working_mib": 11.03125,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 28352,
+                  "private_mib": 2.26171875
+                },
+                {
+                  "working_mib": 7.453125,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 3708,
+                  "private_mib": 3.671875
+                },
+                {
+                  "working_mib": 11.0234375,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 1684,
+                  "private_mib": 2.265625
+                },
+                {
+                  "working_mib": 7.45703125,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 14468,
+                  "private_mib": 3.6640625
+                },
+                {
+                  "working_mib": 11.03125,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 26544,
+                  "private_mib": 2.265625
+                },
+                {
+                  "working_mib": 7.453125,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 1672,
+                  "private_mib": 3.6640625
+                },
+                {
+                  "working_mib": 11.0234375,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 26940,
+                  "private_mib": 2.26171875
+                },
+                {
+                  "working_mib": 7.44921875,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 18496,
+                  "private_mib": 3.66015625
+                },
+                {
+                  "working_mib": 11.03125,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 28244,
+                  "private_mib": 2.265625
+                },
+                {
+                  "working_mib": 7.4609375,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 20196,
+                  "private_mib": 3.6796875
+                },
+                {
+                  "working_mib": 11.41796875,
+                  "name": "OpenConsole.exe",
+                  "parent": 27208,
+                  "pid": 13028,
+                  "private_mib": 2.6171875
+                },
+                {
+                  "working_mib": 13.046875,
+                  "name": "cmd.exe",
+                  "parent": 27208,
+                  "pid": 29492,
+                  "private_mib": 10.06640625
+                }
+              ]
+            }
+          ]
+        },
+        "latency": {
+          "label": "test",
+          "n": 40,
+          "skipped": 0,
+          "timeouts": 0,
+          "median_ms": 33.294399999999996,
+          "p95_ms": 34.2982,
+          "p99_ms": 35.3422,
+          "samples_ms": [
+            32.3247,
+            33.319700000000005,
+            32.0949,
+            33.269200000000005,
+            33.384,
+            32.3425,
+            33.2734,
+            32.2406,
+            33.3842,
+            33.3177,
+            33.307300000000005,
+            33.2849,
+            33.371300000000005,
+            33.3507,
+            31.9401,
+            32.3215,
+            34.1725,
+            34.2982,
+            32.5997,
+            32.4313,
+            33.3266,
+            33.3039,
+            33.279,
+            33.3326,
+            33.2595,
+            33.3238,
+            33.323100000000004,
+            31.824900000000003,
+            33.2582,
+            32.1801,
+            33.3328,
+            34.077400000000004,
+            33.249500000000005,
+            33.2018,
+            32.3956,
+            34.9791,
+            33.4615,
+            33.3457,
+            33.2428,
+            35.3422
+          ]
+        },
+        "output": {
+          "samples": [
+            {
+              "writer_ms": 39.1712,
+              "warmup": true,
+              "iteration": 0,
+              "kind": "ascii",
+              "bytes": 6900000
+            },
+            {
+              "writer_ms": 30.2689,
+              "warmup": false,
+              "iteration": 1,
+              "kind": "ascii",
+              "bytes": 6900000
+            },
+            {
+              "writer_ms": 30.0202,
+              "warmup": false,
+              "iteration": 2,
+              "kind": "ascii",
+              "bytes": 6900000
+            },
+            {
+              "writer_ms": 30.0711,
+              "warmup": false,
+              "iteration": 3,
+              "kind": "ascii",
+              "bytes": 6900000
+            },
+            {
+              "writer_ms": 70.5113,
+              "warmup": true,
+              "iteration": 0,
+              "kind": "color",
+              "bytes": 5100000
+            },
+            {
+              "writer_ms": 69.7344,
+              "warmup": false,
+              "iteration": 1,
+              "kind": "color",
+              "bytes": 5100000
+            },
+            {
+              "writer_ms": 70.3417,
+              "warmup": false,
+              "iteration": 2,
+              "kind": "color",
+              "bytes": 5100000
+            },
+            {
+              "writer_ms": 70.2933,
+              "warmup": false,
+              "iteration": 3,
+              "kind": "color",
+              "bytes": 5100000
+            },
+            {
+              "writer_ms": 72.9033,
+              "warmup": true,
+              "iteration": 0,
+              "kind": "unicode",
+              "bytes": 8700000
+            },
+            {
+              "writer_ms": 66.3902,
+              "warmup": false,
+              "iteration": 1,
+              "kind": "unicode",
+              "bytes": 8700000
+            },
+            {
+              "writer_ms": 64.3217,
+              "warmup": false,
+              "iteration": 2,
+              "kind": "unicode",
+              "bytes": 8700000
+            },
+            {
+              "writer_ms": 64.6284,
+              "warmup": false,
+              "iteration": 3,
+              "kind": "unicode",
+              "bytes": 8700000
+            }
+          ],
+          "size": {
+            "columns": 85,
+            "rows": 29
+          }
+        },
+        "latency_region": {
+          "width": 10,
+          "height": 22,
+          "y": 157,
+          "x": 70
+        }
+      },
+      {
+        "id": "68d53a23c5964de2ad73935c97dedce2",
+        "artifact_directory": "C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\68d53a23c5964de2ad73935c97dedce2",
+        "resources": {
+          "terminal": "wt",
+          "executable": "C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\wt\\terminal-1.24.11911.0\\WindowsTerminal.exe",
+          "sha256": "C2159565E068CEE5A0018D89560F4D8D40364E91380DFE27A6FFB2B8B8C8BF89",
+          "version": "1.24.2607.10001",
+          "width": 1600,
+          "height": 1200,
+          "shell": "cmd.exe /D /Q /K \"C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\68d53a23c5964de2ad73935c97dedce2\\init.cmd\"",
+          "font": "Consolas 12",
+          "history_lines": 10000,
+          "output_cost": {
+            "wall_ms": 31359.4624,
+            "terminal_cpu_ms": 1109.375
+          },
+          "samples": [
+            {
+              "phase": "one-tab",
+              "private_mib": 66.37890625,
+              "working_mib": 95.55078125,
+              "handles": 840,
+              "threads": 47,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "private_mib": 2.29296875,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.05078125,
+                  "parent": 18940,
+                  "pid": 26400
+                },
+                {
+                  "private_mib": 6.67578125,
+                  "name": "cmd.exe",
+                  "working_mib": 7.50390625,
+                  "parent": 18940,
+                  "pid": 29036
+                }
+              ]
+            },
+            {
+              "phase": "eight-tabs",
+              "private_mib": 177.44140625,
+              "working_mib": 141.2421875,
+              "handles": 1592,
+              "threads": 159,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "private_mib": 2.29296875,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.05078125,
+                  "parent": 18940,
+                  "pid": 26400
+                },
+                {
+                  "private_mib": 6.67578125,
+                  "name": "cmd.exe",
+                  "working_mib": 7.50390625,
+                  "parent": 18940,
+                  "pid": 29036
+                },
+                {
+                  "private_mib": 2.29296875,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.046875,
+                  "parent": 18940,
+                  "pid": 7380
+                },
+                {
+                  "private_mib": 6.67578125,
+                  "name": "cmd.exe",
+                  "working_mib": 7.49609375,
+                  "parent": 18940,
+                  "pid": 29644
+                },
+                {
+                  "private_mib": 2.296875,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.05078125,
+                  "parent": 18940,
+                  "pid": 9556
+                },
+                {
+                  "private_mib": 6.6796875,
+                  "name": "cmd.exe",
+                  "working_mib": 7.49609375,
+                  "parent": 18940,
+                  "pid": 2784
+                },
+                {
+                  "private_mib": 2.30078125,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.0390625,
+                  "parent": 18940,
+                  "pid": 22212
+                },
+                {
+                  "private_mib": 6.68359375,
+                  "name": "cmd.exe",
+                  "working_mib": 7.49609375,
+                  "parent": 18940,
+                  "pid": 24248
+                },
+                {
+                  "private_mib": 2.296875,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.046875,
+                  "parent": 18940,
+                  "pid": 16396
+                },
+                {
+                  "private_mib": 6.69140625,
+                  "name": "cmd.exe",
+                  "working_mib": 7.5,
+                  "parent": 18940,
+                  "pid": 17668
+                },
+                {
+                  "private_mib": 2.296875,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.05078125,
+                  "parent": 18940,
+                  "pid": 2656
+                },
+                {
+                  "private_mib": 6.68359375,
+                  "name": "cmd.exe",
+                  "working_mib": 7.49609375,
+                  "parent": 18940,
+                  "pid": 8044
+                },
+                {
+                  "private_mib": 2.30078125,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.05078125,
+                  "parent": 18940,
+                  "pid": 1060
+                },
+                {
+                  "private_mib": 6.68359375,
+                  "name": "cmd.exe",
+                  "working_mib": 7.49609375,
+                  "parent": 18940,
+                  "pid": 12300
+                },
+                {
+                  "private_mib": 2.29296875,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.0390625,
+                  "parent": 18940,
+                  "pid": 26620
+                },
+                {
+                  "private_mib": 6.6953125,
+                  "name": "cmd.exe",
+                  "working_mib": 7.5,
+                  "parent": 18940,
+                  "pid": 23428
+                }
+              ]
+            },
+            {
+              "phase": "after-output",
+              "private_mib": 201.546875,
+              "working_mib": 160.109375,
+              "handles": 1571,
+              "threads": 152,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "private_mib": 2.26171875,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.03515625,
+                  "parent": 18940,
+                  "pid": 26400
+                },
+                {
+                  "private_mib": 3.65625,
+                  "name": "cmd.exe",
+                  "working_mib": 7.45703125,
+                  "parent": 18940,
+                  "pid": 29036
+                },
+                {
+                  "private_mib": 2.26171875,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.03125,
+                  "parent": 18940,
+                  "pid": 7380
+                },
+                {
+                  "private_mib": 3.66015625,
+                  "name": "cmd.exe",
+                  "working_mib": 7.453125,
+                  "parent": 18940,
+                  "pid": 29644
+                },
+                {
+                  "private_mib": 2.26953125,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.03515625,
+                  "parent": 18940,
+                  "pid": 9556
+                },
+                {
+                  "private_mib": 3.66015625,
+                  "name": "cmd.exe",
+                  "working_mib": 7.453125,
+                  "parent": 18940,
+                  "pid": 2784
+                },
+                {
+                  "private_mib": 2.2734375,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.0234375,
+                  "parent": 18940,
+                  "pid": 22212
+                },
+                {
+                  "private_mib": 3.6640625,
+                  "name": "cmd.exe",
+                  "working_mib": 7.453125,
+                  "parent": 18940,
+                  "pid": 24248
+                },
+                {
+                  "private_mib": 2.26953125,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.03125,
+                  "parent": 18940,
+                  "pid": 16396
+                },
+                {
+                  "private_mib": 3.67578125,
+                  "name": "cmd.exe",
+                  "working_mib": 7.45703125,
+                  "parent": 18940,
+                  "pid": 17668
+                },
+                {
+                  "private_mib": 2.26953125,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.03515625,
+                  "parent": 18940,
+                  "pid": 2656
+                },
+                {
+                  "private_mib": 3.6640625,
+                  "name": "cmd.exe",
+                  "working_mib": 7.453125,
+                  "parent": 18940,
+                  "pid": 8044
+                },
+                {
+                  "private_mib": 2.27734375,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.0390625,
+                  "parent": 18940,
+                  "pid": 1060
+                },
+                {
+                  "private_mib": 3.66796875,
+                  "name": "cmd.exe",
+                  "working_mib": 7.453125,
+                  "parent": 18940,
+                  "pid": 12300
+                },
+                {
+                  "private_mib": 2.62109375,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.4140625,
+                  "parent": 18940,
+                  "pid": 26620
+                },
+                {
+                  "private_mib": 10.125,
+                  "name": "cmd.exe",
+                  "working_mib": 13.12890625,
+                  "parent": 18940,
+                  "pid": 23428
+                }
+              ]
+            }
+          ]
+        },
+        "latency": {
+          "label": "test",
+          "n": 40,
+          "skipped": 0,
+          "timeouts": 0,
+          "median_ms": 33.23675,
+          "p95_ms": 34.9669,
+          "p99_ms": 35.0066,
+          "samples_ms": [
+            32.0201,
+            33.353100000000005,
+            33.3962,
+            33.165600000000005,
+            34.9949,
+            33.3391,
+            35.0066,
+            33.2899,
+            33.0016,
+            33.2954,
+            33.1109,
+            31.739,
+            33.088100000000004,
+            34.9669,
+            33.4131,
+            34.8447,
+            33.5337,
+            33.1355,
+            32.8158,
+            33.315000000000005,
+            32.9406,
+            34.8008,
+            33.210100000000004,
+            34.5387,
+            33.1351,
+            33.03,
+            33.2914,
+            33.0536,
+            32.9795,
+            33.2329,
+            33.2406,
+            33.3598,
+            33.2446,
+            31.4463,
+            33.654,
+            33.255500000000005,
+            33.2063,
+            32.6342,
+            33.002700000000004,
+            31.5594
+          ]
+        },
+        "output": {
+          "size": {
+            "columns": 85,
+            "rows": 29
+          },
+          "samples": [
+            {
+              "iteration": 0,
+              "kind": "ascii",
+              "bytes": 6900000,
+              "writer_ms": 39.2506,
+              "warmup": true
+            },
+            {
+              "iteration": 1,
+              "kind": "ascii",
+              "bytes": 6900000,
+              "writer_ms": 33.5586,
+              "warmup": false
+            },
+            {
+              "iteration": 2,
+              "kind": "ascii",
+              "bytes": 6900000,
+              "writer_ms": 29.4676,
+              "warmup": false
+            },
+            {
+              "iteration": 3,
+              "kind": "ascii",
+              "bytes": 6900000,
+              "writer_ms": 31.037,
+              "warmup": false
+            },
+            {
+              "iteration": 0,
+              "kind": "color",
+              "bytes": 5100000,
+              "writer_ms": 70.3268,
+              "warmup": true
+            },
+            {
+              "iteration": 1,
+              "kind": "color",
+              "bytes": 5100000,
+              "writer_ms": 70.2556,
+              "warmup": false
+            },
+            {
+              "iteration": 2,
+              "kind": "color",
+              "bytes": 5100000,
+              "writer_ms": 70.1083,
+              "warmup": false
+            },
+            {
+              "iteration": 3,
+              "kind": "color",
+              "bytes": 5100000,
+              "writer_ms": 70.0592,
+              "warmup": false
+            },
+            {
+              "iteration": 0,
+              "kind": "unicode",
+              "bytes": 8700000,
+              "writer_ms": 64.5966,
+              "warmup": true
+            },
+            {
+              "iteration": 1,
+              "kind": "unicode",
+              "bytes": 8700000,
+              "writer_ms": 64.242,
+              "warmup": false
+            },
+            {
+              "iteration": 2,
+              "kind": "unicode",
+              "bytes": 8700000,
+              "writer_ms": 64.4485,
+              "warmup": false
+            },
+            {
+              "iteration": 3,
+              "kind": "unicode",
+              "bytes": 8700000,
+              "writer_ms": 65.0918,
+              "warmup": false
+            }
+          ]
+        },
+        "latency_region": {
+          "width": 10,
+          "x": 70,
+          "height": 22,
+          "y": 157
+        }
+      },
+      {
+        "id": "7c088b109248484f8a880752d9ba70d4",
+        "artifact_directory": "C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\7c088b109248484f8a880752d9ba70d4",
+        "resources": {
+          "terminal": "wt",
+          "executable": "C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\wt\\terminal-1.24.11911.0\\WindowsTerminal.exe",
+          "sha256": "C2159565E068CEE5A0018D89560F4D8D40364E91380DFE27A6FFB2B8B8C8BF89",
+          "version": "1.24.2607.10001",
+          "width": 1600,
+          "height": 1200,
+          "shell": "cmd.exe /D /Q /K \"C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\7c088b109248484f8a880752d9ba70d4\\init.cmd\"",
+          "font": "Consolas 12",
+          "history_lines": 10000,
+          "output_cost": null,
+          "samples": [
+            {
+              "phase": "one-tab",
+              "private_mib": 65.546875,
+              "working_mib": 95.69140625,
+              "handles": 842,
+              "threads": 47,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "private_mib": 2.2890625,
+                  "working_mib": 11.046875,
+                  "parent": 27244,
+                  "name": "OpenConsole.exe",
+                  "pid": 16592
+                },
+                {
+                  "private_mib": 6.6953125,
+                  "working_mib": 7.5,
+                  "parent": 27244,
+                  "name": "cmd.exe",
+                  "pid": 10228
+                }
+              ]
+            },
+            {
+              "phase": "eight-tabs",
+              "private_mib": 178.25,
+              "working_mib": 141.13671875,
+              "handles": 1592,
+              "threads": 159,
+              "cpu_one_core_percent": 0.5201861697195852,
+              "children": [
+                {
+                  "private_mib": 2.2890625,
+                  "working_mib": 11.046875,
+                  "parent": 27244,
+                  "name": "OpenConsole.exe",
+                  "pid": 16592
+                },
+                {
+                  "private_mib": 6.6953125,
+                  "working_mib": 7.5,
+                  "parent": 27244,
+                  "name": "cmd.exe",
+                  "pid": 10228
+                },
+                {
+                  "private_mib": 2.28515625,
+                  "working_mib": 11.05859375,
+                  "parent": 27244,
+                  "name": "OpenConsole.exe",
+                  "pid": 28296
+                },
+                {
+                  "private_mib": 6.6953125,
+                  "working_mib": 7.5,
+                  "parent": 27244,
+                  "name": "cmd.exe",
+                  "pid": 7968
+                },
+                {
+                  "private_mib": 2.296875,
+                  "working_mib": 11.046875,
+                  "parent": 27244,
+                  "name": "OpenConsole.exe",
+                  "pid": 19272
+                },
+                {
+                  "private_mib": 6.69140625,
+                  "working_mib": 7.50390625,
+                  "parent": 27244,
+                  "name": "cmd.exe",
+                  "pid": 28180
+                },
+                {
+                  "private_mib": 2.30078125,
+                  "working_mib": 11.0546875,
+                  "parent": 27244,
+                  "name": "OpenConsole.exe",
+                  "pid": 5984
+                },
+                {
+                  "private_mib": 6.6953125,
+                  "working_mib": 7.50390625,
+                  "parent": 27244,
+                  "name": "cmd.exe",
+                  "pid": 14096
+                },
+                {
+                  "private_mib": 2.28515625,
+                  "working_mib": 11.0390625,
+                  "parent": 27244,
+                  "name": "OpenConsole.exe",
+                  "pid": 9100
+                },
+                {
+                  "private_mib": 6.69140625,
+                  "working_mib": 7.5,
+                  "parent": 27244,
+                  "name": "cmd.exe",
+                  "pid": 27336
+                },
+                {
+                  "private_mib": 2.30078125,
+                  "working_mib": 11.05859375,
+                  "parent": 27244,
+                  "name": "OpenConsole.exe",
+                  "pid": 10524
+                },
+                {
+                  "private_mib": 6.6875,
+                  "working_mib": 7.5,
+                  "parent": 27244,
+                  "name": "cmd.exe",
+                  "pid": 5368
+                },
+                {
+                  "private_mib": 2.296875,
+                  "working_mib": 11.04296875,
+                  "parent": 27244,
+                  "name": "OpenConsole.exe",
+                  "pid": 28384
+                },
+                {
+                  "private_mib": 6.6953125,
+                  "working_mib": 7.50390625,
+                  "parent": 27244,
+                  "name": "cmd.exe",
+                  "pid": 26184
+                },
+                {
+                  "private_mib": 2.28515625,
+                  "working_mib": 11.0390625,
+                  "parent": 27244,
+                  "name": "OpenConsole.exe",
+                  "pid": 18188
+                },
+                {
+                  "private_mib": 6.6953125,
+                  "working_mib": 7.5,
+                  "parent": 27244,
+                  "name": "cmd.exe",
+                  "pid": 11432
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "artifact_directory": "C:\\Users\\parkc\\AppData\\Local\\Temp/yuurei-wt-comparison/runs/5a6ba6a595df4bbdb849a79d149962f3",
+        "purpose": "Final glyph-only latency validation; 7-pixel-wide crop excludes both cursor positions.",
+        "id": "5a6ba6a595df4bbdb849a79d149962f3",
+        "latency": {
+          "label": "test",
+          "n": 40,
+          "skipped": 0,
+          "timeouts": 0,
+          "median_ms": 33.18925,
+          "p95_ms": 34.5201,
+          "p99_ms": 34.823,
+          "samples_ms": [
+            32.147400000000005,
+            34.5201,
+            33.2025,
+            33.1196,
+            33.1706,
+            33.086600000000004,
+            33.0307,
+            33.3108,
+            33.1876,
+            33.156,
+            33.4707,
+            33.1725,
+            33.078,
+            33.1665,
+            32.8988,
+            33.2106,
+            34.4424,
+            33.1909,
+            33.2569,
+            33.4073,
+            33.124,
+            34.1281,
+            33.0655,
+            33.1738,
+            34.092800000000004,
+            33.1999,
+            34.823,
+            33.2352,
+            33.2631,
+            33.1255,
+            33.277100000000004,
+            33.2797,
+            33.3877,
+            33.0861,
+            33.1081,
+            33.5681,
+            34.6242,
+            33.1813,
+            32.531800000000004,
+            33.1028
+          ]
+        },
+        "latency_region": {
+          "height": 22,
+          "y": 157,
+          "x": 70,
+          "width": 7
+        },
+        "resources": {
+          "terminal": "wt",
+          "executable": "C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\wt\\terminal-1.24.11911.0\\WindowsTerminal.exe",
+          "sha256": "C2159565E068CEE5A0018D89560F4D8D40364E91380DFE27A6FFB2B8B8C8BF89",
+          "version": "1.24.2607.10001",
+          "width": 1600,
+          "height": 1200,
+          "shell": "cmd.exe /D /Q /K \"C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\5a6ba6a595df4bbdb849a79d149962f3\\init.cmd\"",
+          "font": "Consolas 12",
+          "history_lines": 10000,
+          "output_cost": null,
+          "samples": [
+            {
+              "phase": "one-tab",
+              "private_mib": 66.375,
+              "working_mib": 95.7734375,
+              "handles": 840,
+              "threads": 47,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "private_mib": 2.2890625,
+                  "working_mib": 11.046875,
+                  "pid": 26844,
+                  "name": "OpenConsole.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 6.68359375,
+                  "working_mib": 7.49609375,
+                  "pid": 27396,
+                  "name": "cmd.exe",
+                  "parent": 18852
+                }
+              ]
+            },
+            {
+              "phase": "eight-tabs",
+              "private_mib": 177.15625,
+              "working_mib": 141.2265625,
+              "handles": 1592,
+              "threads": 159,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "private_mib": 2.2890625,
+                  "working_mib": 11.046875,
+                  "pid": 26844,
+                  "name": "OpenConsole.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 6.68359375,
+                  "working_mib": 7.49609375,
+                  "pid": 27396,
+                  "name": "cmd.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 2.27734375,
+                  "working_mib": 11.0390625,
+                  "pid": 26020,
+                  "name": "OpenConsole.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 6.6953125,
+                  "working_mib": 7.50390625,
+                  "pid": 2784,
+                  "name": "cmd.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 2.2890625,
+                  "working_mib": 11.03515625,
+                  "pid": 27324,
+                  "name": "OpenConsole.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 6.6875,
+                  "working_mib": 7.5,
+                  "pid": 25760,
+                  "name": "cmd.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 2.3046875,
+                  "working_mib": 11.046875,
+                  "pid": 29552,
+                  "name": "OpenConsole.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 6.68359375,
+                  "working_mib": 7.5,
+                  "pid": 17556,
+                  "name": "cmd.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 2.296875,
+                  "working_mib": 11.046875,
+                  "pid": 3688,
+                  "name": "OpenConsole.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 6.6875,
+                  "working_mib": 7.5,
+                  "pid": 4784,
+                  "name": "cmd.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 2.3046875,
+                  "working_mib": 11.04296875,
+                  "pid": 29360,
+                  "name": "OpenConsole.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 6.69921875,
+                  "working_mib": 7.5,
+                  "pid": 27412,
+                  "name": "cmd.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 2.296875,
+                  "working_mib": 11.05078125,
+                  "pid": 25168,
+                  "name": "OpenConsole.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 6.671875,
+                  "working_mib": 7.49609375,
+                  "pid": 10700,
+                  "name": "cmd.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 2.2890625,
+                  "working_mib": 11.03125,
+                  "pid": 22980,
+                  "name": "OpenConsole.exe",
+                  "parent": 18852
+                },
+                {
+                  "private_mib": 6.6953125,
+                  "working_mib": 7.5,
+                  "pid": 7876,
+                  "name": "cmd.exe",
+                  "parent": 18852
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "yuurei": [
+      {
+        "id": "351cec4fe0c74cca8b9e8dea23e59703",
+        "artifact_directory": "C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\351cec4fe0c74cca8b9e8dea23e59703",
+        "resources": {
+          "terminal": "yuurei",
+          "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty.exe",
+          "sha256": "20B68B10D92FF3304789FD7B32EA2F11F40AA87223A9FDF50EEBAA442BFC5C27",
+          "version": "0.2.15",
+          "width": 1600,
+          "height": 1200,
+          "shell": "cmd.exe /D /Q /K \"C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\351cec4fe0c74cca8b9e8dea23e59703\\init.cmd\"",
+          "font": "Consolas 12",
+          "history_lines": 10000,
+          "samples": [
+            {
+              "phase": "one-tab",
+              "private_mib": 149.4921875,
+              "working_mib": 76.2734375,
+              "handles": 392,
+              "threads": 14,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "private_mib": 2.27734375,
+                  "pid": 740,
+                  "working_mib": 11.02734375,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 6.76953125,
+                  "pid": 29048,
+                  "working_mib": 7.48828125,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                }
+              ]
+            },
+            {
+              "phase": "eight-tabs",
+              "private_mib": 432.984375,
+              "working_mib": 132.2109375,
+              "handles": 549,
+              "threads": 30,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "private_mib": 2.27734375,
+                  "pid": 740,
+                  "working_mib": 11.02734375,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 6.76953125,
+                  "pid": 29048,
+                  "working_mib": 7.48828125,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 2.2734375,
+                  "pid": 22176,
+                  "working_mib": 11.01953125,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 6.78125,
+                  "pid": 5792,
+                  "working_mib": 7.4921875,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 2.265625,
+                  "pid": 25076,
+                  "working_mib": 11.00390625,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 6.7578125,
+                  "pid": 25652,
+                  "working_mib": 7.48046875,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 2.26953125,
+                  "pid": 22868,
+                  "working_mib": 11.01171875,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 6.77734375,
+                  "pid": 28568,
+                  "working_mib": 7.48828125,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 2.26171875,
+                  "pid": 25172,
+                  "working_mib": 11.00390625,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 6.78515625,
+                  "pid": 25672,
+                  "working_mib": 7.48828125,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 2.26953125,
+                  "pid": 696,
+                  "working_mib": 11.01171875,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 6.78515625,
+                  "pid": 22280,
+                  "working_mib": 7.48828125,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 2.265625,
+                  "pid": 7984,
+                  "working_mib": 11.00390625,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 6.78125,
+                  "pid": 24924,
+                  "working_mib": 7.48828125,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 2.26953125,
+                  "pid": 26368,
+                  "working_mib": 11.01171875,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 6.765625,
+                  "pid": 26976,
+                  "working_mib": 7.484375,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                }
+              ]
+            },
+            {
+              "phase": "after-output",
+              "private_mib": 443.74609375,
+              "working_mib": 132.52734375,
+              "handles": 548,
+              "threads": 28,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "private_mib": 2.25,
+                  "pid": 740,
+                  "working_mib": 11.01171875,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 3.75,
+                  "pid": 29048,
+                  "working_mib": 7.4453125,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 2.24609375,
+                  "pid": 22176,
+                  "working_mib": 11.00390625,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 3.765625,
+                  "pid": 5792,
+                  "working_mib": 7.44921875,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 2.234375,
+                  "pid": 25076,
+                  "working_mib": 10.98828125,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 3.7421875,
+                  "pid": 25652,
+                  "working_mib": 7.4375,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 2.2421875,
+                  "pid": 22868,
+                  "working_mib": 11,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 3.76171875,
+                  "pid": 28568,
+                  "working_mib": 7.4453125,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 2.234375,
+                  "pid": 25172,
+                  "working_mib": 10.9921875,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 3.765625,
+                  "pid": 25672,
+                  "working_mib": 7.4453125,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 2.23828125,
+                  "pid": 696,
+                  "working_mib": 10.99609375,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 3.765625,
+                  "pid": 22280,
+                  "working_mib": 7.4453125,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 2.234375,
+                  "pid": 7984,
+                  "working_mib": 10.98828125,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 3.76171875,
+                  "pid": 24924,
+                  "working_mib": 7.4453125,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 2.62109375,
+                  "pid": 26368,
+                  "working_mib": 11.37109375,
+                  "name": "OpenConsole.exe",
+                  "parent": 27352
+                },
+                {
+                  "private_mib": 10.12890625,
+                  "pid": 26976,
+                  "working_mib": 13.078125,
+                  "name": "cmd.exe",
+                  "parent": 27352
+                }
+              ]
+            }
+          ]
+        },
+        "latency": {
+          "label": "test",
+          "n": 40,
+          "skipped": 0,
+          "timeouts": 0,
+          "median_ms": 18.23,
+          "p95_ms": 19.1096,
+          "p99_ms": 19.215,
+          "samples_ms": [
+            18.0074,
+            18.1827,
+            18.3029,
+            17.4971,
+            18.5748,
+            18.2717,
+            18.3093,
+            18.2089,
+            19.162200000000002,
+            18.422800000000002,
+            18.221,
+            18.2791,
+            18.8445,
+            18.107,
+            17.2138,
+            16.5665,
+            17.872500000000002,
+            18.505200000000002,
+            17.840500000000002,
+            18.5346,
+            18.7397,
+            18.1444,
+            18.049400000000002,
+            18.3782,
+            19.1096,
+            17.8936,
+            18.3108,
+            18.302500000000002,
+            18.1475,
+            17.721700000000002,
+            18.9073,
+            17.6416,
+            17.861800000000002,
+            18.1517,
+            18.239,
+            19.215,
+            18.3169,
+            17.2511,
+            18.3647,
+            16.9723
+          ]
+        },
+        "output": {
+          "samples": [
+            {
+              "iteration": 0,
+              "warmup": true,
+              "bytes": 6900000,
+              "writer_ms": 64.0099,
+              "kind": "ascii"
+            },
+            {
+              "iteration": 1,
+              "warmup": false,
+              "bytes": 6900000,
+              "writer_ms": 57.4183,
+              "kind": "ascii"
+            },
+            {
+              "iteration": 2,
+              "warmup": false,
+              "bytes": 6900000,
+              "writer_ms": 56.0956,
+              "kind": "ascii"
+            },
+            {
+              "iteration": 3,
+              "warmup": false,
+              "bytes": 6900000,
+              "writer_ms": 56.4805,
+              "kind": "ascii"
+            },
+            {
+              "iteration": 0,
+              "warmup": true,
+              "bytes": 5100000,
+              "writer_ms": 122.3234,
+              "kind": "color"
+            },
+            {
+              "iteration": 1,
+              "warmup": false,
+              "bytes": 5100000,
+              "writer_ms": 121.4611,
+              "kind": "color"
+            },
+            {
+              "iteration": 2,
+              "warmup": false,
+              "bytes": 5100000,
+              "writer_ms": 122.9585,
+              "kind": "color"
+            },
+            {
+              "iteration": 3,
+              "warmup": false,
+              "bytes": 5100000,
+              "writer_ms": 120.365,
+              "kind": "color"
+            },
+            {
+              "iteration": 0,
+              "warmup": true,
+              "bytes": 8700000,
+              "writer_ms": 205.7547,
+              "kind": "unicode"
+            },
+            {
+              "iteration": 1,
+              "warmup": false,
+              "bytes": 8700000,
+              "writer_ms": 205.1501,
+              "kind": "unicode"
+            },
+            {
+              "iteration": 2,
+              "warmup": false,
+              "bytes": 8700000,
+              "writer_ms": 205.1716,
+              "kind": "unicode"
+            },
+            {
+              "iteration": 3,
+              "warmup": false,
+              "bytes": 8700000,
+              "writer_ms": 201.082,
+              "kind": "unicode"
+            }
+          ],
+          "size": {
+            "columns": 85,
+            "rows": 29
+          }
+        },
+        "latency_region": {
+          "y": 151,
+          "height": 21,
+          "x": 70,
+          "width": 10
+        }
+      },
+      {
+        "id": "e593452d83eb4e05ad9089f88ba56f88",
+        "artifact_directory": "C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\e593452d83eb4e05ad9089f88ba56f88",
+        "resources": {
+          "terminal": "yuurei",
+          "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty.exe",
+          "sha256": "20B68B10D92FF3304789FD7B32EA2F11F40AA87223A9FDF50EEBAA442BFC5C27",
+          "version": "0.2.15",
+          "width": 1600,
+          "height": 1200,
+          "shell": "cmd.exe /D /Q /K \"C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\e593452d83eb4e05ad9089f88ba56f88\\init.cmd\"",
+          "font": "Consolas 12",
+          "history_lines": 10000,
+          "output_cost": {
+            "wall_ms": 32222.87,
+            "terminal_cpu_ms": 3046.875
+          },
+          "samples": [
+            {
+              "phase": "one-tab",
+              "private_mib": 144.73046875,
+              "working_mib": 76.34765625,
+              "handles": 392,
+              "threads": 14,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "pid": 7680,
+                  "parent": 5408,
+                  "private_mib": 2.2734375,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.015625
+                },
+                {
+                  "pid": 14828,
+                  "parent": 5408,
+                  "private_mib": 6.78515625,
+                  "name": "cmd.exe",
+                  "working_mib": 7.48828125
+                }
+              ]
+            },
+            {
+              "phase": "eight-tabs",
+              "private_mib": 438.2734375,
+              "working_mib": 132.453125,
+              "handles": 549,
+              "threads": 30,
+              "cpu_one_core_percent": 0.5208382812970056,
+              "children": [
+                {
+                  "pid": 7680,
+                  "parent": 5408,
+                  "private_mib": 2.2734375,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.015625
+                },
+                {
+                  "pid": 14828,
+                  "parent": 5408,
+                  "private_mib": 6.78515625,
+                  "name": "cmd.exe",
+                  "working_mib": 7.48828125
+                },
+                {
+                  "pid": 10092,
+                  "parent": 5408,
+                  "private_mib": 2.27734375,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.015625
+                },
+                {
+                  "pid": 25480,
+                  "parent": 5408,
+                  "private_mib": 6.78125,
+                  "name": "cmd.exe",
+                  "working_mib": 7.48828125
+                },
+                {
+                  "pid": 29324,
+                  "parent": 5408,
+                  "private_mib": 2.2734375,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.01171875
+                },
+                {
+                  "pid": 25588,
+                  "parent": 5408,
+                  "private_mib": 6.7734375,
+                  "name": "cmd.exe",
+                  "working_mib": 7.48046875
+                },
+                {
+                  "pid": 27704,
+                  "parent": 5408,
+                  "private_mib": 2.2890625,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.0078125
+                },
+                {
+                  "pid": 27180,
+                  "parent": 5408,
+                  "private_mib": 6.765625,
+                  "name": "cmd.exe",
+                  "working_mib": 7.48046875
+                },
+                {
+                  "pid": 28612,
+                  "parent": 5408,
+                  "private_mib": 2.27734375,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.015625
+                },
+                {
+                  "pid": 26684,
+                  "parent": 5408,
+                  "private_mib": 6.78125,
+                  "name": "cmd.exe",
+                  "working_mib": 7.48828125
+                },
+                {
+                  "pid": 18636,
+                  "parent": 5408,
+                  "private_mib": 2.26953125,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.0078125
+                },
+                {
+                  "pid": 13252,
+                  "parent": 5408,
+                  "private_mib": 6.765625,
+                  "name": "cmd.exe",
+                  "working_mib": 7.484375
+                },
+                {
+                  "pid": 6380,
+                  "parent": 5408,
+                  "private_mib": 2.28125,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.0078125
+                },
+                {
+                  "pid": 7628,
+                  "parent": 5408,
+                  "private_mib": 6.77734375,
+                  "name": "cmd.exe",
+                  "working_mib": 7.48828125
+                },
+                {
+                  "pid": 12984,
+                  "parent": 5408,
+                  "private_mib": 2.27734375,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.01171875
+                },
+                {
+                  "pid": 2316,
+                  "parent": 5408,
+                  "private_mib": 6.78515625,
+                  "name": "cmd.exe",
+                  "working_mib": 7.4921875
+                }
+              ]
+            },
+            {
+              "phase": "after-output",
+              "private_mib": 448.9140625,
+              "working_mib": 132.82421875,
+              "handles": 548,
+              "threads": 28,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "pid": 7680,
+                  "parent": 5408,
+                  "private_mib": 2.25,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.00390625
+                },
+                {
+                  "pid": 14828,
+                  "parent": 5408,
+                  "private_mib": 3.76953125,
+                  "name": "cmd.exe",
+                  "working_mib": 7.4453125
+                },
+                {
+                  "pid": 10092,
+                  "parent": 5408,
+                  "private_mib": 2.25,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11
+                },
+                {
+                  "pid": 25480,
+                  "parent": 5408,
+                  "private_mib": 3.765625,
+                  "name": "cmd.exe",
+                  "working_mib": 7.4453125
+                },
+                {
+                  "pid": 29324,
+                  "parent": 5408,
+                  "private_mib": 2.2421875,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 10.99609375
+                },
+                {
+                  "pid": 25588,
+                  "parent": 5408,
+                  "private_mib": 3.7578125,
+                  "name": "cmd.exe",
+                  "working_mib": 7.44140625
+                },
+                {
+                  "pid": 27704,
+                  "parent": 5408,
+                  "private_mib": 2.26171875,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 10.9921875
+                },
+                {
+                  "pid": 27180,
+                  "parent": 5408,
+                  "private_mib": 3.74609375,
+                  "name": "cmd.exe",
+                  "working_mib": 7.4375
+                },
+                {
+                  "pid": 28612,
+                  "parent": 5408,
+                  "private_mib": 2.25,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11
+                },
+                {
+                  "pid": 26684,
+                  "parent": 5408,
+                  "private_mib": 3.76171875,
+                  "name": "cmd.exe",
+                  "working_mib": 7.4453125
+                },
+                {
+                  "pid": 18636,
+                  "parent": 5408,
+                  "private_mib": 2.23828125,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 10.9921875
+                },
+                {
+                  "pid": 13252,
+                  "parent": 5408,
+                  "private_mib": 3.74609375,
+                  "name": "cmd.exe",
+                  "working_mib": 7.44140625
+                },
+                {
+                  "pid": 6380,
+                  "parent": 5408,
+                  "private_mib": 2.25390625,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 10.9921875
+                },
+                {
+                  "pid": 7628,
+                  "parent": 5408,
+                  "private_mib": 3.76171875,
+                  "name": "cmd.exe",
+                  "working_mib": 7.4453125
+                },
+                {
+                  "pid": 12984,
+                  "parent": 5408,
+                  "private_mib": 2.62890625,
+                  "name": "OpenConsole.exe",
+                  "working_mib": 11.37109375
+                },
+                {
+                  "pid": 2316,
+                  "parent": 5408,
+                  "private_mib": 10.15234375,
+                  "name": "cmd.exe",
+                  "working_mib": 13.0859375
+                }
+              ]
+            }
+          ]
+        },
+        "latency": {
+          "label": "test",
+          "n": 40,
+          "skipped": 0,
+          "timeouts": 0,
+          "median_ms": 18.1988,
+          "p95_ms": 19.1062,
+          "p99_ms": 19.3935,
+          "samples_ms": [
+            19.1787,
+            16.7318,
+            18.3342,
+            18.3134,
+            16.7544,
+            19.1062,
+            18.453300000000002,
+            18.4891,
+            16.7532,
+            18.3601,
+            18.3356,
+            17.5335,
+            18.389400000000002,
+            17.1335,
+            16.2677,
+            17.0742,
+            18.4723,
+            18.2788,
+            17.861800000000002,
+            19.3935,
+            18.2555,
+            16.9684,
+            18.401300000000003,
+            18.418,
+            17.546200000000002,
+            17.8017,
+            17.7632,
+            18.4012,
+            16.645500000000002,
+            18.0727,
+            18.1475,
+            17.1153,
+            16.6661,
+            18.2501,
+            17.1886,
+            16.922,
+            18.334300000000002,
+            18.466900000000003,
+            19.0039,
+            17.890700000000002
+          ]
+        },
+        "output": {
+          "size": {
+            "rows": 29,
+            "columns": 85
+          },
+          "samples": [
+            {
+              "bytes": 6900000,
+              "kind": "ascii",
+              "writer_ms": 64.9855,
+              "iteration": 0,
+              "warmup": true
+            },
+            {
+              "bytes": 6900000,
+              "kind": "ascii",
+              "writer_ms": 65.9744,
+              "iteration": 1,
+              "warmup": false
+            },
+            {
+              "bytes": 6900000,
+              "kind": "ascii",
+              "writer_ms": 57.2934,
+              "iteration": 2,
+              "warmup": false
+            },
+            {
+              "bytes": 6900000,
+              "kind": "ascii",
+              "writer_ms": 55.8899,
+              "iteration": 3,
+              "warmup": false
+            },
+            {
+              "bytes": 5100000,
+              "kind": "color",
+              "writer_ms": 120.721,
+              "iteration": 0,
+              "warmup": true
+            },
+            {
+              "bytes": 5100000,
+              "kind": "color",
+              "writer_ms": 119.7895,
+              "iteration": 1,
+              "warmup": false
+            },
+            {
+              "bytes": 5100000,
+              "kind": "color",
+              "writer_ms": 120.8563,
+              "iteration": 2,
+              "warmup": false
+            },
+            {
+              "bytes": 5100000,
+              "kind": "color",
+              "writer_ms": 120.7271,
+              "iteration": 3,
+              "warmup": false
+            },
+            {
+              "bytes": 8700000,
+              "kind": "unicode",
+              "writer_ms": 196.9424,
+              "iteration": 0,
+              "warmup": true
+            },
+            {
+              "bytes": 8700000,
+              "kind": "unicode",
+              "writer_ms": 201.0105,
+              "iteration": 1,
+              "warmup": false
+            },
+            {
+              "bytes": 8700000,
+              "kind": "unicode",
+              "writer_ms": 201.7579,
+              "iteration": 2,
+              "warmup": false
+            },
+            {
+              "bytes": 8700000,
+              "kind": "unicode",
+              "writer_ms": 202.4886,
+              "iteration": 3,
+              "warmup": false
+            }
+          ]
+        },
+        "latency_region": {
+          "height": 21,
+          "y": 151,
+          "width": 10,
+          "x": 70
+        }
+      },
+      {
+        "id": "d89055abe1634746825580bec74374e8",
+        "artifact_directory": "C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\d89055abe1634746825580bec74374e8",
+        "resources": {
+          "terminal": "yuurei",
+          "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty.exe",
+          "sha256": "20B68B10D92FF3304789FD7B32EA2F11F40AA87223A9FDF50EEBAA442BFC5C27",
+          "version": "0.2.15",
+          "width": 1600,
+          "height": 1200,
+          "shell": "cmd.exe /D /Q /K \"C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\d89055abe1634746825580bec74374e8\\init.cmd\"",
+          "font": "Consolas 12",
+          "history_lines": 10000,
+          "output_cost": null,
+          "samples": [
+            {
+              "phase": "one-tab",
+              "private_mib": 150.6875,
+              "working_mib": 76.16796875,
+              "handles": 392,
+              "threads": 14,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "parent": 13804,
+                  "pid": 28232,
+                  "working_mib": 11.01171875,
+                  "private_mib": 2.26953125,
+                  "name": "OpenConsole.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 25724,
+                  "working_mib": 7.48828125,
+                  "private_mib": 6.78125,
+                  "name": "cmd.exe"
+                }
+              ]
+            },
+            {
+              "phase": "eight-tabs",
+              "private_mib": 434.73828125,
+              "working_mib": 132.12890625,
+              "handles": 549,
+              "threads": 30,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "parent": 13804,
+                  "pid": 28232,
+                  "working_mib": 11.01171875,
+                  "private_mib": 2.26953125,
+                  "name": "OpenConsole.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 25724,
+                  "working_mib": 7.48828125,
+                  "private_mib": 6.78125,
+                  "name": "cmd.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 26592,
+                  "working_mib": 11.01953125,
+                  "private_mib": 2.2734375,
+                  "name": "OpenConsole.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 28024,
+                  "working_mib": 7.48828125,
+                  "private_mib": 6.765625,
+                  "name": "cmd.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 9060,
+                  "working_mib": 11.00390625,
+                  "private_mib": 2.26953125,
+                  "name": "OpenConsole.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 25964,
+                  "working_mib": 7.48828125,
+                  "private_mib": 6.78125,
+                  "name": "cmd.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 25672,
+                  "working_mib": 11,
+                  "private_mib": 2.28125,
+                  "name": "OpenConsole.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 25284,
+                  "working_mib": 7.484375,
+                  "private_mib": 6.76953125,
+                  "name": "cmd.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 17848,
+                  "working_mib": 11.00390625,
+                  "private_mib": 2.2734375,
+                  "name": "OpenConsole.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 4800,
+                  "working_mib": 7.48046875,
+                  "private_mib": 6.76953125,
+                  "name": "cmd.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 7932,
+                  "working_mib": 11.00390625,
+                  "private_mib": 2.26953125,
+                  "name": "OpenConsole.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 29664,
+                  "working_mib": 7.4921875,
+                  "private_mib": 6.77734375,
+                  "name": "cmd.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 19540,
+                  "working_mib": 11.00390625,
+                  "private_mib": 2.2734375,
+                  "name": "OpenConsole.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 1724,
+                  "working_mib": 7.48046875,
+                  "private_mib": 6.76953125,
+                  "name": "cmd.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 11852,
+                  "working_mib": 11.01171875,
+                  "private_mib": 2.27734375,
+                  "name": "OpenConsole.exe"
+                },
+                {
+                  "parent": 13804,
+                  "pid": 27556,
+                  "working_mib": 7.48828125,
+                  "private_mib": 6.7890625,
+                  "name": "cmd.exe"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "artifact_directory": "C:\\Users\\parkc\\AppData\\Local\\Temp/yuurei-wt-comparison/runs/8e4800c301224a1abec129f9bbc4be93",
+        "purpose": "Final glyph-only latency validation; 7-pixel-wide crop excludes both cursor positions.",
+        "id": "8e4800c301224a1abec129f9bbc4be93",
+        "latency": {
+          "label": "test",
+          "n": 40,
+          "skipped": 0,
+          "timeouts": 0,
+          "median_ms": 18.28085,
+          "p95_ms": 19.095100000000002,
+          "p99_ms": 19.124000000000002,
+          "samples_ms": [
+            19.124000000000002,
+            16.6939,
+            16.7681,
+            18.1532,
+            17.7436,
+            18.2862,
+            18.360500000000002,
+            18.2655,
+            18.372,
+            18.8485,
+            16.631600000000002,
+            18.495900000000002,
+            18.165200000000002,
+            18.796,
+            18.2054,
+            18.0883,
+            18.1916,
+            16.9447,
+            18.197400000000002,
+            19.0398,
+            19.067600000000002,
+            19.0513,
+            17.040100000000002,
+            18.3712,
+            16.8232,
+            18.449,
+            16.3859,
+            18.3302,
+            18.287000000000003,
+            18.32,
+            18.305500000000002,
+            18.610300000000002,
+            18.2574,
+            18.2755,
+            18.1906,
+            19.095100000000002,
+            18.1889,
+            19.1182,
+            18.181,
+            18.389300000000002
+          ]
+        },
+        "latency_region": {
+          "x": 70,
+          "height": 21,
+          "width": 7,
+          "y": 151
+        },
+        "resources": {
+          "terminal": "yuurei",
+          "executable": "C:\\Users\\parkc\\Desktop\\projects\\yuurei\\zig-out\\bin\\ghostty.exe",
+          "sha256": "20B68B10D92FF3304789FD7B32EA2F11F40AA87223A9FDF50EEBAA442BFC5C27",
+          "version": "0.2.15",
+          "width": 1600,
+          "height": 1200,
+          "shell": "cmd.exe /D /Q /K \"C:\\Users\\parkc\\AppData\\Local\\Temp\\yuurei-wt-comparison\\runs\\8e4800c301224a1abec129f9bbc4be93\\init.cmd\"",
+          "font": "Consolas 12",
+          "history_lines": 10000,
+          "output_cost": null,
+          "samples": [
+            {
+              "phase": "one-tab",
+              "private_mib": 149.16015625,
+              "working_mib": 76.26171875,
+              "handles": 392,
+              "threads": 14,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "private_mib": 2.27734375,
+                  "working_mib": 11.01953125,
+                  "pid": 5408,
+                  "name": "OpenConsole.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 5.76953125,
+                  "working_mib": 7.46484375,
+                  "pid": 9156,
+                  "name": "cmd.exe",
+                  "parent": 27560
+                }
+              ]
+            },
+            {
+              "phase": "eight-tabs",
+              "private_mib": 432.49609375,
+              "working_mib": 132.01171875,
+              "handles": 549,
+              "threads": 30,
+              "cpu_one_core_percent": 0.0,
+              "children": [
+                {
+                  "private_mib": 2.27734375,
+                  "working_mib": 11.01953125,
+                  "pid": 5408,
+                  "name": "OpenConsole.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 5.76953125,
+                  "working_mib": 7.46484375,
+                  "pid": 9156,
+                  "name": "cmd.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 2.27734375,
+                  "working_mib": 11.01171875,
+                  "pid": 28368,
+                  "name": "OpenConsole.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 6.78125,
+                  "working_mib": 7.48828125,
+                  "pid": 17232,
+                  "name": "cmd.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 2.2734375,
+                  "working_mib": 11.015625,
+                  "pid": 18744,
+                  "name": "OpenConsole.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 6.7734375,
+                  "working_mib": 7.48828125,
+                  "pid": 4432,
+                  "name": "cmd.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 2.27734375,
+                  "working_mib": 11.01171875,
+                  "pid": 29224,
+                  "name": "OpenConsole.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 6.78515625,
+                  "working_mib": 7.48828125,
+                  "pid": 29548,
+                  "name": "cmd.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 2.2734375,
+                  "working_mib": 11.015625,
+                  "pid": 16592,
+                  "name": "OpenConsole.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 6.76953125,
+                  "working_mib": 7.484375,
+                  "pid": 29032,
+                  "name": "cmd.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 2.2734375,
+                  "working_mib": 11.01171875,
+                  "pid": 28128,
+                  "name": "OpenConsole.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 6.77734375,
+                  "working_mib": 7.4921875,
+                  "pid": 5956,
+                  "name": "cmd.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 2.265625,
+                  "working_mib": 10.99609375,
+                  "pid": 10524,
+                  "name": "OpenConsole.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 6.76171875,
+                  "working_mib": 7.484375,
+                  "pid": 28384,
+                  "name": "cmd.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 2.27734375,
+                  "working_mib": 11.0078125,
+                  "pid": 13104,
+                  "name": "OpenConsole.exe",
+                  "parent": 27560
+                },
+                {
+                  "private_mib": 6.7578125,
+                  "working_mib": 7.48828125,
+                  "pid": 29456,
+                  "name": "cmd.exe",
+                  "parent": 27560
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "summary": {
+    "wt": {
+      "memory": {
+        "eight-tabs": {
+          "idle_cpu_one_core_percent": 0.2600930848597926,
+          "private_mib": 177.298828125,
+          "handles": 1592,
+          "working_mib": 141.234375,
+          "n": 4,
+          "threads": 159
+        },
+        "one-tab": {
+          "idle_cpu_one_core_percent": 0.0,
+          "private_mib": 66.1328125,
+          "handles": 840,
+          "working_mib": 95.681640625,
+          "n": 4,
+          "threads": 47
+        },
+        "after-output": {
+          "idle_cpu_one_core_percent": 0.0,
+          "private_mib": 201.466796875,
+          "handles": 1572,
+          "working_mib": 160.39453125,
+          "n": 2,
+          "threads": 152.5
+        }
+      },
+      "latency": {
+        "description": "Final glyph-only capture. Initial 80 samples used a wider crop; the Windows Terminal crop included the moved cursor at its right edge.",
+        "p95_ms": 34.5201,
+        "source_run": "5a6ba6a595df4bbdb849a79d149962f3",
+        "n": 40,
+        "median_ms": 33.18925,
+        "p99_ms": 34.823
+      },
+      "output": {
+        "color": {
+          "median_writer_ms": 70.18195,
+          "n": 6,
+          "bytes": 5100000
+        },
+        "ascii": {
+          "median_writer_ms": 30.17,
+          "n": 6,
+          "bytes": 6900000
+        },
+        "unicode": {
+          "median_writer_ms": 64.53845,
+          "n": 6,
+          "bytes": 8700000
+        }
+      },
+      "initial_latency": {
+        "n": 80,
+        "p95_ms": 34.9669,
+        "p99_ms": 35.3422,
+        "median_ms": 33.271300000000004
+      }
+    },
+    "yuurei": {
+      "memory": {
+        "eight-tabs": {
+          "idle_cpu_one_core_percent": 0.0,
+          "private_mib": 433.861328125,
+          "handles": 549,
+          "working_mib": 132.169921875,
+          "n": 4,
+          "threads": 30
+        },
+        "one-tab": {
+          "idle_cpu_one_core_percent": 0.0,
+          "private_mib": 149.326171875,
+          "handles": 392,
+          "working_mib": 76.267578125,
+          "n": 4,
+          "threads": 14
+        },
+        "after-output": {
+          "idle_cpu_one_core_percent": 0.0,
+          "private_mib": 446.330078125,
+          "handles": 548,
+          "working_mib": 132.67578125,
+          "n": 2,
+          "threads": 28
+        }
+      },
+      "latency": {
+        "description": "Final glyph-only capture. Initial 80 samples used a wider crop; the Windows Terminal crop included the moved cursor at its right edge.",
+        "p95_ms": 19.095100000000002,
+        "source_run": "8e4800c301224a1abec129f9bbc4be93",
+        "n": 40,
+        "median_ms": 18.28085,
+        "p99_ms": 19.124000000000002
+      },
+      "output": {
+        "color": {
+          "median_writer_ms": 120.79169999999999,
+          "n": 6,
+          "bytes": 5100000
+        },
+        "ascii": {
+          "median_writer_ms": 56.88695,
+          "n": 6,
+          "bytes": 6900000
+        },
+        "unicode": {
+          "median_writer_ms": 202.12324999999998,
+          "n": 6,
+          "bytes": 8700000
+        }
+      },
+      "initial_latency": {
+        "n": 80,
+        "p95_ms": 19.1096,
+        "p99_ms": 19.3935,
+        "median_ms": 18.23
+      }
+    }
+  }
+}

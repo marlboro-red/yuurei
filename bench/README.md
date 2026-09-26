@@ -183,3 +183,37 @@ this test, so its CPU and memory samples are not fixed-work throughput results.
 `-GracefulExit` checks that closing the final window exits successfully.
 `settings-smoke.ps1 -GraphicsStress` also checks that four simultaneously busy
 splits change their displayed pixels, then closes surfaces during output.
+
+## Windows Terminal comparison
+
+`compare-windows-terminal.ps1` compares one/eight idle tabs, software-capture
+typing latency and fixed output bursts. Use an official unpackaged Windows
+Terminal distribution extracted under TEMP. The runner writes a `.portable`
+marker and isolated settings there; do not point it at an existing portable
+installation whose settings you want to retain. Yuurei uses a fresh temporary
+config. Both launch `cmd.exe /D /Q /K`, use Consolas 12, 10,000 history lines,
+and a 1600 × 1200 window. Run serially with other benchmarks and builds:
+
+```powershell
+pwsh -NoProfile -File bench/compare-windows-terminal.ps1 -Terminal yuurei -Executable ./zig-out/bin/ghostty.exe
+pwsh -NoProfile -File bench/compare-windows-terminal.ps1 -Terminal wt -Executable "$env:TEMP/terminal/WindowsTerminal.exe"
+```
+
+The script takes foreground focus and injects keys only after checking the
+isolated window. Avoid typing during latency collection. Its narrow glyph
+capture region was calibrated at 200% DPI; inspect the saved screenshots and
+adjust it before measuring on other display configurations. A no-input check
+rejects cursor/prompt pixels in the region. `-SkipLatency` runs without that
+display-specific measurement, and `-SkipOutput` omits the output workload.
+
+Each output corpus contains 100,000 lines, with one warmup and three measured
+writes. Encoding/allocation precedes timing. Reported `writer_ms` measures
+producer writes through the console pipeline, including backpressure. It does
+not measure the time the final pixels appear, nor pure terminal parser speed.
+The final output screenshot is a separate completion check. CPU cost, when
+present, covers the whole output suite including warmups and settle periods.
+
+Resource JSON separates the terminal process from its descendant console
+hosts and shells. Do not equate private commit with resident RAM or summed
+working sets with unique physical memory. Compare repetitions and preserve
+the emitted hashes, raw timing samples, profiles and screenshots.
