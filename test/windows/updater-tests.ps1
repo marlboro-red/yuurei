@@ -9,6 +9,14 @@ function Reject([scriptblock]$Action, [string]$Message) {
     try { & $Action | Out-Null } catch { $rejected = $true }
     Assert $rejected $Message
 }
+function Wait-Running($Process, [string]$Executable) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    while (!(Test-Running $Executable)) {
+        if ($Process.HasExited) { throw "Fixture exited before becoming observable: $($Process.ExitCode)" }
+        if ([DateTime]::UtcNow -ge $deadline) { throw 'Fixture process did not become observable.' }
+        Start-Sleep -Milliseconds 50
+    }
+}
 function Make-Archive([string]$Path, $Entries) {
     $zip = [IO.Compression.ZipFile]::Open($Path, 'Create')
     try {
@@ -102,6 +110,7 @@ Assert (Install-Package $pending $cache $install) 'Repeat installation failed.'
 $busy = Make-Installation 'busy'
 $process = Start-Process -FilePath (Join-Path $busy 'bin/ghostty.exe') -WindowStyle Hidden -PassThru
 try {
+    Wait-Running $process (Join-Path $busy 'bin/ghostty.exe')
     Assert (!(Install-Package $pending $cache $busy)) 'Updated a running instance.'
     Assert ([IO.File]::ReadAllText((Join-Path $busy 'share/theme')) -eq 'original') 'Busy installation changed.'
 } finally { Stop-Process -Id $process.Id -ErrorAction SilentlyContinue; $process.WaitForExit(); $process.Dispose() }
@@ -156,6 +165,7 @@ $job.mode = 'install'
 $job.manual = $true
 $process = Start-Process -FilePath (Join-Path $busy 'bin/ghostty.exe') -WindowStyle Hidden -PassThru
 try {
+    Wait-Running $process (Join-Path $busy 'bin/ghostty.exe')
     Assert ((Invoke-Update $job).state -eq 'ready') 'Installation did not defer for another host.'
     Assert ((Read-Json (Join-Path $flowCache 'pending.json')).manual) 'Deferred install lost explicit permission.'
 } finally { Stop-Process -Id $process.Id -ErrorAction SilentlyContinue; $process.WaitForExit(); $process.Dispose() }
