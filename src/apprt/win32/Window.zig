@@ -83,6 +83,9 @@ tab_drag: ?usize = null,
 tab_drag_origin: winapi.POINT = .{ .x = 0, .y = 0 },
 tab_drag_engaged: bool = false,
 
+/// Insertion marker while another window's tab is dragged over this strip.
+tab_drop_index: ?usize = null,
+
 /// Horizontal scroll offset (px) of the tab strip, for when the tabs
 /// plus the new-tab button overflow the strip width. Clamped to
 /// [0, maxTabScroll]; the wheel over the strip and tab activation
@@ -420,6 +423,7 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
 /// inside the window procedure.
 pub fn destroy(self: *Window) void {
     const alloc = self.app.core_app.alloc;
+    if (self.tab_drag != null) self.updateTabDrop(null);
     self.rename_buf.deinit(alloc);
     if (self.strip_buf) |*buf| buf.deinit();
     if (self.palette) |palette| palette.destroy();
@@ -552,28 +556,8 @@ fn tearOffTab(self: *Window, idx: usize) !void {
     try window.tabs.ensureTotalCapacity(alloc, 1);
     try app.windows.append(alloc, window);
 
-    // The point of no return: hand the tab to the new window and
-    // reparent its surfaces. No fallible step may follow.
-    const tab = self.tabs.orderedRemove(idx);
-    window.tabs.appendAssumeCapacity(tab);
-    var it = window.tabs.items[0].tree.iterator();
-    while (it.next()) |entry| {
-        const surface = entry.view;
-
-        // A search bar pinned to a surface in this tab belongs to the
-        // source window; close it rather than leave it targeting a
-        // surface that now lives elsewhere. (destroy clears self.search.)
-        if (self.search) |search| {
-            if (search.surface == surface) search.destroy();
-        }
-
-        surface.window = window;
-        _ = winapi.SetParent(surface.host, window.hwnd);
-        if (surface.scrollbar) |sb| _ = winapi.SetParent(sb.hwnd, window.hwnd);
-    }
-
-    // The source keeps a valid active tab.
-    self.activateTab(@min(idx, self.tabs.items.len - 1));
+    errdefer _ = app.windows.pop();
+    try self.transferTab(idx, window, 0);
 
     // Size the new window like the source and drop it at the cursor so
     // the torn-off tab appears under the pointer, then reveal it.
@@ -605,6 +589,97 @@ fn tearOffTab(self: *Window, idx: usize) !void {
     _ = winapi.ShowWindow(window.hwnd, winapi.SW_SHOW);
     window.activateTab(0);
     _ = winapi.SetForegroundWindow(window.hwnd);
+}
+
+/// Transfer ownership of the live split tree, preserving shells and scrollback.
+/// Only windows in this App can share surfaces and renderer resources.
+fn transferTab(self: *Window, idx: usize, window: *Window, insertion: usize) !void {
+    if (self == window or self.app != window.app or self.should_close or window.should_close or
+        idx >= self.tabs.items.len) return error.InvalidTabDestination;
+    try window.tabs.ensureUnusedCapacity(self.app.core_app.alloc, 1);
+    window.commitRename(true);
+
+    // Reparent before transferring ownership. Every host has a parent, so a
+    // null return signals failure. Restore the source if any reparent fails.
+    var moved = false;
+    errdefer {
+        if (!moved) {
+            var rollback = self.tabs.items[idx].tree.iterator();
+            while (rollback.next()) |entry| {
+                _ = winapi.SetParent(entry.view.host, self.hwnd);
+                if (entry.view.scrollbar) |sb| _ = winapi.SetParent(sb.hwnd, self.hwnd);
+            }
+            self.activateTab(self.active_tab);
+        }
+    }
+    var hosts = self.tabs.items[idx].tree.iterator();
+    while (hosts.next()) |entry| {
+        entry.view.setVisible(false);
+        if (winapi.SetParent(entry.view.host, window.hwnd) == null) return error.ReparentFailed;
+        if (entry.view.scrollbar) |sb| {
+            if (winapi.SetParent(sb.hwnd, window.hwnd) == null) return error.ReparentFailed;
+        }
+    }
+
+    const target = @min(insertion, window.tabs.items.len);
+    const tab = self.tabs.orderedRemove(idx);
+    window.tabs.insertAssumeCapacity(target, tab);
+    moved = true;
+    var it = window.tabs.items[target].tree.iterator();
+    while (it.next()) |entry| {
+        const surface = entry.view;
+
+        // A search bar pinned to a surface in this tab belongs to the
+        // source window; close it rather than leave it targeting a
+        // surface that now lives elsewhere. (destroy clears self.search.)
+        if (self.search) |search| {
+            if (search.surface == surface) search.destroy();
+        }
+
+        surface.window = window;
+        const dpi: f32 = @floatFromInt(winapi.GetDpiForWindow(window.hwnd));
+        surface.core_surface.contentScaleCallback(.{ .x = dpi / 96.0, .y = dpi / 96.0 }) catch |err| {
+            log.err("error updating transferred tab scale err={}", .{err});
+        };
+    }
+
+    // The source keeps a valid active tab.
+    if (self.tabs.items.len == 0) {
+        // The app loop destroys the empty source after this message returns.
+        self.should_close = true;
+    } else self.activateTab(@min(idx, self.tabs.items.len - 1));
+    window.activateTab(target);
+}
+
+const TabDrop = struct { window: *Window, index: usize };
+
+fn tabDropAt(self: *Window, point: winapi.POINT) ?TabDrop {
+    const hit = winapi.WindowFromPoint(point) orelse return null;
+    const root = winapi.GetAncestor(hit, winapi.GA_ROOT) orelse return null;
+    for (self.app.windows.items) |window| {
+        if (window == self or window.hwnd != root or window.should_close or window.fullscreen) continue;
+        var pt = point;
+        if (winapi.ScreenToClient(window.hwnd, &pt) == 0) return null;
+        if (pt.y < 0 or pt.y >= window.titlebarHeight() or pt.x < 0 or pt.x >= window.tabsRegionRight()) return null;
+        const width = @max(1, window.tabWidth());
+        const index: usize = @intCast(std.math.clamp(
+            @divFloor(pt.x - window.scale(strip_leading_logical) + window.tab_scroll + @divTrunc(width, 2), width),
+            0,
+            @as(i32, @intCast(window.tabs.items.len)),
+        ));
+        return .{ .window = window, .index = index };
+    }
+    return null;
+}
+
+fn updateTabDrop(self: *Window, drop: ?TabDrop) void {
+    for (self.app.windows.items) |window| {
+        const index: ?usize = if (drop) |d| (if (d.window == window) d.index else null) else null;
+        if (window.tab_drop_index != index) {
+            window.tab_drop_index = index;
+            window.invalidateStrip();
+        }
+    }
 }
 
 /// Re-apply window-level transparency and blur from the current config.
@@ -723,6 +798,7 @@ pub fn removeSurface(self: *Window, surface: *Surface) void {
         // in-progress drag or rename of a shifted (or removed) tab.
         if (self.tab_drag) |d| {
             if (d == tab_idx) {
+                self.updateTabDrop(null);
                 self.tab_drag = null;
                 _ = winapi.ReleaseCapture();
             } else if (d > tab_idx) self.tab_drag = d - 1;
@@ -2581,6 +2657,16 @@ fn paintTitlebar(self: *Window, hdc: winapi.HDC) void {
         }
     }
 
+    if (self.tab_drop_index) |index| {
+        const x = std.math.clamp(self.tabRect(index).left, self.scale(2), @max(self.scale(2), self.tabsRegionRight() - self.scale(3)));
+        var marker: winapi.RECT = .{ .left = x, .top = self.scale(5), .right = x + self.scale(3), .bottom = self.titlebarHeight() - self.scale(5) };
+        if (winapi.CreateSolidBrush(fg)) |brush| {
+            defer _ = winapi.DeleteObject(brush);
+            _ = winapi.FillRect(hdc, &marker, brush);
+            self.markOpaque(marker);
+        }
+    }
+
     // New tab "+" button
     if (glyph_font) |f| {
         const old = winapi.SelectObject(hdc, f);
@@ -3504,6 +3590,11 @@ pub fn wndProc(
                         return 0;
                     self.tab_drag_engaged = true;
                 }
+                var point: winapi.POINT = .{ .x = x, .y = y };
+                _ = winapi.ClientToScreen(self.hwnd, &point);
+                self.updateTabDrop(self.tabDropAt(point));
+                // Moving outside the source strip must not reorder its tabs.
+                if (y < 0 or y >= self.titlebarHeight() or x < 0 or x >= self.tabsRegionRight()) return 0;
                 const n = self.tabs.items.len;
                 // Tab i spans [lead + i*w - scroll, ...), so the slot under
                 // the cursor is (x - lead + scroll) / w; the leading inset
@@ -3552,6 +3643,7 @@ pub fn wndProc(
         // into now-possibly-stale state is dropped; the release that
         // would normally end it will land elsewhere.
         winapi.WM_CAPTURECHANGED => {
+            if (self.tab_drag != null) self.updateTabDrop(null);
             self.tab_drag = null;
             self.tab_drag_engaged = false;
             self.divider_drag = null;
@@ -3584,6 +3676,7 @@ pub fn wndProc(
                     const engaged = self.tab_drag_engaged;
                     self.tab_drag = null;
                     self.tab_drag_engaged = false;
+                    self.updateTabDrop(null);
                     _ = winapi.ReleaseCapture();
                     // Only tear off if a real drag happened; a plain
                     // click that never crossed the threshold just
@@ -3591,6 +3684,17 @@ pub fn wndProc(
                     if (engaged) {
                         const ux = lparamX(lparam);
                         const uy = lparamY(lparam);
+                        var point: winapi.POINT = .{ .x = ux, .y = uy };
+                        _ = winapi.ClientToScreen(self.hwnd, &point);
+                        if (self.tabDropAt(point)) |drop| {
+                            self.transferTab(idx, drop.window, drop.index) catch |err| {
+                                log.err("error transferring tab err={}", .{err});
+                                return 0;
+                            };
+                            _ = winapi.SetForegroundWindow(drop.window.hwnd);
+                            _ = winapi.SetFocus(drop.window.hwnd);
+                            return 0;
+                        }
                         const outside = uy < 0 or uy >= self.titlebarHeight() or
                             ux < 0 or ux >= self.clientWidth();
                         if (outside) self.tearOffTab(idx) catch |err| {

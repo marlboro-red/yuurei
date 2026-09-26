@@ -441,6 +441,8 @@ pub extern "user32" fn ScreenToClient(HWND, *POINT) callconv(.winapi) BOOL;
 pub extern "user32" fn ClientToScreen(HWND, *POINT) callconv(.winapi) BOOL;
 pub extern "user32" fn SetFocus(?HWND) callconv(.winapi) ?HWND;
 pub const GA_ROOTOWNER: UINT = 3;
+pub const GA_ROOT: UINT = 2;
+pub extern "user32" fn WindowFromPoint(POINT) callconv(.winapi) ?HWND;
 pub extern "user32" fn GetAncestor(HWND, UINT) callconv(.winapi) ?HWND;
 pub extern "user32" fn SetWindowLongPtrW(HWND, i32, isize) callconv(.winapi) isize;
 pub extern "user32" fn GetWindowLongPtrW(HWND, i32) callconv(.winapi) isize;

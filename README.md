@@ -36,6 +36,10 @@ Everything below works today, verified live on Windows 11.
 **Tabs, splits, windows**
 - Tab strip: new / switch / close, drag-reorder, tear-off to a new window,
   right-click rename, middle-click close. Multiple top-level windows.
+- Drop a tab onto another window's tab bar to move it at the insertion marker,
+  preserving its running shells, scrollback, and splits. Works between windows
+  in the same running instance (including torn-off tabs and New Window);
+  separately launched instances cannot exchange live tabs.
 - **Shell profiles** (Windows Terminal-style): auto-detected shells (cmd,
   PowerShell, pwsh, Nushell, Git Bash) and WSL distros, plus user
   config-overlay profiles, from a split new-tab button, the command palette,
