@@ -74,6 +74,9 @@ context exclusivity and thread-local GL dispatch, avoid one busy tab blocking
 all others, and retain hidden-tab mailbox/compression processing. The probe
 does not yet validate migrating and rendering Yuurei contexts on shared workers.
 
+The subsequent [renderer pool implementation and measurements](PERFORMANCE_RENDERER_POOL_2026-09-26.md)
+validate this approach in Yuurei itself and supersede the prototype recommendation.
+
 ## Rendering validation
 
 The earlier black/stale captures could not be reproduced in fresh runs of

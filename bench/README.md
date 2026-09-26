@@ -168,3 +168,18 @@ ends the workers while retaining their unbound contexts and GL objects.
 These are isolated prototypes, not application modes or tab-switch benchmarks.
 The native smoke runner now checks the known terminal background and text
 pixels in composed-screen captures, including restoration after shader stress.
+
+Windows uses up to two shared renderer workers by default. Set
+`GHOSTTY_RENDER_WORKERS=0` to use a dedicated renderer thread per surface,
+or use `1` through `4` to select a pool size. Workers start lazily and retain
+their assigned surfaces' separate WGL contexts. This is a diagnostic override,
+read when the application starts.
+
+Both PowerShell runners accept `-RendererWorkers` (default `2`). Compare
+`resources.ps1 -TabsOnly -SwitchSamples 30 -RendererWorkers 0 -GracefulExit`
+with the same command using `-RendererWorkers 2`, serially on the same binary.
+`-BusyWorkload` starts output in three background tabs; history grows during
+this test, so its CPU and memory samples are not fixed-work throughput results.
+`-GracefulExit` checks that closing the final window exits successfully.
+`settings-smoke.ps1 -GraphicsStress` also checks that four simultaneously busy
+splits change their displayed pixels, then closes surfaces during output.

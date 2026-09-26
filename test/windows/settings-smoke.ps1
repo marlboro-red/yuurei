@@ -3,6 +3,7 @@ param(
     [string]$Artifacts = "$env:TEMP/yuurei-settings-smoke",
     [switch]$KeepOpen,
     [switch]$RenderingChecks,
+    [ValidateRange(0,4)][int]$RendererWorkers = 2,
     [switch]$GraphicsStress
 )
 $ErrorActionPreference = 'Stop'
@@ -151,9 +152,20 @@ param([string]$InputFile, [string]$DoneFile)
 '@ | Set-Content -LiteralPath $emitter
     $command = ('pwsh -NoProfile -File "{0}" "{1}" "{2}"' -f $emitter,$bulk,$done).Replace('\','\\')
     $initial += "keybind = f7=reload_config`nkeybind = f6=next_tab`nkeybind = f5=text:$command\r`n"
+    $busy = Join-Path $isolation 'busy.ps1'
+    @'
+$until = [DateTime]::UtcNow.AddSeconds(20)
+$i = 0
+while ([DateTime]::UtcNow -lt $until) {
+    for ($j=0; $j -lt 16; $j++) { [Console]::WriteLine("{0:D8} worker output" -f $i); $i++ }
+    [Threading.Thread]::Sleep(20)
+}
+'@ | Set-Content -LiteralPath $busy
+    $busyCommand = ('pwsh -NoProfile -File "{0}"' -f $busy).Replace('\','\\')
+    $initial += "keybind = f2=last_tab`nkeybind = f3=text:$busyCommand\r`nkeybind = f4=goto_split:next`n"
 }
 [IO.File]::WriteAllText($config, $initial)
-$script:appProcess = Start-Process -FilePath (Resolve-Path $Executable) -PassThru -WindowStyle Hidden -Environment @{ XDG_CONFIG_HOME = $isolation; LOCALAPPDATA = $isolation } -RedirectStandardError (Join-Path $isolation 'stderr.log')
+$script:appProcess = Start-Process -FilePath (Resolve-Path $Executable) -PassThru -WindowStyle Hidden -Environment @{ XDG_CONFIG_HOME = $isolation; LOCALAPPDATA = $isolation; GHOSTTY_RENDER_WORKERS = "$RendererWorkers" } -RedirectStandardError (Join-Path $isolation 'stderr.log')
 try {
     $terminal = Wait-Window 'ghostty'
     if ($RenderingChecks) {
@@ -212,6 +224,40 @@ try {
         Start-Sleep -Seconds 1
         Capture 'graphics-stress' -Window $terminal -Desktop
         Assert-TerminalPixels 'graphics-stress' -MinBackgroundFraction 0.4
+        # The last tab has four splits. Keep all four producing while checking
+        # that each portion of the composed screen continues to change.
+        [void][SettingsNative]::PostMessage($terminal,0x100,0x71,0)
+        Start-Sleep -Milliseconds 350
+        for ($i=0; $i -lt 4; $i++) {
+            [void][SettingsNative]::PostMessage($terminal,0x100,0x72,0)
+            Start-Sleep -Milliseconds 250
+            [void][SettingsNative]::PostMessage($terminal,0x100,0x73,0)
+            Start-Sleep -Milliseconds 100
+        }
+        Start-Sleep -Seconds 2
+        Capture 'graphics-busy-splits-a' -Window $terminal -Desktop
+        Start-Sleep -Milliseconds 350
+        Capture 'graphics-busy-splits-b' -Window $terminal -Desktop
+        Assert-TerminalPixels 'graphics-busy-splits-b' -MinBackgroundFraction 0.4
+        $first = [Drawing.Bitmap]::new((Join-Path $Artifacts 'graphics-busy-splits-a.png'))
+        $second = [Drawing.Bitmap]::new((Join-Path $Artifacts 'graphics-busy-splits-b.png'))
+        try {
+            # Repeated right splits divide the client into 1/2, 1/4, 1/8,
+            # 1/8. Sample each interior broadly: a narrow strip can contain
+            # only the unchanged leading zeros of the output counter.
+            foreach ($bounds in @(@(0.02,0.48),@(0.51,0.72),@(0.755,0.85),@(0.88,0.965))) {
+                $changed = 0
+                $left = [int]($first.Width*$bounds[0])
+                $right = [int]($first.Width*$bounds[1])
+                for ($y=110; $y -lt $first.Height-100; $y+=3) {
+                    for ($x=$left; $x -lt $right; $x+=2) {
+                        if ($first.GetPixel($x,$y).ToArgb() -ne $second.GetPixel($x,$y).ToArgb()) { $changed++ }
+                    }
+                }
+                Assert ($changed -gt 20) "Busy split at $left stopped presenting ($changed changed samples)"
+            }
+        } finally { $first.Dispose(); $second.Dispose() }
+        # Close while output is still arriving to exercise callback teardown.
         for ($i=0; $i -lt 10; $i++) {
             [void][SettingsNative]::PostMessage($terminal,0x100,0x78,0)
             Start-Sleep -Milliseconds 250

@@ -7,6 +7,9 @@ param(
     [switch]$TabsOnly,
     [switch]$ProbeHiddenHosts,
     [switch]$ShaderWorkload,
+    [switch]$BusyWorkload,
+    [switch]$GracefulExit,
+    [ValidateRange(0,4)][int]$RendererWorkers = 2,
     [ValidateRange(0,1000)][int]$SwitchSamples = 0,
     [ValidateRange(0,16384)][int]$Width = 0,
     [ValidateRange(0,16384)][int]$Height = 0
@@ -94,6 +97,19 @@ if ($ShaderWorkload) {
     # Two passes exercise both ping-pong textures and intermediate FBOs.
     "custom-shader = $shaderConfig`ncustom-shader = $shaderConfig`ncustom-shader-animation = false" | Add-Content (Join-Path $run 'ghostty/config')
 }
+if ($BusyWorkload) {
+    $producer = Join-Path $run 'produce.ps1'
+    @'
+$until = [DateTime]::UtcNow.AddSeconds(90)
+$block = ("render-pool background output 0123456789 abcdefghijklmnopqrstuvwxyz`n" * 32)
+while ([DateTime]::UtcNow -lt $until) {
+    [Console]::Write($block)
+    [Threading.Thread]::Sleep(5)
+}
+'@ | Set-Content -LiteralPath $producer
+    $command = ('pwsh -NoProfile -File "{0}"' -f $producer).Replace('\','\\')
+    "keybind = f5=text:$command\r" | Add-Content (Join-Path $run 'ghostty/config')
+}
 $rows = [Collections.Generic.List[object]]::new()
 function Find-Window([string]$Class) {
     for ($i=0; $i -lt 200; $i++) {
@@ -134,11 +150,13 @@ function Save-Results {
         window_width=$rect.right-$rect.left; window_height=$rect.bottom-$rect.top
         tabs_only=[bool]$TabsOnly; cycles=$Cycles; idle_seconds=$IdleSeconds
         shader_workload=[bool]$ShaderWorkload
+        busy_workload=[bool]$BusyWorkload
+        renderer_workers=$RendererWorkers
         switch_samples=$SwitchSamples; samples=$rows
     } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $run 'results.json')
 }
 $startup = [Diagnostics.Stopwatch]::StartNew()
-$app = Start-Process -FilePath (Resolve-Path $Executable) -PassThru -WindowStyle Hidden -Environment @{XDG_CONFIG_HOME=$run; LOCALAPPDATA=$run; GHOSTTY_PERF_TRACE='1'} -RedirectStandardError (Join-Path $run 'stderr.log')
+$app = Start-Process -FilePath (Resolve-Path $Executable) -PassThru -WindowStyle Hidden -Environment @{XDG_CONFIG_HOME=$run; LOCALAPPDATA=$run; GHOSTTY_PERF_TRACE='1'; GHOSTTY_RENDER_WORKERS="$RendererWorkers"} -RedirectStandardError (Join-Path $run 'stderr.log')
 try {
     $terminal = Find-Window 'ghostty'; $startup.Stop()
     [void][ResourceNative]::SetThreadDpiAwarenessContext(-4)
@@ -149,7 +167,10 @@ try {
     [void][ResourceNative]::ShowWindow($terminal,5)
     Start-Sleep -Seconds 2
     Sample 'one-tab'
-    for ($i=0; $i -lt 7; $i++) { Key 0x79 }
+    for ($i=0; $i -lt 7; $i++) {
+        if ($BusyWorkload -and $i -lt 3) { Key 0x74 }
+        Key 0x79
+    }
     Assert-Surfaces 8
     Sample 'eight-tabs'
     if ($SwitchSamples -gt 0) {
@@ -217,6 +238,15 @@ try {
     Save-Results
     Write-Host "Results: $run"
 } finally {
-    if (!$app.HasExited) { Stop-Process -Id $app.Id }
-    $app.Dispose()
+    try {
+        if (!$app.HasExited -and $GracefulExit -and $terminal) {
+            [void][ResourceNative]::PostMessage($terminal,0x10,0,0)
+            if (!$app.WaitForExit(15000)) { throw 'Application did not exit after closing its final window' }
+            if ($app.ExitCode -ne 0) { throw "Application exited with code $($app.ExitCode)" }
+            Write-Host 'Graceful exit passed'
+        }
+    } finally {
+        if (!$app.HasExited) { Stop-Process -Id $app.Id }
+        $app.Dispose()
+    }
 }
