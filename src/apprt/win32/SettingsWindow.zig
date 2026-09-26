@@ -385,7 +385,12 @@ fn layout(self: *SettingsWindow) void {
     const pad = self.s(28);
     self.move(self.search_label, side + pad, self.s(12), self.s(180), self.s(18), true);
     self.move(self.search, side + pad + self.s(12), self.s(40), self.width - side - 2 * pad - self.s(24), self.s(24), true);
-    for (self.nav, 0..) |h, i| self.move(h, self.s(16), self.s(114 + @as(i32, @intCast(i)) * 48), side - self.s(32), self.s(40), true);
+    for (self.nav, 0..) |h, i| {
+        self.move(h, self.s(16), self.s(114 + @as(i32, @intCast(i)) * 48), side - self.s(32), self.s(40), true);
+        // Selection depends on category/search state, not native button state.
+        // Repainting the parent does not invalidate these child windows.
+        if (h) |button_hwnd| _ = winapi.InvalidateRect(button_hwnd, null, 0);
+    }
     self.move(self.open_button, self.s(16), self.height - self.s(64), side - self.s(32), self.s(36), true);
     self.move(self.save_button, self.width - self.s(166), self.height - self.s(57), self.s(138), self.s(36), true);
     self.move(self.revert_button, self.width - self.s(262), self.height - self.s(57), self.s(84), self.s(36), true);

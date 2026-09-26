@@ -136,6 +136,35 @@ function Assert-TerminalPixels([string]$Name, [double]$MinBackgroundFraction = 0
     } finally { $bitmap.Dispose() }
 }
 
+function Assert-CategoryHighlight([int]$Selected, [bool]$Light = $false) {
+    # Sample the displayed pixels without PrintWindow, resizing, or another
+    # forced repaint: those would hide stale owner-drawn button contents.
+    $bitmap = [Drawing.Bitmap]::new(1, 1)
+    $graphics = [Drawing.Graphics]::FromImage($bitmap)
+    try {
+        foreach ($id in 20,21,22,23) {
+            $r = New-Object SettingsNative+Rect
+            [void][SettingsNative]::GetWindowRect((Control $id), [ref]$r)
+            $graphics.CopyFromScreen($r.right - 20, [int](($r.top + $r.bottom)/2), 0, 0, $bitmap.Size)
+            $expected = if ($id -eq $Selected) { if ($Light) { 0xD6E0EA } else { 0x2C394B } } else { if ($Light) { 0xE9EDF0 } else { 0x1C2028 } }
+            $actual = $bitmap.GetPixel(0,0).ToArgb() -band 0xFFFFFF
+            Assert ($actual -eq $expected) "Category $id has stale highlight (selected=$Selected, actual=$($actual.ToString('X6')))"
+        }
+    } finally { $graphics.Dispose(); $bitmap.Dispose() }
+}
+
+function Check-CategoryHighlights([bool]$Light = $false) {
+    [void][SettingsNative]::SetWindowPos($script:settings, -1, 0, 0, 0, 0, 0x13)
+    Start-Sleep -Milliseconds 200
+    try {
+        foreach ($id in 21,22,23,20) { Click $id; Assert-CategoryHighlight $id $Light }
+        Edit 10 'folder'
+        Assert-CategoryHighlight -1 $Light
+        Edit 10 ''
+        Assert-CategoryHighlight 20 $Light
+    } finally { [void][SettingsNative]::SetWindowPos($script:settings, -2, 0, 0, 0, 0, 0x13) }
+}
+
 [void](New-Item -ItemType Directory -Force -Path $Artifacts)
 $isolation = Join-Path $Artifacts ([Guid]::NewGuid().ToString('N'))
 $configDir = Join-Path $isolation 'ghostty'
@@ -308,6 +337,7 @@ try {
     $script:settings = Wait-Window 'ghostty-settings'
     [void][SettingsNative]::ShowWindow($script:settings, 5)
     Capture 'dark-appearance'
+    Check-CategoryHighlights
     [void][SettingsNative]::SendMessage($script:settings, 0x28, (Control 10), 1)
     [void][SettingsNative]::PostMessage((Control 10), 0x100, 9, 0)
     Start-Sleep -Milliseconds 100
@@ -400,6 +430,7 @@ try {
     $script:settings = Wait-Window 'ghostty-settings'
     [void][SettingsNative]::ShowWindow($script:settings, 5)
     Capture 'light-appearance'
+    Check-CategoryHighlights $true
     [void][SettingsNative]::SetWindowPos($script:settings, 0, 0, 0, 820, 650, 0x6)
     Capture 'minimum-size'
     Write-Output "Settings smoke tests passed. Screenshots: $Artifacts"
