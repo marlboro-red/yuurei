@@ -1,5 +1,8 @@
 # Yuurei versus Windows Terminal
 
+Follow-up: [measured causes, improvements and next priorities](PERFORMANCE_WINDOWS_TERMINAL_RESEARCH_2026-09-26.md).
+The tables below preserve the original pre-improvement comparison.
+
 Yuurei used slightly less resident memory and responded sooner in the typing
 capture test on this machine. Windows Terminal used substantially less private
 commit and completed the bulk-output producer writes faster. These results

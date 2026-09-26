@@ -217,3 +217,25 @@ Resource JSON separates the terminal process from its descendant console
 hosts and shells. Do not equate private commit with resident RAM or summed
 working sets with unique physical memory. Compare repetitions and preserve
 the emitted hashes, raw timing samples, profiles and screenshots.
+
+For read batching comparisons, set `GHOSTTY_PTY_READ_KIB` to `1`, `4`, `16`,
+`64` or `128` (default 128 KiB). `GHOSTTY_IO_STATS=1` enables aggregate reader
+timings logged at shutdown; leave it unset for final timing comparisons.
+`-YuureiConfig 'scrollback-compression=false'` supplies an isolated config
+override. Resource results also include per-thread CPU snapshots around the
+whole output suite; worker CPU includes driver and compression work.
+
+`python bench/windows-memory-map.py PID` reads virtual-region and thread-stack
+metadata for a 64-bit process. It does not save terminal contents. Reserved
+address space, committed memory and resident working set are distinct.
+
+The standalone pooled WGL control is:
+
+```powershell
+python bench/wgl-memory.py --pool-size 2 --count 8 --width 1600 --height 1200 --shaders --detach
+python bench/wgl-memory.py --pool-size 2 --count 8 --width 1600 --height 1200 --shaders --detach --shrink-inactive
+```
+
+The latter resizes inactive drawables and presents once at the smaller size,
+retaining their contexts and programs. It is a research prototype, not a
+Yuurei option. See the [follow-up research](../docs/PERFORMANCE_WINDOWS_TERMINAL_RESEARCH_2026-09-26.md).

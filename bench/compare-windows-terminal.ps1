@@ -7,6 +7,7 @@ param(
     [int]$IdleSeconds = 3,
     [switch]$SkipLatency,
     [switch]$SkipOutput,
+    [string[]]$YuureiConfig = @(),
     [switch]$KeepOpen
 )
 $ErrorActionPreference = 'Stop'
@@ -29,6 +30,10 @@ public static class ComparisonNative {
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool attach);
     [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+    [DllImport("kernel32.dll")] static extern IntPtr OpenThread(uint access, bool inherit, uint id);
+    [DllImport("kernel32.dll")] static extern int GetThreadDescription(IntPtr h, out IntPtr text);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr p);
     [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte sc, uint flags, UIntPtr extra);
     [StructLayout(LayoutKind.Sequential)] public struct Rect { public int left, top, right, bottom; }
     public static IntPtr Find(string title) {
@@ -46,6 +51,16 @@ public static class ComparisonNative {
     public static void Key(IntPtr h, byte key) {
         if (!Foreground(h)) throw new Exception("Could not focus isolated benchmark window");
         keybd_event(key,0,0,UIntPtr.Zero); keybd_event(key,0,2,UIntPtr.Zero);
+    }
+    public static string ThreadName(uint id) {
+        var h=OpenThread(0x800,false,id);
+        if (h==IntPtr.Zero) return "";
+        try {
+            IntPtr text;
+            if (GetThreadDescription(h,out text)<0) return "";
+            try { return Marshal.PtrToStringUni(text) ?? ""; }
+            finally { LocalFree(text); }
+        } finally { CloseHandle(h); }
     }
 }
 '@
@@ -112,6 +127,7 @@ scrollback-limit-bytes = unlimited
 keybind = f8=new_tab
 keybind = f5=text:$($outputCommand.Replace('\','\\'))\r
 "@ | Set-Content (Join-Path $run 'ghostty/config')
+    if ($YuureiConfig.Count) { $YuureiConfig | Add-Content (Join-Path $run 'ghostty/config') }
 } else {
     # Only accept an explicitly isolated portable distribution.
     $portable = Split-Path (Resolve-Path $Executable)
@@ -168,6 +184,13 @@ function Capture([string]$Name) {
     $g=[Drawing.Graphics]::FromImage($bmp)
     try { $g.CopyFromScreen($rect.left,$rect.top,0,0,$bmp.Size); $bmp.Save((Join-Path $run "$Name.png")) }
     finally { $g.Dispose(); $bmp.Dispose() }
+}
+function Thread-Cpu {
+    $app.Refresh()
+    @(foreach ($thread in $app.Threads) {
+        try { @{ id=$thread.Id; name=[ComparisonNative]::ThreadName($thread.Id); cpu_ms=$thread.TotalProcessorTime.TotalMilliseconds } }
+        catch { } # Threads may exit between enumeration and the query.
+    })
 }
 try {
     if ($Terminal -eq 'yuurei') {
@@ -235,6 +258,7 @@ try {
         Capture 'after-latency'
     }
     if (!$SkipOutput) {
+        $threadsBefore=Thread-Cpu
         $app.Refresh(); $outputCpu=$app.TotalProcessorTime.TotalMilliseconds
         $outputWatch=[Diagnostics.Stopwatch]::StartNew()
         [ComparisonNative]::Key($hwnd,0x74)
@@ -245,11 +269,11 @@ try {
         }
         if (!(Test-Path (Join-Path $run 'output-results.json'))) { throw 'Output workload timed out' }
         $app.Refresh(); $outputWatch.Stop()
-        $outputCost=@{ terminal_cpu_ms=$app.TotalProcessorTime.TotalMilliseconds-$outputCpu; wall_ms=$outputWatch.Elapsed.TotalMilliseconds }
+        $outputCost=@{ terminal_cpu_ms=$app.TotalProcessorTime.TotalMilliseconds-$outputCpu; wall_ms=$outputWatch.Elapsed.TotalMilliseconds; threads_before=$threadsBefore; threads_after=(Thread-Cpu) }
         Sample 'after-output'
         Capture 'after-output'
     }
-    [ordered]@{ terminal=$Terminal; executable=(Resolve-Path $Executable).Path; sha256=(Get-FileHash $Executable -Algorithm SHA256).Hash; version=$app.MainModule.FileVersionInfo.FileVersion; width=$rect.right-$rect.left; height=$rect.bottom-$rect.top; shell=$command; font='Consolas 12'; history_lines=10000; output_cost=$outputCost; samples=$rows } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $run 'resources.json')
+    [ordered]@{ terminal=$Terminal; executable=(Resolve-Path $Executable).Path; sha256=(Get-FileHash $Executable -Algorithm SHA256).Hash; version=$app.MainModule.FileVersionInfo.FileVersion; width=$rect.right-$rect.left; height=$rect.bottom-$rect.top; shell=$command; font='Consolas 12'; history_lines=10000; yuurei_config=$YuureiConfig; read_kib_override=$env:GHOSTTY_PTY_READ_KIB; io_stats=$env:GHOSTTY_IO_STATS; output_cost=$outputCost; samples=$rows } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $run 'resources.json')
     Write-Host "RESULTS=$run HWND=$hwnd PID=$($app.Id)"
 } finally {
     if (!$KeepOpen -and $app -and !$app.HasExited) {

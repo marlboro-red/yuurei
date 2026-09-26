@@ -3,6 +3,7 @@ import argparse
 import ctypes as c
 from ctypes import wintypes as w
 import json
+import queue
 from pathlib import Path
 import re
 import threading
@@ -39,6 +40,7 @@ u, g, gl, k = (c.WinDLL(n) for n in ("user32", "gdi32", "opengl32", "kernel32"))
 create = api(u, "CreateWindowExW", w.HWND, w.DWORD, w.LPCWSTR, w.LPCWSTR,
              w.DWORD, c.c_int, c.c_int, c.c_int, c.c_int, w.HWND, w.HMENU, w.HINSTANCE, c.c_void_p)
 destroy = api(u, "DestroyWindow", w.BOOL, w.HWND)
+resize = api(u, "SetWindowPos", w.BOOL, w.HWND, w.HWND, c.c_int, c.c_int, c.c_int, c.c_int, w.UINT)
 get_dc = api(u, "GetDC", w.HDC, w.HWND)
 release_dc = api(u, "ReleaseDC", c.c_int, w.HWND, w.HDC)
 choose = api(g, "ChoosePixelFormat", c.c_int, w.HDC, c.POINTER(PFD))
@@ -116,6 +118,78 @@ def compile_programs(detach):
     return programs
 
 
+def pooled(opts):
+    """Retain per-window contexts on a fixed set of workers, like Yuurei."""
+    resources, workers, queues, errors = [], [], [], []
+
+    def run(commands):
+        try:
+            while True:
+                task = commands.get()
+                if task is None:
+                    break
+                dc, ctx, ready, initialize = task
+                try:
+                    check(current(dc, ctx))
+                    if opts.shaders and initialize:
+                        compile_programs(opts.detach)
+                    clear(0x4000)
+                    finish()
+                    check(swap(dc))
+                except Exception as error:
+                    errors.append(str(error))
+                finally:
+                    ready.set()
+        finally:
+            check(current(None, None))
+
+    try:
+        sample("baseline")
+        for _ in range(opts.pool_size):
+            commands = queue.Queue()
+            worker = threading.Thread(target=run, args=(commands,))
+            queues.append(commands)
+            workers.append(worker)
+            worker.start()
+        for i in range(opts.count):
+            hwnd = check(create(0, "STATIC", "WGL pooled memory probe", 0x00CF0000,
+                                0, 0, opts.width, opts.height, None, None, None, None))
+            resources.append([hwnd, None, None])
+            dc = resources[-1][1] = check(get_dc(hwnd))
+            pfd = PFD(size=c.sizeof(PFD), version=1, flags=0x25, color=32, alpha=8)
+            check(set_format(dc, check(choose(dc, c.byref(pfd))), c.byref(pfd)))
+            ctx = resources[-1][2] = check(context(dc))
+            ready = threading.Event()
+            queues[i % opts.pool_size].put((dc, ctx, ready, True))
+            if not ready.wait(10):
+                raise RuntimeError("Pooled WGL initialization timed out")
+            if errors:
+                raise RuntimeError(errors[0])
+            if opts.shrink_inactive and i > 0:
+                old_hwnd, old_dc, old_ctx = resources[i - 1]
+                check(resize(old_hwnd, None, 0, 0, 64, 64, 0x16))
+                resized = threading.Event()
+                queues[(i - 1) % opts.pool_size].put((old_dc, old_ctx, resized, False))
+                if not resized.wait(10):
+                    raise RuntimeError("Pooled WGL resize timed out")
+                if errors:
+                    raise RuntimeError(errors[0])
+            time.sleep(0.2)
+            sample(f"contexts-{i + 1}")
+    finally:
+        for commands in queues:
+            commands.put(None)
+        for worker in workers:
+            worker.join()
+        for hwnd, dc, ctx in reversed(resources):
+            if ctx:
+                check(delete(ctx))
+            if dc:
+                release_dc(hwnd, dc)
+            destroy(hwnd)
+        sample("released")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--shaders", action="store_true")
@@ -129,11 +203,21 @@ def main():
     parser.add_argument("--retain-retired-contexts", action="store_true",
                         help="unbind retired contexts but keep their GL objects alive")
     parser.add_argument("--count", type=int, default=8)
+    parser.add_argument("--pool-size", type=int, choices=range(1, 5))
+    parser.add_argument("--width", type=int, default=1200)
+    parser.add_argument("--height", type=int, default=800)
+    parser.add_argument("--shrink-inactive", action="store_true")
     opts = parser.parse_args()
     if not 1 <= opts.count <= 64:
         parser.error("count must be between 1 and 64")
     if (opts.exit_retired_workers or opts.retain_retired_contexts) and not opts.retire_inactive:
         parser.error("retired worker/context options require --retire-inactive")
+    if opts.pool_size:
+        if opts.core or opts.release_compiler or opts.retire_inactive:
+            parser.error("pool mode supports only shader/detach and geometry options")
+        return pooled(opts)
+    if opts.shrink_inactive:
+        parser.error("--shrink-inactive requires --pool-size")
     resources, workers, errors, retirees = [], [], [], []
     stop = threading.Event()
     create_core = None
@@ -141,7 +225,7 @@ def main():
         sample("baseline")
         for i in range(opts.count):
             hwnd = check(create(0, "STATIC", "WGL memory probe", 0x00CF0000,
-                                0, 0, 1200, 800, None, None, None, None))
+                                0, 0, opts.width, opts.height, None, None, None, None))
             resources.append([hwnd, None, None])
             dc = resources[-1][1] = check(get_dc(hwnd))
             pfd = PFD(size=c.sizeof(PFD), version=1, flags=0x25, color=32, alpha=8)
