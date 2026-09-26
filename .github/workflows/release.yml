@@ -44,6 +44,17 @@ jobs:
       - name: Smoke test
         run: zig-out\bin\ghostty.exe +version
 
+      - name: Verify Windows file version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $expected = $env:RELEASE_TAG.TrimStart('v')
+          $version = (Get-Item zig-out\bin\ghostty.exe).VersionInfo
+          if ($version.FileVersion -ne $expected -or $version.ProductVersion -ne $expected) {
+            throw "Windows file versions must match release $expected; update dist/windows/ghostty.rc"
+          }
+
       - name: Unit tests
         run: zig build -Dapp-runtime=none test
 
