@@ -48,6 +48,8 @@ blending: configpkg.Config.AlphaBlending,
 vsync: bool,
 flip_model: bool,
 last_target: ?Target = null,
+win32_surface: ?*apprt.Surface = null,
+win32_dispatch: if (apprt.runtime == apprt.win32) ?gl.glad.Context else void = if (apprt.runtime == apprt.win32) null else {},
 
 egl_display: if (apprt.runtime == apprt.win32) void else *gl.egl.Display,
 egl_context: if (apprt.runtime == apprt.win32) void else *gl.egl.Context,
@@ -240,7 +242,10 @@ fn prepareContext(getProcAddress: anytype) !void {
 pub fn threadEnter(self: *OpenGL, surface: *apprt.Surface) !void {
     if (comptime apprt.runtime == apprt.win32) {
         try surface.glMakeCurrent();
+        errdefer apprt.win32.Surface.glReleaseCurrent();
         try prepareContext(&apprt.win32.winapi.glGetProcAddress);
+        self.win32_surface = surface;
+        self.win32_dispatch = gl.glad.context;
 
         // Two presentation paths, selected by windows-flip-model:
         //
@@ -285,6 +290,16 @@ pub fn threadExit(self: *OpenGL) void {
     }
     self.egl_display.releaseCurrent();
     gl.glad.unload();
+}
+
+/// Select this surface on its shared Windows worker. Contexts stay assigned
+/// to one worker; only the current context and thread-local dispatch change.
+pub fn activateContext(self: *OpenGL) !void {
+    if (comptime apprt.runtime != apprt.win32) return;
+    const surface = self.win32_surface orelse return error.ContextNotInitialized;
+    if (apprt.win32.winapi.wglGetCurrentDC() == surface.hdc) return;
+    try surface.glMakeCurrent();
+    gl.glad.context = self.win32_dispatch.?;
 }
 
 /// Get the current size of the runtime surface.

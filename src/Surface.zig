@@ -100,7 +100,7 @@ renderer_state: rendererpkg.State,
 renderer_thread: rendererpkg.Thread,
 
 /// The actual thread
-renderer_thr: std.Thread,
+renderer_thr: ?std.Thread,
 
 /// Mouse state.
 mouse: Mouse,
@@ -620,7 +620,7 @@ pub fn init(
             .mutex = mutex,
             .terminal = &self.io.terminal,
         },
-        .renderer_thr = undefined,
+        .renderer_thr = null,
         .mouse = .{},
         .keyboard = .{},
         .io = undefined,
@@ -745,12 +745,8 @@ pub fn init(
     try self.resize(self.size.screen);
 
     // Start our renderer thread
-    self.renderer_thr = try std.Thread.spawn(
-        if (builtin.os.tag == .windows) internal_os.windows.worker_thread_config else .{},
-        rendererpkg.Thread.threadMain,
-        .{&self.renderer_thread},
-    );
-    self.renderer_thr.setName(global.io(), "renderer") catch {};
+    try self.startRenderer();
+    errdefer self.stopRenderer();
 
     // Start our IO thread
     self.io_thr = try std.Thread.spawn(
@@ -759,6 +755,10 @@ pub fn init(
         .{ &self.io_thread, &self.io },
     );
     self.io_thr.setName(global.io(), "io") catch {};
+    errdefer {
+        self.io_thread.stop.notify() catch {};
+        self.io_thr.join();
+    }
     perf.mark("threads-spawned");
 
     // Determine our initial window size if configured. We need to do this
@@ -821,16 +821,38 @@ pub fn init(
     app.first = false;
 }
 
+fn startRenderer(self: *Surface) !void {
+    if (comptime apprt.runtime == apprt.win32) {
+        if (try self.rt_app.rendererPool()) |pool| {
+            try pool.add(&self.renderer_thread);
+            return;
+        }
+    }
+    self.renderer_thr = try std.Thread.spawn(
+        if (builtin.os.tag == .windows) internal_os.windows.worker_thread_config else .{},
+        rendererpkg.Thread.threadMain,
+        .{&self.renderer_thread},
+    );
+    self.renderer_thr.?.setName(global.io(), "renderer") catch {};
+}
+
+fn stopRenderer(self: *Surface) void {
+    if (self.renderer_thr) |thread| {
+        self.renderer_thread.stop.notify() catch |err|
+            log.err("error notifying renderer thread to stop, may stall err={}", .{err});
+        thread.join();
+        self.renderer_thr = null;
+    } else if (comptime apprt.runtime == apprt.win32) {
+        self.rt_app.renderer_pool.?.remove(&self.renderer_thread);
+    }
+}
+
 pub fn deinit(self: *Surface) void {
     // Stop search thread
     if (self.search) |*s| s.deinit();
 
     // Stop rendering thread
-    {
-        self.renderer_thread.stop.notify() catch |err|
-            log.err("error notifying renderer thread to stop, may stall err={}", .{err});
-        self.renderer_thr.join();
-    }
+    self.stopRenderer();
 
     // Stop our IO thread
     {

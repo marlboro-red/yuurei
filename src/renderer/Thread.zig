@@ -34,6 +34,12 @@ alloc: std.mem.Allocator,
 /// so that users of the loop always have an allocator.
 loop: xev.Loop,
 
+/// Windows pool state. The private loop remains owned here for other runtimes.
+shared_loop: ?*xev.Loop = null,
+pool_worker: usize = 0,
+stopping: bool = false,
+stop_cancellations: [3]xev.Completion = @splat(.{}),
+
 /// This can be used to wake up the renderer and force a render safely from
 /// any thread.
 wakeup: xev.Async,
@@ -228,17 +234,26 @@ fn threadMain_(self: *Thread) !void {
     try self.renderer.threadEnter(self.surface);
     defer self.renderer.threadExit();
 
-    // Start the async handlers
-    self.wakeup.wait(&self.loop, &self.wakeup_c, Thread, self, wakeupCallback);
-    self.stop.wait(&self.loop, &self.stop_c, Thread, self, stopCallback);
-    self.draw_now.wait(&self.loop, &self.draw_now_c, Thread, self, drawNowCallback);
+    try self.startEvents();
+    _ = try self.loop.run(.until_done);
+}
 
-    // Send an initial wakeup message so that we render right away.
+fn eventLoop(self: *Thread) *xev.Loop {
+    return self.shared_loop orelse &self.loop;
+}
+
+fn startEvents(self: *Thread) !void {
+    // Notify before registering callbacks so a failed start leaves no
+    // completions referring to a surface whose initialization will unwind.
     try self.wakeup.notify();
+    // Start the async handlers
+    self.wakeup.wait(self.eventLoop(), &self.wakeup_c, Thread, self, wakeupCallback);
+    if (self.shared_loop == null) self.stop.wait(self.eventLoop(), &self.stop_c, Thread, self, stopCallback);
+    self.draw_now.wait(self.eventLoop(), &self.draw_now_c, Thread, self, drawNowCallback);
 
     // Start blinking the cursor.
     self.cursor_h.run(
-        &self.loop,
+        self.eventLoop(),
         &self.cursor_c,
         cursorBlinkInterval(),
         Thread,
@@ -249,11 +264,60 @@ fn threadMain_(self: *Thread) !void {
     // Arm the animation timer in case the renderer already needs
     // animation wakes (e.g. custom shaders loaded at startup).
     self.armAnimationTimer();
+}
 
-    // Run
-    log.debug("starting renderer thread", .{});
-    defer log.debug("starting renderer thread shutdown", .{});
-    _ = try self.loop.run(.until_done);
+pub fn sharedStart(self: *Thread, loop: *xev.Loop) !void {
+    self.shared_loop = loop;
+    errdefer self.shared_loop = null;
+    try self.renderer.loopEnter(self);
+    errdefer self.renderer.loopExit();
+    try self.renderer.threadEnter(self.surface);
+    errdefer self.renderer.threadExit();
+    try self.startEvents();
+}
+
+fn activateContext(self: *Thread) !void {
+    if (comptime apprt.runtime == apprt.win32) {
+        if (self.shared_loop != null) {
+            crash.sentry.thread_state = .{
+                .type = .renderer,
+                .surface = self.renderer.surface_mailbox.surface,
+            };
+            try self.renderer.api.activateContext();
+        }
+    }
+}
+
+/// Async waits disarm on their next notification. Timers are canceled and
+/// all completions must drain before the pool acknowledges surface removal.
+pub fn sharedStop(self: *Thread) void {
+    self.stopping = true;
+    self.wakeup.notify() catch {};
+    self.draw_now.notify() catch {};
+}
+
+pub fn sharedDrained(self: *Thread) bool {
+    const timers = .{ &self.render_c, &self.cursor_c, &self.compression.completion };
+    const resets = .{ &self.render_c_cancel, &self.cursor_c_cancel, &self.compression.reset_completion };
+    var drained = self.wakeup_c.state() == .dead and self.draw_now_c.state() == .dead;
+    inline for (timers, resets, 0..) |completion, reset, i| {
+        if (comptime i != 2 or terminalpkg.compression_enabled) {
+            const cancel = &self.stop_cancellations[i];
+            if (completion.state() != .dead or reset.state() != .dead or cancel.state() != .dead) drained = false;
+            if (completion.state() != .dead and reset.state() == .dead and cancel.state() == .dead) {
+                self.render_h.cancel(self.eventLoop(), completion, cancel, void, null, cursorCancelCallback);
+            }
+        }
+    }
+    return drained;
+}
+
+pub fn sharedFinish(self: *Thread) !void {
+    try self.activateContext();
+    self.renderer.threadExit();
+    self.renderer.loopExit();
+    crash.sentry.thread_state = null;
+    self.shared_loop = null;
 }
 
 fn setQosClass(self: *const Thread) void {
@@ -298,7 +362,10 @@ fn drainMailbox(self: *Thread) !void {
         void;
     defer if (builtin.os.tag.isDarwin()) pool.deinit();
 
-    while (self.mailbox.pop(global.io())) |message| {
+    var processed: usize = 0;
+    // A shared worker must give other surfaces a turn under continuous input.
+    while (self.shared_loop == null or processed < 64) : (processed += 1) {
+        const message = self.mailbox.pop(global.io()) orelse break;
         log.debug("mailbox message={}", .{message});
         switch (message) {
             .crash => @panic("crash request, crashing intentionally"),
@@ -354,7 +421,7 @@ fn drainMailbox(self: *Thread) !void {
                         self.cursor_c_cancel.state() == .dead)
                     {
                         self.cursor_h.cancel(
-                            &self.loop,
+                            self.eventLoop(),
                             &self.cursor_c,
                             &self.cursor_c_cancel,
                             void,
@@ -368,7 +435,7 @@ fn drainMailbox(self: *Thread) !void {
                     if (self.cursor_c.state() != .active) {
                         self.flags.cursor_blink_visible = true;
                         self.cursor_h.run(
-                            &self.loop,
+                            self.eventLoop(),
                             &self.cursor_c,
                             cursorBlinkInterval(),
                             Thread,
@@ -383,7 +450,7 @@ fn drainMailbox(self: *Thread) !void {
                 self.flags.cursor_blink_visible = true;
                 if (self.cursor_c.state() == .active) {
                     self.cursor_h.reset(
-                        &self.loop,
+                        self.eventLoop(),
                         &self.cursor_c,
                         &self.cursor_c_cancel,
                         cursorBlinkInterval(),
@@ -439,6 +506,7 @@ fn drainMailbox(self: *Thread) !void {
             },
         }
     }
+    if (self.shared_loop != null and processed == 64) try self.wakeup.notify();
 }
 
 fn changeConfig(self: *Thread, config: *const DerivedConfig) !void {
@@ -459,7 +527,11 @@ fn changeConfig(self: *Thread, config: *const DerivedConfig) !void {
 /// just trigger a draw/paint.
 fn drawFrame(self: *Thread, now: bool, waited: bool) void {
     // If we're invisible, we do not draw.
-    if (!self.flags.visible) return;
+    if (!self.flags.visible or self.stopping) return;
+    self.activateContext() catch |err| {
+        log.err("select renderer context failed err={}", .{err});
+        return;
+    };
 
     // If the renderer is managing a vsync on its own, we only draw
     // when we're forced to via `now`.
@@ -488,6 +560,11 @@ fn wakeupCallback(
     };
 
     const t = self_.?;
+    if (t.stopping) return .disarm;
+    t.activateContext() catch |err| {
+        log.err("select renderer context failed err={}", .{err});
+        return .rearm;
+    };
 
     // When we wake up, we check the mailbox. Mailbox producers should
     // wake up our thread after publishing.
@@ -510,7 +587,7 @@ fn wakeupCallback(
     //
     // // Timer is not active, let's start it
     // t.render_h.run(
-    //     &t.loop,
+    //     t.eventLoop(),
     //     &t.render_c,
     //     10,
     //     Thread,
@@ -534,6 +611,7 @@ fn drawNowCallback(
 
     // Draw immediately
     const t = self_.?;
+    if (t.stopping) return .disarm;
     t.drawFrame(true, false);
 
     return .rearm;
@@ -558,6 +636,12 @@ fn renderCallback(
         return .disarm;
     };
 
+    if (t.stopping) return .disarm;
+    t.activateContext() catch |err| {
+        log.err("select renderer context failed err={}", .{err});
+        return .disarm;
+    };
+
     // If the display is now unrealized, release GPU resources now
     // we're on the render thread, and do not try to update and draw
     // this frame.
@@ -572,7 +656,7 @@ fn renderCallback(
     // If we're not visible there's no point spending CPU rebuilding cells —
     // we'll catch up when the .visible mailbox message flips us back on.
     // Kitty graphics animations pause with us and resume on visibility.
-    if (!t.flags.visible) return .disarm;
+    if (!t.flags.visible or t.stopping) return .disarm;
 
     // Gate on the present queue BEFORE sampling terminal state so the
     // frame carries the freshest data (the Windows Terminal pattern;
@@ -616,7 +700,7 @@ fn armAnimationTimer(self: *Thread) void {
     const wake = self.renderer.animationWake() orelse return;
     self.animation_wake = wake.kind;
     self.render_h.reset(
-        &self.loop,
+        self.eventLoop(),
         &self.render_c,
         &self.render_c_cancel,
         wake.delay_ms,
@@ -692,11 +776,12 @@ fn cursorTimerCallback(
         return .disarm;
     };
 
+    if (t.stopping) return .disarm;
     t.flags.cursor_blink_visible = !t.flags.cursor_blink_visible;
     t.wakeup.notify() catch {};
 
     t.cursor_h.run(
-        &t.loop,
+        t.eventLoop(),
         &t.cursor_c,
         cursorBlinkInterval(),
         Thread,
@@ -820,7 +905,7 @@ const Compression = struct {
     /// Start the one-shot timer, or move its deadline if it is already active.
     fn schedule(self: *Compression, thread: *Thread, delay_ms: u64) void {
         self.timer.reset(
-            &thread.loop,
+            thread.eventLoop(),
             &self.completion,
             &self.reset_completion,
             delay_ms,
@@ -845,6 +930,7 @@ const Compression = struct {
         };
 
         const thread = thread_ orelse return .disarm;
+        if (thread.stopping) return .disarm;
         const self = &thread.compression;
 
         if (self.step(thread)) |delay| self.schedule(thread, delay);

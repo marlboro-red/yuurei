@@ -26,6 +26,7 @@ const defterm = @import("defterm.zig");
 const Scrollbar = @import("Scrollbar.zig");
 const SearchBar = @import("SearchBar.zig");
 const SettingsWindow = @import("SettingsWindow.zig");
+const RendererPool = @import("RendererPool.zig");
 const winapi = @import("winapi.zig");
 
 const log = std.log.scoped(.win32);
@@ -49,6 +50,7 @@ thread_id: winapi.DWORD,
 
 /// All open windows (tab containers).
 windows: std.ArrayList(*Window) = .empty,
+renderer_pool: ?*RendererPool = null,
 
 /// The quick terminal window, if it has been summoned. It may be
 /// hidden; toggling shows/hides it.
@@ -575,9 +577,26 @@ pub fn terminate(self: *App) void {
     self.hotkey_actions.deinit(self.core_app.alloc);
     while (self.windows.pop()) |window| window.destroy();
     self.windows.deinit(self.core_app.alloc);
+    if (self.renderer_pool) |pool| pool.destroy();
     if (self.profiles_list) |*l| l.deinit();
     self.config.deinit();
     if (self.com_initialized) winapi.CoUninitialize();
+}
+
+/// Zero retains the dedicated-thread path for comparisons and driver issues.
+/// Workers are created lazily; a single terminal only needs one.
+pub fn rendererPool(self: *App) !?*RendererPool {
+    if (self.renderer_pool) |pool| return pool;
+    var count: usize = 2;
+    if (global.environ().getWindows(std.unicode.utf8ToUtf16LeStringLiteral("GHOSTTY_RENDER_WORKERS"))) |value| {
+        if (value.len == 1 and value[0] >= '0' and value[0] <= '4') {
+            count = value[0] - '0';
+        } else log.warn("GHOSTTY_RENDER_WORKERS must be 0 through 4; using 2", .{});
+    }
+    if (count == 0) return null;
+    const pool = try RendererPool.create(self.core_app.alloc, count);
+    self.renderer_pool = pool;
+    return pool;
 }
 
 /// Adopt a default-terminal handoff into a new surface: open a normal
