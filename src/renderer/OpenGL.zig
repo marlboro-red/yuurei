@@ -2,6 +2,7 @@
 pub const OpenGL = @This();
 
 const std = @import("std");
+const builtin = @import("builtin");
 const global = @import("../global.zig");
 const Allocator = std.mem.Allocator;
 const gl = @import("opengl");
@@ -512,22 +513,25 @@ pub fn initTarget(self: *const OpenGL, width: usize, height: usize) !Target {
 /// This runs on the render thread.
 pub fn present(self: *OpenGL, target: Target) !ExportedFrame {
     if (comptime apprt.runtime == apprt.win32) return self.presentWin32(target);
-    if (target.exportDmabuf(self.egl_display, self.egl_context)) |dmabuf| {
-        return .{ .dmabuf = dmabuf };
-    } else |_| {
-        // If DMABUFs fail, then use CPU buffers
-        return .{ .memory = .{
-            .width = @intCast(target.width),
-            .height = @intCast(target.height),
-            .pixels = try target.readPixelsAlloc(self.alloc),
-            .alloc = self.alloc,
-        } };
+    if (comptime builtin.os.tag != .windows) {
+        if (target.exportDmabuf(self.egl_display, self.egl_context)) |dmabuf| {
+            return .{ .dmabuf = dmabuf };
+        } else |_| {}
     }
+
+    // Windows embedded runtimes cannot export POSIX DMA-buffer descriptors.
+    // Use CPU buffers there, or when DMA-buffer export fails elsewhere.
+    return .{ .memory = .{
+        .width = @intCast(target.width),
+        .height = @intCast(target.height),
+        .pixels = try target.readPixelsAlloc(self.alloc),
+        .alloc = self.alloc,
+    } };
 }
 
 /// A finished frame exported for presentation by the apprt.
 pub const ExportedFrame = if (apprt.runtime == apprt.win32) void else union(enum) {
-    dmabuf: Dmabuf,
+    dmabuf: if (builtin.os.tag == .windows) void else Dmabuf,
     memory: Memory,
 
     /// RGBA8 pixel data with premultiplied alpha, tightly packed
@@ -545,7 +549,7 @@ pub const ExportedFrame = if (apprt.runtime == apprt.win32) void else union(enum
 
     pub fn deinit(self: ExportedFrame) void {
         switch (self) {
-            .dmabuf => |v| v.deinit(),
+            .dmabuf => |v| if (comptime builtin.os.tag != .windows) v.deinit(),
             .memory => |v| v.deinit(),
         }
     }
