@@ -276,8 +276,9 @@ pub fn init(
     // pipeline. A failed overlay falls back to the base config rather
     // than failing the spawn.
     var profile_base: ?configpkg.Config = if (spawn_opts.profile != null or
-        spawn_opts.cwd != null)
+        spawn_opts.cwd != null or spawn_opts.command != null)
         app.spawnConfig(spawn_opts) catch |err| base: {
+            if (spawn_opts.command != null) return err;
             log.warn("spawn config failed, using base config err={}", .{err});
             break :base null;
         }
@@ -749,7 +750,7 @@ pub fn setClipboard(
 }
 
 pub fn defaultTermioEnv(self: *Self) !std.process.Environ.Map {
-    _ = self;
+    if (self.window.launch_environment) |*env| return env.clone(self.app.core_app.alloc);
     return try global.environMap();
 }
 

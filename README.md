@@ -37,9 +37,13 @@ Everything below works today, verified live on Windows 11.
 - Tab strip: new / switch / close, drag-reorder, tear-off to a new window,
   right-click rename, middle-click close. Multiple top-level windows.
 - Drop a tab onto another window's tab bar to move it at the insertion marker,
-  preserving its running shells, scrollback, and splits. Works between windows
-  in the same running instance (including torn-off tabs and New Window);
-  separately launched instances cannot exchange live tabs.
+  preserving its running shells, scrollback, and splits. Separate launches of
+  the same executable and configuration now open windows in a shared process,
+  so those windows can exchange tabs too. The caller's environment, startup
+  command, and working directory are preserved. Different Windows users,
+  integrity levels, config roots, and command-line configurations stay separate.
+  Set `GHOSTTY_NEW_INSTANCE=1` to explicitly launch an independent process.
+  Windows already running an older build must be restarted to participate.
 - **Shell profiles** (Windows Terminal-style): auto-detected shells (cmd,
   PowerShell, pwsh, Nushell, Git Bash) and WSL distros, plus user
   config-overlay profiles, from a split new-tab button, the command palette,

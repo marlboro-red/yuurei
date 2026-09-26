@@ -104,6 +104,24 @@ pub fn main(minimal: std.process.Init.Minimal) !MainReturn {
         std.process.exit(0);
     }
 
+    const Instance = if (comptime build_config.app_runtime == .win32)
+        @import("apprt/win32/instance.zig")
+    else
+        struct {
+            pub const Server = void;
+        };
+    const instance: ?*Instance.Server = if (comptime build_config.app_runtime == .win32)
+        switch (try Instance.start(alloc)) {
+            .forwarded => return,
+            .isolated => null,
+            .host => |server| server,
+        }
+    else
+        null;
+    defer if (comptime build_config.app_runtime == .win32) {
+        if (instance) |server| server.deinit();
+    };
+
     // Create our app state
     const app: *App = try App.create(alloc);
     defer app.destroy();
@@ -112,6 +130,13 @@ pub fn main(minimal: std.process.Init.Minimal) !MainReturn {
     var app_runtime: apprt.App = undefined;
     try app_runtime.init(app, .{});
     defer app_runtime.terminate();
+    if (comptime build_config.app_runtime == .win32) {
+        if (instance) |server| try server.attach(&app_runtime);
+    }
+    // Join the launch listener before destroying the app it wakes.
+    defer if (comptime build_config.app_runtime == .win32) {
+        if (instance) |server| server.stop();
+    };
 
     // Since - by definition - there are no surfaces when first started, the
     // quit timer may need to be started. The start timer will get cancelled if/

@@ -86,6 +86,9 @@ tab_drag_engaged: bool = false,
 /// Insertion marker while another window's tab is dragged over this strip.
 tab_drop_index: ?usize = null,
 
+/// Environment inherited from the process that requested this window.
+launch_environment: ?std.process.Environ.Map = null,
+
 /// Horizontal scroll offset (px) of the tab strip, for when the tabs
 /// plus the new-tab button overflow the strip width. Clamped to
 /// [0, maxTabScroll]; the wheel over the strip and tab activation
@@ -434,6 +437,7 @@ pub fn destroy(self: *Window) void {
         if (f.glyph) |g| _ = winapi.DeleteObject(g);
     }
     self.closeAllTabs();
+    if (self.launch_environment) |*env| env.deinit();
     _ = winapi.SetWindowLongPtrW(self.hwnd, winapi.GWLP_USERDATA, 0);
     _ = winapi.DestroyWindow(self.hwnd);
     self.tabs.deinit(alloc);
@@ -454,6 +458,8 @@ fn closeAllTabs(self: *Window) void {
 pub const SpawnOpts = struct {
     profile: ?*const profiles.Profile = null,
     cwd: ?[]const u8 = null,
+    /// Resolved startup command from a separately launched process.
+    command: ?@import("../../config.zig").Command = null,
 
     /// A default-terminal handoff (defterm.zig) to adopt into this
     /// surface: it drives conhost's ConPTY instead of spawning a shell.

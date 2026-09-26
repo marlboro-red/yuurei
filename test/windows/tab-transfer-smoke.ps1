@@ -1,6 +1,7 @@
 param(
     [string]$Executable = "$PSScriptRoot/../../zig-out/bin/ghostty.exe",
-    [string]$Artifacts = "$env:TEMP/yuurei-tab-transfer"
+    [string]$Artifacts = "$env:TEMP/yuurei-tab-transfer",
+    [switch]$SeparateLaunch
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -28,6 +29,8 @@ public static class TabNative {
     [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref Point p);
     [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h, ref Point p);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point p);
+    [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
     public static IntPtr[] Windows(uint pid) {
@@ -40,7 +43,7 @@ public static class TabNative {
         EnumChildWindows(window,(h,p)=>{if(Class(h)=="ghostty-host" && (!visible || IsWindowVisible(h))) result.Add(h); return true;},IntPtr.Zero);
         return result.ToArray();
     }
-    static string Class(IntPtr h) { var name=new StringBuilder(128); GetClassName(h,name,128); return name.ToString(); }
+    public static string Class(IntPtr h) { var name=new StringBuilder(128); GetClassName(h,name,128); return name.ToString(); }
 }
 '@
 [void][TabNative]::SetThreadDpiAwarenessContext(-4)
@@ -87,6 +90,8 @@ function Drag($Source, [int]$Tab, $Target, [int]$TargetX = 30, [int]$TargetY = 1
     [void][TabNative]::ClientToScreen($Target,[ref]$screen)
     $to = $screen
     [void][TabNative]::ScreenToClient($Source,[ref]$to)
+    [void][TabNative]::SetWindowPos($Target,-1,0,0,0,0,0x13)
+    [void][TabNative]::SetWindowPos($Source,-1,0,0,0,0,0x13)
     [void][TabNative]::SetForegroundWindow($Source)
     # Put the real pointer at the press point too. SetCapture can queue a
     # native WM_MOUSEMOVE; leaving it at the previous drop position would
@@ -99,6 +104,10 @@ function Drag($Source, [int]$Tab, $Target, [int]$TargetX = 30, [int]$TargetY = 1
     [void][TabNative]::SetCursorPos($screen.x,$screen.y)
     [void][TabNative]::SendMessage($Source,0x200,1,(Packed $to))
     Start-Sleep -Milliseconds 150
+    if ($Target -ne $Source) {
+        $hit = [TabNative]::GetAncestor([TabNative]::WindowFromPoint($screen),2)
+        Assert ($hit -eq $Target) "Test drop point is occluded: hit=$hit class=$([TabNative]::Class($hit)) target=$Target source=$Source point=$($screen.x),$($screen.y)"
+    }
     if ($Cancel) { [void][TabNative]::SendMessage($Source,0x215,0,0) }
     [void][TabNative]::SendMessage($Source,0x202,0,(Packed $to))
     Start-Sleep -Milliseconds 400
@@ -108,12 +117,16 @@ $configDir = Join-Path $isolation 'ghostty'
 New-Item -ItemType Directory -Path $configDir -Force | Out-Null
 $counter = Join-Path $isolation 'counter.txt'
 $command = ('set /a YUUREI_TRANSFER+=1 > "{0}"' -f $counter).Replace('\','\\')
+$launchInfo = Join-Path $isolation 'launch.txt'
+$launchCommand = ('pwsh -NoProfile -Command "[IO.File]::WriteAllLines(''{0}'', @($env:YUUREI_LAUNCH_ORIGIN, [Environment]::CurrentDirectory), [Text.UTF8Encoding]::new($false))"' -f $launchInfo.Replace("'", "''")).Replace('\','\\')
 @"
 command = cmd.exe /D /Q /K set YUUREI_TRANSFER=0
 background = #282c34
 foreground = #ffffff
 windows-restore-session = false
 confirm-close-surface = false
+working-directory = inherit
+keybind = f1=text:$launchCommand\r
 keybind = f2=new_window
 keybind = f3=new_tab
 keybind = f4=new_split:right
@@ -121,7 +134,7 @@ keybind = f5=text:$command\r
 keybind = f6=toggle_split_zoom
 keybind = f7=close_surface
 "@ | Set-Content (Join-Path $configDir 'config')
-$app = Start-Process -FilePath (Resolve-Path $Executable) -WindowStyle Hidden -PassThru -Environment @{XDG_CONFIG_HOME=$isolation; LOCALAPPDATA=$isolation} -RedirectStandardError (Join-Path $isolation 'stderr.log')
+$app = Start-Process -FilePath (Resolve-Path $Executable) -WindowStyle Hidden -PassThru -Environment @{XDG_CONFIG_HOME=$isolation; LOCALAPPDATA=$isolation; YUUREI_LAUNCH_ORIGIN='source'} -RedirectStandardError (Join-Path $isolation 'stderr.log')
 try {
     Wait-For { [TabNative]::Windows($app.Id).Count -eq 1 } 'Initial window did not open'
     $source = [TabNative]::Windows($app.Id)[0]
@@ -135,10 +148,43 @@ try {
     Key $source 0x74
     Wait-For { (Test-Path $counter) -and (Get-Content $counter -Raw).Trim() -eq '1' } 'Initial shell command failed'
     Key $source 0x75 # zoom
-    Key $source 0x71 # second window
+    if ($SeparateLaunch) {
+        $launchDir = Join-Path $isolation 'launch cwd 日本語'
+        New-Item -ItemType Directory -Path $launchDir | Out-Null
+        $launcher = Start-Process -FilePath (Resolve-Path $Executable) -WorkingDirectory $launchDir -WindowStyle Hidden -PassThru -Environment @{XDG_CONFIG_HOME=$isolation; LOCALAPPDATA=$isolation; YUUREI_LAUNCH_ORIGIN='separate-launch'} -RedirectStandardError (Join-Path $isolation 'launcher.log')
+        Assert ($launcher.WaitForExit(15000)) 'Separate launch did not forward to the existing process'
+        Assert ($launcher.ExitCode -eq 0) 'Separate launcher reported an error'
+    } else { Key $source 0x71 }
     Wait-For { [TabNative]::Windows($app.Id).Count -eq 2 } 'Destination did not open'
     $target = @([TabNative]::Windows($app.Id) | Where-Object { $_ -ne $source })[0]
     [void][TabNative]::SetWindowPos($target,0,1300,50,1200,900,0)
+    if ($SeparateLaunch) {
+        Key $target 0x70
+        Wait-For { Test-Path $launchInfo } 'Forwarded shell did not execute input'
+        $info = Get-Content $launchInfo
+        Assert ($info[0].Trim() -eq 'separate-launch') 'Forwarding lost the launching environment'
+        Assert ($info[1].Trim() -eq $launchDir) 'Forwarding lost the Unicode launching working directory'
+        $burst = @()
+        try {
+            for ($n=0; $n -lt 3; $n++) {
+                $burst += Start-Process -FilePath (Resolve-Path $Executable) -ArgumentList ('"--working-directory={0}"' -f $launchDir) -WindowStyle Hidden -PassThru -Environment @{XDG_CONFIG_HOME=$isolation; LOCALAPPDATA=$isolation} -RedirectStandardError (Join-Path $isolation "burst-$n.log")
+            }
+            foreach ($client in $burst) {
+                Assert ($client.WaitForExit(15000) -and $client.ExitCode -eq 0) 'Concurrent launch failed'
+            }
+            Wait-For { [TabNative]::Windows($app.Id).Count -eq 5 } 'Concurrent launches lost or duplicated a window'
+            foreach ($extra in [TabNative]::Windows($app.Id)) {
+                if ($extra -ne $source -and $extra -ne $target) { [void][TabNative]::PostMessage($extra,0x10,0,0) }
+            }
+            Wait-For { [TabNative]::Windows($app.Id).Count -eq 2 } 'Concurrent launch windows did not close'
+        } finally { foreach ($client in $burst) { if (!$client.HasExited) { $client.Kill(); $client.WaitForExit() } } }
+        $isolated = Start-Process -FilePath (Resolve-Path $Executable) -WindowStyle Hidden -PassThru -Environment @{XDG_CONFIG_HOME=$isolation; LOCALAPPDATA=$isolation; GHOSTTY_NEW_INSTANCE='1'} -RedirectStandardError (Join-Path $isolation 'isolated.log')
+        try {
+            Wait-For { [TabNative]::Windows($isolated.Id).Count -eq 1 } 'Explicit isolated launch did not open independently'
+            [void][TabNative]::PostMessage([TabNative]::Windows($isolated.Id)[0],0x10,0,0)
+            Assert ($isolated.WaitForExit(5000)) 'Isolated launch did not exit cleanly'
+        } finally { if (!$isolated.HasExited) { $isolated.Kill(); $isolated.WaitForExit() } }
+    }
     Drag $source 1 $target -Cancel
     Assert ([TabNative]::Hosts($source,$false).Count -eq 3) 'Cancelled drag moved a tab'
     Drag $source 1 $target
@@ -165,7 +211,28 @@ try {
     Check-Rendering $source 'round-trip'
     Key $source 0x76
     Assert ([TabNative]::Hosts($source,$false).Count -eq 2) 'Closing a transferred split failed'
+    foreach ($window in [TabNative]::Windows($app.Id)) { [void][TabNative]::PostMessage($window,0x10,0,0) }
+    Assert ($app.WaitForExit(5000)) 'Launch listener prevented clean application shutdown'
+    if ($SeparateLaunch) {
+        $cold = @()
+        try {
+            for ($n=0; $n -lt 4; $n++) {
+                $cold += Start-Process -FilePath (Resolve-Path $Executable) -WindowStyle Hidden -PassThru -Environment @{XDG_CONFIG_HOME=$isolation; LOCALAPPDATA=$isolation} -RedirectStandardError (Join-Path $isolation "cold-$n.log")
+            }
+            Wait-For { @($cold | Where-Object { !$_.HasExited }).Count -eq 1 } 'Cold concurrent launches did not elect one host'
+            $hostProcess = @($cold | Where-Object { !$_.HasExited })[0]
+            foreach ($client in $cold) { if ($client.HasExited) { Assert ($client.ExitCode -eq 0) 'Cold launch failed' } }
+            Wait-For { [TabNative]::Windows($hostProcess.Id).Count -eq 4 } 'Cold launch lost or duplicated windows'
+            $hostProcess.Kill(); $hostProcess.WaitForExit()
+            $replacement = Start-Process -FilePath (Resolve-Path $Executable) -WindowStyle Hidden -PassThru -Environment @{XDG_CONFIG_HOME=$isolation; LOCALAPPDATA=$isolation} -RedirectStandardError (Join-Path $isolation 'recovery.log')
+            $cold += $replacement
+            Wait-For { [TabNative]::Windows($replacement.Id).Count -eq 1 } 'Launch did not recover after host termination'
+            [void][TabNative]::PostMessage([TabNative]::Windows($replacement.Id)[0],0x10,0,0)
+            Assert ($replacement.WaitForExit(5000)) 'Replacement host did not shut down'
+        } finally { foreach ($process in $cold) { if (!$process.HasExited) { $process.Kill(); $process.WaitForExit() } } }
+    }
     Write-Output "Tab transfer smoke tests passed. Artifacts: $isolation"
 } finally {
+    if ($null -ne $launcher -and !$launcher.HasExited) { $launcher.Kill(); $launcher.WaitForExit() }
     if (!$app.HasExited) { $app.Kill(); $app.WaitForExit() }
 }

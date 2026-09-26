@@ -50,6 +50,7 @@ thread_id: winapi.DWORD,
 
 /// All open windows (tab containers).
 windows: std.ArrayList(*Window) = .empty,
+instance: ?*@import("instance.zig").Server = null,
 renderer_pool: ?*RendererPool = null,
 
 /// The quick terminal window, if it has been summoned. It may be
@@ -721,14 +722,18 @@ pub fn spawnConfig(
     };
 
     if (opts.cwd) |cwd| {
-        var buf: [1024]u8 = undefined;
-        const arg = try std.fmt.bufPrint(&buf, "--working-directory={s}", .{cwd});
+        const arg = try std.fmt.allocPrint(alloc_gpa, "--working-directory={s}", .{cwd});
+        defer alloc_gpa.free(arg);
         var iter = @import("../../cli.zig").args.sliceIterator(&.{arg});
         try cfg.loadIter(alloc_gpa, &iter);
     }
 
     try cfg.loadRecursiveFiles(alloc_gpa);
     try cfg.finalize();
+    if (opts.command) |command| {
+        cfg.command = try command.clone(cfg._arena.?.allocator());
+        cfg.@"initial-command" = null;
+    }
     return cfg;
 }
 
@@ -916,6 +921,9 @@ pub fn run(self: *App) !void {
 
         // Tick the terminal app
         try self.core_app.tick(self);
+        // Restore the host's initial session before forwarded launches,
+        // including when several processes start simultaneously.
+        if (!self.quit) if (self.instance) |instance| instance.drain();
 
         // Close anything flagged. This is done here, not in the window
         // procedure, so memory isn't freed while one of its own

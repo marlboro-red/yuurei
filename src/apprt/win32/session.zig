@@ -94,8 +94,8 @@ fn writeAtomic(alloc: std.mem.Allocator, path: []const u8, data: []const u8) voi
     // is idempotent (mkdir -p), so an already-present dir is fine.
     if (std.fs.path.dirname(path)) |dir| std.Io.Dir.cwd().createDirPath(io, dir) catch {};
 
-    // Unique per-process temp name: win32 has no single-instance IPC,
-    // so several yuurei processes may save concurrently. A shared
+    // Unique per-process temp name: isolated/config-specific instances can
+    // save concurrently. A shared
     // deterministic ".tmp" would let two writers interleave truncate/
     // write/rename and corrupt or cross-replace each other's snapshot;
     // per-PID names keep every writer isolated until its atomic rename.
