@@ -1,0 +1,459 @@
+const std = @import("std");
+const global = @import("../global.zig");
+const terminal = @import("../terminal/main.zig");
+const snapshot = @import("../terminal/snapshot/main.zig");
+const Stream = @import("../terminal/stream_terminal.zig").Stream;
+const Handler = Stream.Handler;
+const Pty = @import("../pty.zig").Pty;
+const Command = @import("../Command.zig");
+const w = @import("../apprt/win32/winapi.zig");
+const windows = std.os.windows;
+const transport = @import("transport.zig");
+const protocol = @import("protocol.zig");
+const H = w.HANDLE;
+const alloc = std.heap.c_allocator;
+const build_identity = @import("../build_config.zig").version_string;
+extern "kernel32" fn ConnectNamedPipe(H, ?*anyopaque) callconv(.winapi) w.BOOL;
+extern "kernel32" fn DisconnectNamedPipe(H) callconv(.winapi) w.BOOL;
+extern "kernel32" fn GetProcessId(H) callconv(.winapi) u32;
+extern "kernel32" fn GetCurrentProcess() callconv(.winapi) H;
+extern "kernel32" fn WaitForSingleObject(H, u32) callconv(.winapi) u32;
+extern "kernel32" fn Sleep(u32) callconv(.winapi) void;
+extern "kernel32" fn CancelSynchronousIo(H) callconv(.winapi) w.BOOL;
+extern "kernel32" fn CreateEventW(?*anyopaque, w.BOOL, w.BOOL, ?[*:0]const u16) callconv(.winapi) ?H;
+extern "kernel32" fn SetEvent(H) callconv(.winapi) w.BOOL;
+extern "kernel32" fn GetStdHandle(u32) callconv(.winapi) H;
+extern "kernel32" fn GetConsoleMode(H, *u32) callconv(.winapi) w.BOOL;
+extern "kernel32" fn SetConsoleMode(H, u32) callconv(.winapi) w.BOOL;
+extern "kernel32" fn GetConsoleOutputCP() callconv(.winapi) u32;
+extern "kernel32" fn SetConsoleOutputCP(u32) callconv(.winapi) w.BOOL;
+extern "kernel32" fn GetConsoleCP() callconv(.winapi) u32;
+extern "kernel32" fn SetConsoleCP(u32) callconv(.winapi) w.BOOL;
+const ConsoleInfo = extern struct { size: [2]i16, cursor: [2]i16, attributes: u16, window: [4]i16, maximum: [2]i16 };
+extern "kernel32" fn GetConsoleScreenBufferInfo(H, *ConsoleInfo) callconv(.winapi) w.BOOL;
+
+const Input = struct {
+    handle: H,
+    mutex: std.Io.Mutex = .init,
+    bytes: [protocol.max_request]u8 = undefined,
+    len: usize = 0,
+    stopped: std.atomic.Value(bool) = .init(false),
+    overflow: std.atomic.Value(bool) = .init(false),
+    fn read(self: *Input) void {
+        var buf: [4096]u8 = undefined;
+        while (!self.stopped.load(.acquire)) {
+            var n: u32 = 0;
+            if (w.ReadFile(self.handle, &buf, buf.len, &n, null) == 0 or n == 0) break;
+            // Ctrl+] detaches this experimental client. It never kills a pane.
+            if (std.mem.indexOfScalar(u8, buf[0..n], 0x1d) != null) break;
+            self.mutex.lockUncancelable(global.io());
+            defer self.mutex.unlock(global.io());
+            if (n > self.bytes.len - self.len) {
+                self.overflow.store(true, .release);
+                break;
+            }
+            @memcpy(self.bytes[self.len..][0..n], buf[0..n]);
+            self.len += n;
+        }
+        self.stopped.store(true, .release);
+    }
+};
+
+// One pane per experimental broker. All terminal access is serialized. No view
+// owns the process or PTY, and no client socket is used by the output reader.
+const Session = struct {
+    pty: Pty,
+    command: Command,
+    term: terminal.Terminal,
+    stream: Stream = undefined,
+    mutex: std.Io.Mutex = .init,
+    stopping: std.atomic.Value(bool) = .init(false),
+    failed: std.atomic.Value(bool) = .init(false),
+    sequence: u64 = 1,
+    input_mutex: std.Io.Mutex = .init,
+    input: [protocol.max_request]u8 = undefined,
+    input_len: usize = 0,
+    input_event: H = undefined,
+
+    fn write(self: *Session, bytes: []const u8) !void {
+        self.input_mutex.lockUncancelable(global.io());
+        defer self.input_mutex.unlock(global.io());
+        if (self.failed.load(.acquire)) return error.SessionFailed;
+        if (bytes.len > self.input.len - self.input_len) return error.InputQueueFull;
+        @memcpy(self.input[self.input_len..][0..bytes.len], bytes);
+        self.input_len += bytes.len;
+        _ = SetEvent(self.input_event);
+    }
+
+    fn writeLoop(self: *Session) void {
+        var io = transport.Io.init(null) catch {
+            self.failed.store(true, .release);
+            return;
+        };
+        defer _ = w.CloseHandle(io.event);
+        var bytes: [protocol.max_request]u8 = undefined;
+        while (!self.stopping.load(.acquire)) {
+            _ = WaitForSingleObject(self.input_event, w.INFINITE);
+            self.input_mutex.lockUncancelable(global.io());
+            const len = self.input_len;
+            @memcpy(bytes[0..len], self.input[0..len]);
+            self.input_len = 0;
+            self.input_mutex.unlock(global.io());
+            if (self.stopping.load(.acquire)) return;
+            io.transfer(self.pty.in_pipe, bytes[0..len], true) catch {
+                self.failed.store(true, .release);
+                return;
+            };
+        }
+    }
+
+    fn reply(_: *Handler, bytes: []const u8) void {
+        current.?.write(bytes) catch {
+            current.?.failed.store(true, .release);
+        };
+    }
+
+    fn read(self: *Session) void {
+        var bytes: [64 * 1024]u8 = undefined;
+        while (!self.stopping.load(.acquire)) {
+            var count: u32 = 0;
+            if (w.ReadFile(self.pty.out_pipe, &bytes, bytes.len, &count, null) == 0 or count == 0) {
+                self.failed.store(true, .release);
+                return;
+            }
+            self.mutex.lockUncancelable(global.io());
+            self.stream.nextSlice(bytes[0..count]);
+            self.sequence += 1;
+            if (self.stream.handler.semantic_failure) self.failed.store(true, .release);
+            self.mutex.unlock(global.io());
+        }
+    }
+
+    fn respond(self: *Session, request: protocol.Header, payload: []const u8, out: *std.Io.Writer) !void {
+        switch (request.op) {
+            .hello => {
+                if (!std.mem.eql(u8, payload, build_identity)) return error.IncompatibleBuild;
+                try out.writeAll(build_identity);
+            },
+            .input => {
+                try self.write(payload);
+            },
+            .stop => {
+                if (payload.len != 0) return error.InvalidPayload;
+            },
+            .status => {
+                if (payload.len != 0) return error.InvalidPayload;
+                try out.print("{{\"shell_pid\":{d},\"broker_pid\":{d},\"exited\":{s},\"failed\":{s}}}\n", .{
+                    GetProcessId(self.command.pid.?),                                         windows.GetCurrentProcessId(),
+                    if (WaitForSingleObject(self.command.pid.?, 0) == 0) "true" else "false", if (self.failed.load(.acquire)) "true" else "false",
+                });
+            },
+            .resize => {
+                if (payload.len != 4) return error.InvalidPayload;
+                const cols = std.mem.readInt(u16, payload[0..2], .little);
+                const rows = std.mem.readInt(u16, payload[2..4], .little);
+                if (cols == 0 or rows == 0 or cols > 512 or rows > 256) return error.InvalidSize;
+                const old_cols = self.term.cols;
+                const old_rows = self.term.rows;
+                try self.term.resize(alloc, .{ .cols = cols, .rows = rows });
+                self.pty.setSize(.{ .ws_col = cols, .ws_row = rows, .ws_xpixel = 0, .ws_ypixel = 0 }) catch |err| {
+                    self.term.resize(alloc, .{ .cols = old_cols, .rows = old_rows }) catch {
+                        self.failed.store(true, .release);
+                    };
+                    return err;
+                };
+                self.sequence += 1;
+            },
+            .snapshot => {
+                if (payload.len != 0) return error.InvalidPayload;
+                if (request.sequence == self.sequence) return;
+                var continuation: [64 * 1024]u8 = undefined;
+                var writer: std.Io.Writer = .fixed(&continuation);
+                try self.stream.writeContinuation(&writer);
+                try snapshot.encode(alloc, out, &self.term, .{
+                    .continuation = if (writer.buffered().len == 0) .ground else .{ .bytes = writer.buffered() },
+                });
+            },
+        }
+    }
+};
+var current: ?*Session = null;
+
+fn pipeName(name: []const u8, identity: transport.Identity) ![:0]u16 {
+    if (!protocol.validName(name)) return error.InvalidSessionName;
+    const path = try std.fmt.allocPrint(alloc, "\\\\.\\pipe\\LOCAL\\yuurei-mux-experimental-{x}-{s}", .{ identity, name });
+    defer alloc.free(path);
+    return std.unicode.utf8ToUtf16LeAllocZ(alloc, path);
+}
+
+fn serve(name: []const u8, args: anytype) !void {
+    const identity = try transport.identity(GetCurrentProcess());
+    const path = try pipeName(name, identity);
+    defer alloc.free(path);
+    // Claim the endpoint BEFORE creating a shell. A duplicate host must fail
+    // without creating an orphan session. OS identity checked on every connect.
+    const pipe = w.CreateNamedPipeW(path, 3 | w.FILE_FLAG_OVERLAPPED | w.FILE_FLAG_FIRST_PIPE_INSTANCE, 8, 1, 65536, 65536, 0, null);
+    if (pipe == windows.INVALID_HANDLE_VALUE) return error.SessionAlreadyExists;
+    defer _ = w.CloseHandle(pipe);
+    const shell = try alloc.dupeZ(u8, args.next() orelse "pwsh.exe");
+    defer alloc.free(shell);
+    var argv: std.ArrayList([:0]const u8) = .empty;
+    defer {
+        for (argv.items) |a| alloc.free(a);
+        argv.deinit(alloc);
+    }
+    try argv.append(alloc, try alloc.dupeZ(u8, shell));
+    while (args.next()) |a| try argv.append(alloc, try alloc.dupeZ(u8, a));
+    var session: Session = .{
+        .pty = try Pty.open(.{ .ws_col = 100, .ws_row = 30, .ws_xpixel = 0, .ws_ypixel = 0 }),
+        .command = .{ .path = shell, .args = argv.items, .os_pre_exec = null, .rt_pre_exec = null, .rt_post_fork = null, .rt_pre_exec_info = undefined, .rt_post_fork_info = undefined },
+        .term = undefined,
+    };
+    defer session.pty.deinit();
+    session.term = try terminal.Terminal.init(global.io(), alloc, .{
+        .cols = 100,
+        .rows = 30,
+        .max_scrollback_bytes = 1024 * 1024,
+        // Image state is not preserved by the upstream snapshot codec yet.
+        .kitty_image_storage_limit = 0,
+    });
+    defer session.term.deinit(alloc);
+    session.stream = Stream.init(.{ .allocator = alloc, .handler = session.term.vtHandler(), .continuation_max_bytes = 64 * 1024 });
+    defer session.stream.deinit();
+    current = &session;
+    defer current = null;
+    session.stream.handler.effects.write_pty = Session.reply;
+    session.stream.handler.effects.device_attributes = struct {
+        fn attributes(_: *Handler) @import("../terminal/device_attributes.zig").Attributes {
+            return .{};
+        }
+    }.attributes;
+    session.input_event = CreateEventW(null, 0, 0, null) orelse return error.CreateEvent;
+    defer _ = w.CloseHandle(session.input_event);
+    session.command.pseudo_console = session.pty.pseudo_console;
+    try session.command.start(alloc);
+    defer session.command.deinit();
+    const input_writer = try std.Thread.spawn(.{}, Session.writeLoop, .{&session});
+    defer {
+        session.stopping.store(true, .release);
+        _ = SetEvent(session.input_event);
+        input_writer.join();
+    }
+    const reader = try std.Thread.spawn(.{}, Session.read, .{&session});
+    defer {
+        session.stopping.store(true, .release);
+        // Cancellation can race with entry into ReadFile. Retry until the
+        // reader exits so no pending read can outlive the PTY or Session.
+        while (WaitForSingleObject(reader.getHandle(), 10) != 0) _ = CancelSynchronousIo(reader.getHandle());
+        reader.join();
+    }
+    const response = try alloc.alloc(u8, protocol.max_response);
+    defer alloc.free(response);
+    const request_buf = try alloc.alloc(u8, protocol.max_request);
+    defer alloc.free(request_buf);
+    var io = try transport.Io.init(null);
+    defer _ = w.CloseHandle(io.event);
+    while (true) {
+        var ov = io.begin();
+        if (ConnectNamedPipe(pipe, &ov) == 0) switch (windows.GetLastError()) {
+            .PIPE_CONNECTED => {},
+            .IO_PENDING => {
+                _ = try io.finish(pipe, &ov, w.INFINITE);
+            },
+            else => return error.AcceptFailed,
+        };
+        const stop = connection(&session, pipe, &io, identity, request_buf, response) catch false;
+        _ = DisconnectNamedPipe(pipe);
+        if (stop) return;
+    }
+}
+
+fn connection(session: *Session, pipe: H, io: *transport.Io, identity: transport.Identity, request_buf: []u8, response: []u8) !bool {
+    _ = try transport.peer(pipe, false, identity);
+    var ready = false;
+    while (true) {
+        var header_bytes: [protocol.header_size]u8 = undefined;
+        try io.transfer(pipe, &header_bytes, false);
+        const header = try protocol.Header.decode(&header_bytes, protocol.max_request);
+        if (!ready and header.op != .hello) return error.HandshakeRequired;
+        const payload = request_buf[0..header.length];
+        try io.transfer(pipe, payload, false);
+        var writer: std.Io.Writer = .fixed(response);
+        const sequence = block: {
+            session.mutex.lockUncancelable(global.io());
+            defer session.mutex.unlock(global.io());
+            try session.respond(header, payload, &writer);
+            ready = true;
+            break :block session.sequence;
+        };
+        var reply = (protocol.Header{ .op = header.op, .length = @intCast(writer.buffered().len), .sequence = sequence }).encode();
+        try io.transfer(pipe, &reply, true);
+        try io.transfer(pipe, writer.buffered(), true);
+        if (header.op == .stop) return true;
+    }
+}
+
+const Client = struct {
+    pipe: H,
+    io: transport.Io,
+    fn init(name: []const u8) !Client {
+        const identity = try transport.identity(GetCurrentProcess());
+        const path = try pipeName(name, identity);
+        defer alloc.free(path);
+        const pipe = w.CreateFileW(path, w.GENERIC_READ | w.GENERIC_WRITE, 0, null, w.OPEN_EXISTING, w.FILE_FLAG_OVERLAPPED | 0x00110000, null);
+        if (pipe == windows.INVALID_HANDLE_VALUE) return error.SessionUnavailable;
+        errdefer _ = w.CloseHandle(pipe);
+        _ = try transport.peer(pipe, true, identity);
+        var result: Client = .{ .pipe = pipe, .io = try transport.Io.init(null) };
+        errdefer _ = w.CloseHandle(result.io.event);
+        var buf: [256]u8 = undefined;
+        const response = try result.request(.hello, build_identity, 0, &buf);
+        if (!std.mem.eql(u8, buf[0..response.length], build_identity)) return error.IncompatibleBuild;
+        return result;
+    }
+    fn deinit(self: *Client) void {
+        _ = w.CloseHandle(self.io.event);
+        _ = w.CloseHandle(self.pipe);
+    }
+    fn request(self: *Client, op: protocol.Op, payload: []const u8, sequence: u64, buffer: []u8) !protocol.Header {
+        if (payload.len > protocol.max_request) return error.PayloadTooLarge;
+        var bytes = (protocol.Header{ .op = op, .length = @intCast(payload.len), .sequence = sequence }).encode();
+        try self.io.transfer(self.pipe, &bytes, true);
+        try self.io.transfer(self.pipe, @constCast(payload), true);
+        try self.io.transfer(self.pipe, &bytes, false);
+        const header = try protocol.Header.decode(&bytes, @intCast(buffer.len));
+        if (header.op != op) return error.InvalidResponse;
+        try self.io.transfer(self.pipe, buffer[0..header.length], false);
+        return header;
+    }
+};
+
+pub fn run(operation: []const u8, name: []const u8, args: anytype) !void {
+    if (std.mem.eql(u8, operation, "serve")) return serve(name, args);
+    var client = try Client.init(name);
+    defer client.deinit();
+    const buffer = try alloc.alloc(u8, protocol.max_response);
+    defer alloc.free(buffer);
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = std.Io.File.stdout().writer(global.io(), &stdout_buf);
+    if (std.mem.eql(u8, operation, "watch") or std.mem.eql(u8, operation, "attach")) {
+        // Temporary console client. Native pane attachment will use
+        // the binary state directly; this formatter view is a diagnostic only.
+        const interactive = std.mem.eql(u8, operation, "attach");
+        const output = GetStdHandle(@bitCast(@as(i32, -11)));
+        const input = GetStdHandle(@bitCast(@as(i32, -10)));
+        var output_mode: u32 = 0;
+        if (GetConsoleMode(output, &output_mode) == 0) return error.ConsoleRequired;
+        const old_cp = GetConsoleOutputCP();
+        if (SetConsoleOutputCP(65001) == 0 or SetConsoleMode(output, output_mode | 4) == 0) return error.ConsoleMode;
+        defer {
+            _ = SetConsoleOutputCP(old_cp);
+            _ = SetConsoleMode(output, output_mode);
+        }
+        var input_mode: u32 = 0;
+        const input_cp = GetConsoleCP();
+        if (interactive) {
+            if (GetConsoleMode(input, &input_mode) == 0) return error.ConsoleRequired;
+            if (SetConsoleMode(input, 0x200) == 0 or SetConsoleCP(65001) == 0) return error.ConsoleMode;
+        }
+        defer if (interactive) {
+            _ = SetConsoleMode(input, input_mode);
+            _ = SetConsoleCP(input_cp);
+        };
+        var input_state: Input = .{ .handle = input };
+        const input_thread: ?std.Thread = if (interactive) try std.Thread.spawn(.{}, Input.read, .{&input_state}) else null;
+        defer if (input_thread) |thread| {
+            input_state.stopped.store(true, .release);
+            while (WaitForSingleObject(thread.getHandle(), 10) != 0) _ = CancelSynchronousIo(thread.getHandle());
+            thread.join();
+        };
+        defer {
+            stdout.interface.writeAll("\x1b[?2026l\x1b[?1l\x1b[?2004l\x1b[0m\x1b[?25h\r\n") catch {};
+            stdout.interface.flush() catch {};
+        }
+        var old_size: [4]u8 = @splat(0);
+        var sequence: u64 = 0;
+        while (true) {
+            if (interactive and input_state.stopped.load(.acquire)) {
+                if (input_state.overflow.load(.acquire)) return error.InputQueueFull;
+                return;
+            }
+            var info: ConsoleInfo = undefined;
+            if (GetConsoleScreenBufferInfo(output, &info) != 0) {
+                var size: [4]u8 = undefined;
+                std.mem.writeInt(u16, size[0..2], @intCast(std.math.clamp(@as(i32, info.window[2]) - info.window[0] + 1, 1, 512)), .little);
+                std.mem.writeInt(u16, size[2..4], @intCast(std.math.clamp(@as(i32, info.window[3]) - info.window[1] + 1, 1, 256)), .little);
+                if (!std.mem.eql(u8, &size, &old_size)) {
+                    _ = try client.request(.resize, &size, 0, buffer);
+                    old_size = size;
+                }
+            }
+            if (interactive) {
+                var input_bytes: [protocol.max_request]u8 = undefined;
+                const n = blk: {
+                    input_state.mutex.lockUncancelable(global.io());
+                    defer input_state.mutex.unlock(global.io());
+                    const n = input_state.len;
+                    @memcpy(input_bytes[0..n], input_state.bytes[0..n]);
+                    input_state.len = 0;
+                    break :blk n;
+                };
+                if (n > 0) _ = try client.request(.input, input_bytes[0..n], 0, buffer);
+            }
+            const header = try client.request(.snapshot, "", sequence, buffer);
+            sequence = header.sequence;
+            if (header.length > 0) {
+                var source: std.Io.Reader = .fixed(buffer[0..header.length]);
+                var decoded = try snapshot.decode(alloc, global.io(), &source, .{ .max_continuation_bytes = 64 * 1024 });
+                defer decoded.deinit(alloc);
+                var restored = decoded.toOwned();
+                defer restored.deinit(alloc);
+                var formatter = terminal.formatter.TerminalFormatter.init(&restored, .vt);
+                const pages = &restored.screens.active.pages;
+                formatter.content = .{ .selection = terminal.Selection.init(
+                    pages.pin(.{ .active = .{ .x = 0, .y = 0 } }).?,
+                    pages.pin(.{ .active = .{ .x = restored.cols - 1, .y = restored.rows - 1 } }).?,
+                    false,
+                ) };
+                formatter.extra = .none;
+                formatter.extra.screen.cursor = true;
+                try stdout.interface.writeAll("\x1b[?2026h\x1b[0m\x1b[H\x1b[2J");
+                try formatter.format(&stdout.interface);
+                try stdout.interface.writeAll(if (restored.modes.get(.cursor_keys)) "\x1b[?1h" else "\x1b[?1l");
+                try stdout.interface.writeAll(if (restored.modes.get(.bracketed_paste)) "\x1b[?2004h" else "\x1b[?2004l");
+                try stdout.interface.writeAll("\x1b[?2026l");
+                try stdout.interface.flush();
+            }
+            Sleep(100);
+        }
+    }
+    if (std.mem.eql(u8, operation, "capture") or std.mem.eql(u8, operation, "snapshot")) {
+        const header = try client.request(.snapshot, "", 0, buffer);
+        if (std.mem.eql(u8, operation, "snapshot")) {
+            try stdout.interface.writeAll(buffer[0..header.length]);
+        } else {
+            var reader: std.Io.Reader = .fixed(buffer[0..header.length]);
+            var decoded = try snapshot.decode(alloc, global.io(), &reader, .{ .max_continuation_bytes = 64 * 1024 });
+            defer decoded.deinit(alloc);
+            var restored = decoded.toOwned();
+            defer restored.deinit(alloc);
+            const formatter = terminal.formatter.TerminalFormatter.init(&restored, .plain);
+            try formatter.format(&stdout.interface);
+        }
+    } else {
+        const op = std.meta.stringToEnum(protocol.Op, operation) orelse return error.InvalidOperation;
+        var size: [4]u8 = undefined;
+        const payload = switch (op) {
+            .input => args.next() orelse return error.ExpectedInput,
+            .resize => blk: {
+                std.mem.writeInt(u16, size[0..2], try std.fmt.parseInt(u16, args.next() orelse return error.ExpectedColumns, 10), .little);
+                std.mem.writeInt(u16, size[2..4], try std.fmt.parseInt(u16, args.next() orelse return error.ExpectedRows, 10), .little);
+                break :blk &size;
+            },
+            else => "",
+        };
+        const header = try client.request(op, payload, 0, buffer);
+        try stdout.interface.writeAll(buffer[0..header.length]);
+    }
+    try stdout.interface.flush();
+}

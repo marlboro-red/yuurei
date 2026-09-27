@@ -58,10 +58,12 @@ Remaining before the flip:
 - [ ] Record splits and window geometry (a tab currently restores as its
       focused pane; windows restore at default size/position).
 
-Multiplexer-style workspaces and live detach/reattach are researched in
-[`MULTIPLEXER_RESEARCH.md`](MULTIPLEXER_RESEARCH.md). The proposed order is
-workspace/layout support, modal pane controls, then a separate process
-owning persistent sessions. This remains a proposal, not shipped behavior.
+Multiplexer work is on `feature/multiplexer`. An opt-in single-pane broker and
+console client exercise live detach/reattach before native workspace integration.
+See [`MULTIPLEXER_IMPLEMENTATION.md`](MULTIPLEXER_IMPLEMENTATION.md) for build
+instructions, validation, and remaining gates, and
+[`MULTIPLEXER_RESEARCH.md`](MULTIPLEXER_RESEARCH.md) for the original research.
+This experimental tool is not part of the normal application or release build.
 
 ## Rendering / presentation
 

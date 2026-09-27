@@ -50,6 +50,34 @@ pub fn build(b: *std.Build) !void {
     // Ghostty dependencies used by many artifacts.
     const deps = try buildpkg.SharedDeps.init(b, &config);
 
+    // Explicitly requested only; experimental session hosting is never shipped
+    // or started by the normal application/release build.
+    if (config.target.result.os.tag == .windows) {
+        const mux = b.addExecutable(.{
+            .name = "yuurei-mux",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main_mux.zig"),
+                .target = config.target,
+                .optimize = config.optimize,
+                .link_libc = true,
+            }),
+        });
+        _ = try deps.add(mux);
+        const install_mux = b.addInstallArtifact(mux, .{});
+        b.step("mux", "Build the experimental Windows session host").dependOn(&install_mux.step);
+        const mux_tests = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main_mux.zig"),
+                .target = config.target,
+                .optimize = config.optimize,
+                .link_libc = true,
+            }),
+            .filters = test_filters,
+        });
+        _ = try deps.add(mux_tests);
+        b.step("test-mux", "Test the experimental session protocol and snapshots").dependOn(&b.addRunArtifact(mux_tests).step);
+    }
+
     // The modules exported for Zig consumers of libghostty. If you're
     // writing a Zig program that uses libghostty, read this file.
     const mod = try buildpkg.GhosttyZig.init(
