@@ -17,6 +17,7 @@ pub const Entry = struct {
     shell_pid: u32,
     created: u64,
     version: []const u8,
+    exited: bool = false,
 };
 
 fn creation(process: w.HANDLE) !u64 {
@@ -35,7 +36,7 @@ fn directory(alloc: std.mem.Allocator) ![]const u8 {
 }
 
 /// Returns the owned record path, removed by the broker on orderly shutdown.
-pub fn publish(alloc: std.mem.Allocator, name: []const u8, shell_pid: u32) ![]const u8 {
+pub fn publish(alloc: std.mem.Allocator, name: []const u8, shell_pid: u32, exited: bool) ![]const u8 {
     if (!protocol.validName(name)) return error.InvalidSessionName;
     const dir = try directory(alloc);
     defer alloc.free(dir);
@@ -51,6 +52,7 @@ pub fn publish(alloc: std.mem.Allocator, name: []const u8, shell_pid: u32) ![]co
         .shell_pid = shell_pid,
         .created = try creation(w.GetCurrentProcess()),
         .version = @import("../build_config.zig").version_string,
+        .exited = exited,
     };
     const data = try std.json.Stringify.valueAlloc(alloc, entry, .{});
     defer alloc.free(data);
@@ -106,7 +108,7 @@ pub fn list(alloc: std.mem.Allocator) ![]Entry {
         errdefer alloc.free(name);
         const version = try alloc.dupe(u8, entry.version);
         errdefer alloc.free(version);
-        try result.append(alloc, .{ .name = name, .version = version, .created = entry.created, .broker_pid = entry.broker_pid, .shell_pid = entry.shell_pid });
+        try result.append(alloc, .{ .name = name, .version = version, .created = entry.created, .broker_pid = entry.broker_pid, .shell_pid = entry.shell_pid, .exited = entry.exited });
     }
     return result.toOwnedSlice(alloc);
 }

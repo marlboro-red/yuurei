@@ -89,6 +89,7 @@ test "mux native replica applies ordered output and resize after a snapshot" {
     var out: [1024]u8 = undefined;
     var events = try journal.read(cursor, &out);
     while (try Journal.next(&events)) |event| switch (event.kind) {
+        .exited => return error.UnexpectedExitEvent,
         .output => live.nextSlice(event.data),
         .resize => try replica.resize(t.allocator, .{
             .cols = std.mem.readInt(u16, event.data[0..2], .little),

@@ -52,8 +52,9 @@ transport, simultaneous viewers, and tmux interoperability need later work.
       output and unchanged shell PID across client disconnects.
 - [x] Establish authoritative terminal parsing and query responses in the broker.
       Clipboard and desktop effects are disabled in this prototype.
-- [ ] Complete protocol adversarial testing, including fragmented requests,
-      stalled peers, and cross-user/logon/elevation isolation on Windows.
+- [x] Test fragmented requests, stalled peers, malformed framing, oversized
+      payloads, unauthorized executable rejection, and recovery without leaks.
+- [ ] Validate cross-user/logon/elevation isolation with separate Windows accounts.
 - [x] Implement an incremental native pane backend with bounded event history.
       A stale client disconnects without stopping shell output.
 - [x] Replace short polling with independently multiplexed push notifications,
@@ -169,8 +170,8 @@ Start-Process -FilePath $mux -ArgumentList 'serve demo pwsh.exe -NoLogo -NoProfi
 ```
 
 `serve` runs in the foreground of its own process; it does not daemonize itself.
-Automatic launch, job/console breakaway, discovery, and upgrade coordination are
-still integration work. Closing a console that directly hosts `serve`, killing
+Use `start` or the native persistent-session setting for detached startup.
+Closing a console that directly hosts `serve`, killing
 the broker, logout, and reboot are outside the persistence guarantee.
 
 `stop` explicitly terminates the hosted session. `status`, `capture`, `snapshot`
@@ -179,6 +180,12 @@ view at a time, so detach it before issuing capture/input/resize diagnostics.
 `status` and `stop` use a separate authenticated control endpoint and work while
 a view remains attached. Control connections cannot subscribe, resize, or input.
 The broker retains an exited shell's screen until explicitly stopped.
+
+`test/windows/mux-exit.ps1` checks exit code display, retained final output,
+discovery, and reattachment after exit. `test/windows/mux-transport.ps1` uses
+an isolated installation to exercise real pipe framing and timeout failures.
+The four-second suspended-view benchmark verifies automatic history recovery
+and subsequent input to the original shell.
 
 ## Current bounds and limitations
 
@@ -202,7 +209,7 @@ experimental backend.
   OS-reported PID, user SID, integrity SID, Windows session ID, and image path.
   The image must be one of the two expected executables in the same installation
   directory. Remote pipe clients are rejected. A hello exchanges the build version
-  string; protocol version 3 adds native output-event subscriptions. After the
+  string; protocol version 4 includes ordered shell-exit events. After the
   handshake, an idle connection waits indefinitely for the first header byte;
   the rest of each transfer remains bounded.
 - The console client polls at 100 ms and reconstructs the active viewport from
@@ -218,15 +225,18 @@ experimental backend.
   Copying events to the response releases their journal space. Disconnect
   releases protection immediately; three seconds without space also releases
   it so an unresponsive view cannot permanently block shell output. Detached
-  sessions continue draining and evicting old events. An expired client retains its last
-  screen and gets a disconnected title; close and reopen the pane to take a fresh
-  snapshot. It never replaces a live terminal beneath tracked selection pins.
+  sessions continue draining and evicting old events. An expired native view
+  automatically replaces its surface from a fresh snapshot of the same session,
+  preserving its position in the split tree. Local selection and search state
+  reset during recovery; live terminal pages are never replaced beneath pins.
 - Native input, resize, and output wake the connection worker immediately.
   The view duplicates a wait-only handle to the authenticated broker's output
   event, catches up until the journal is empty, then waits without a polling
   timer. A broker process handle also wakes it on broker exit. Connection errors retain
-  the view and leave the broker alive. Broker exit and automatic reconnect UI
-  still need refinement.
+  the view and leave the broker alive. **Reconnect Session** retries an existing
+  session without silently launching a replacement shell. An event-driven process
+  watch reports shell exit independently of ConPTY EOF; final output remains
+  readable and exited sessions remain discoverable until explicitly terminated.
 - The updater waits for both GUI and broker processes from the installation;
   closing the GUI alone no longer makes a live broker eligible for replacement.
 

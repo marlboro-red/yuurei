@@ -4,7 +4,7 @@ const Journal = @This();
 const std = @import("std");
 pub const capacity = 1024 * 1024;
 pub const header_size = 8;
-pub const Kind = enum(u8) { output = 1, resize = 2 };
+pub const Kind = enum(u8) { output = 1, resize = 2, exited = 3 };
 bytes: [capacity]u8 = undefined,
 first: u64 = 1,
 end: u64 = 1,
@@ -71,6 +71,7 @@ pub fn next(data: *[]const u8) !?Event {
     const kind = std.enums.fromInt(Kind, data.*[4]) orelse return error.InvalidEvent;
     if (!std.mem.eql(u8, data.*[5..8], &.{ 0, 0, 0 })) return error.InvalidEvent;
     if (kind == .resize and len != 4) return error.InvalidEvent;
+    if (kind == .exited and (len != 8 or std.mem.readInt(u32, data.*[header_size + 4 ..][0..4], .little) > 1)) return error.InvalidEvent;
     const result: Event = .{ .kind = kind, .data = data.*[header_size..][0..len] };
     data.* = data.*[header_size + len ..];
     return result;

@@ -19,8 +19,10 @@ const worker_config = @import("../os/windows.zig").worker_thread_config;
 extern "kernel32" fn ConnectNamedPipe(H, ?*anyopaque) callconv(.winapi) w.BOOL;
 extern "kernel32" fn DisconnectNamedPipe(H) callconv(.winapi) w.BOOL;
 extern "kernel32" fn GetProcessId(H) callconv(.winapi) u32;
+extern "kernel32" fn GetExitCodeProcess(H, *u32) callconv(.winapi) w.BOOL;
 extern "kernel32" fn GetCurrentProcess() callconv(.winapi) H;
 extern "kernel32" fn WaitForSingleObject(H, u32) callconv(.winapi) u32;
+extern "kernel32" fn WaitForMultipleObjects(u32, [*]const H, w.BOOL, u32) callconv(.winapi) u32;
 extern "kernel32" fn Sleep(u32) callconv(.winapi) void;
 extern "kernel32" fn CancelSynchronousIo(H) callconv(.winapi) w.BOOL;
 extern "kernel32" fn CreateEventW(?*anyopaque, w.BOOL, w.BOOL, ?[*:0]const u16) callconv(.winapi) ?H;
@@ -65,6 +67,7 @@ const Input = struct {
 // One pane per experimental broker. All terminal access is serialized. No view
 // owns the process or PTY, and no client socket is used by the output reader.
 const Session = struct {
+    name: []const u8,
     pty: Pty,
     command: Command,
     term: terminal.Terminal,
@@ -72,6 +75,8 @@ const Session = struct {
     mutex: std.Io.Mutex = .init,
     stopping: std.atomic.Value(bool) = .init(false),
     failed: std.atomic.Value(bool) = .init(false),
+    output_closed: std.atomic.Value(bool) = .init(false),
+    exited: std.atomic.Value(bool) = .init(false),
     sequence: u64 = 1,
     journal: *Journal,
     input_mutex: std.Io.Mutex = .init,
@@ -94,6 +99,7 @@ const Session = struct {
         self.input_mutex.lockUncancelable(global.io());
         defer self.input_mutex.unlock(global.io());
         if (self.failed.load(.acquire)) return error.SessionFailed;
+        if (self.output_closed.load(.acquire) or self.exited.load(.acquire)) return error.SessionExited;
         if (bytes.len > self.input.len - self.input_len) return error.InputQueueFull;
         @memcpy(self.input[self.input_len..][0..bytes.len], bytes);
         self.input_len += bytes.len;
@@ -123,9 +129,27 @@ const Session = struct {
     }
 
     fn reply(_: *Handler, bytes: []const u8) void {
-        current.?.write(bytes) catch {
+        current.?.write(bytes) catch |err| {
+            if (err == error.SessionExited) return;
             current.?.failed.store(true, .release);
         };
+    }
+
+    fn watchExit(self: *Session) void {
+        const handles = [_]H{ self.stop_event, self.command.pid.? };
+        if (WaitForMultipleObjects(handles.len, &handles, 0, w.INFINITE) != 1) return;
+        var code: u32 = 0;
+        _ = GetExitCodeProcess(self.command.pid.?, &code);
+        self.mutex.lockUncancelable(global.io());
+        self.exited.store(true, .release);
+        var data: [8]u8 = undefined;
+        std.mem.writeInt(u32, data[0..4], code, .little);
+        std.mem.writeInt(u32, data[4..8], 1, .little);
+        self.journal.append(.exited, &data);
+        self.sequence = self.journal.end;
+        self.mutex.unlock(global.io());
+        _ = SetEvent(self.output_event);
+        if (@import("Registry.zig").publish(alloc, self.name, GetProcessId(self.command.pid.?), true)) |path| alloc.free(path) else |_| {}
     }
 
     fn read(self: *Session) void {
@@ -133,7 +157,20 @@ const Session = struct {
         while (!self.stopping.load(.acquire)) {
             var count: u32 = 0;
             if (w.ReadFile(self.pty.out_pipe, &bytes, bytes.len, &count, null) == 0 or count == 0) {
-                self.failed.store(true, .release);
+                if (self.stopping.load(.acquire)) return;
+                const exited = WaitForSingleObject(self.command.pid.?, 1000) == 0;
+                var code: u32 = 0;
+                _ = GetExitCodeProcess(self.command.pid.?, &code);
+                self.mutex.lockUncancelable(global.io());
+                self.output_closed.store(true, .release);
+                var data: [8]u8 = undefined;
+                std.mem.writeInt(u32, data[0..4], code, .little);
+                std.mem.writeInt(u32, data[4..8], @intFromBool(exited), .little);
+                self.journal.append(.exited, &data);
+                self.sequence = self.journal.end;
+                self.mutex.unlock(global.io());
+                _ = SetEvent(self.output_event);
+                if (@import("Registry.zig").publish(alloc, self.name, GetProcessId(self.command.pid.?), exited)) |path| alloc.free(path) else |_| {}
                 return;
             }
             self.mutex.lockUncancelable(global.io());
@@ -141,7 +178,7 @@ const Session = struct {
             // A disconnected or unresponsive view must not stall a detached
             // shell forever. The connection owns the cursor under this lock.
             while (self.protected_cursor) |cursor| {
-                if (self.journal.canAppend(cursor, count + Journal.header_size + 4)) break;
+                if (self.journal.canAppend(cursor, count + 2 * Journal.header_size + 4 + 8)) break;
                 self.mutex.unlock(global.io());
                 const waited = WaitForSingleObject(self.space_event, 3000);
                 self.mutex.lockUncancelable(global.io());
@@ -190,9 +227,12 @@ const Session = struct {
             },
             .status => {
                 if (payload.len != 0) return error.InvalidPayload;
-                try out.print("{{\"shell_pid\":{d},\"broker_pid\":{d},\"exited\":{s},\"failed\":{s}}}\n", .{
+                var code: u32 = 0;
+                _ = GetExitCodeProcess(self.command.pid.?, &code);
+                try out.print("{{\"shell_pid\":{d},\"broker_pid\":{d},\"exited\":{s},\"failed\":{s},\"output_closed\":{s},\"exit_code\":{d}}}\n", .{
                     GetProcessId(self.command.pid.?),                                         windows.GetCurrentProcessId(),
                     if (WaitForSingleObject(self.command.pid.?, 0) == 0) "true" else "false", if (self.failed.load(.acquire)) "true" else "false",
+                    if (self.output_closed.load(.acquire)) "true" else "false",               code,
                 });
             },
             .resize => {
@@ -204,7 +244,7 @@ const Session = struct {
                 const old_cols = self.term.cols;
                 const old_rows = self.term.rows;
                 try self.term.resize(alloc, .{ .cols = cols, .rows = rows });
-                self.pty.setSize(.{ .ws_col = cols, .ws_row = rows, .ws_xpixel = 0, .ws_ypixel = 0 }) catch |err| {
+                if (!self.output_closed.load(.acquire)) self.pty.setSize(.{ .ws_col = cols, .ws_row = rows, .ws_xpixel = 0, .ws_ypixel = 0 }) catch |err| {
                     self.term.resize(alloc, .{ .cols = old_cols, .rows = old_rows }) catch {
                         self.failed.store(true, .release);
                     };
@@ -258,6 +298,7 @@ fn serve(name: []const u8, args: anytype) !void {
     defer alloc.destroy(journal);
     journal.* = .{};
     var session: Session = .{
+        .name = name,
         .journal = journal,
         .pty = try Pty.open(.{ .ws_col = 100, .ws_row = 30, .ws_xpixel = 0, .ws_ypixel = 0 }),
         .command = .{ .path = shell, .args = argv.items, .os_pre_exec = null, .rt_pre_exec = null, .rt_post_fork = null, .rt_pre_exec_info = undefined, .rt_post_fork_info = undefined },
@@ -293,7 +334,7 @@ fn serve(name: []const u8, args: anytype) !void {
     session.command.pseudo_console = session.pty.pseudo_console;
     try session.command.start(alloc);
     defer session.command.deinit();
-    const record = try @import("Registry.zig").publish(alloc, name, GetProcessId(session.command.pid.?));
+    const record = try @import("Registry.zig").publish(alloc, name, GetProcessId(session.command.pid.?), false);
     defer {
         std.Io.Dir.deleteFileAbsolute(global.io(), record) catch {};
         alloc.free(record);
@@ -317,6 +358,11 @@ fn serve(name: []const u8, args: anytype) !void {
     defer {
         _ = SetEvent(session.stop_event);
         control_thread.join();
+    }
+    const exit_thread = try std.Thread.spawn(worker_config, Session.watchExit, .{&session});
+    defer {
+        _ = SetEvent(session.stop_event);
+        exit_thread.join();
     }
     try serveConnections(&session, pipe, identity, false);
 }

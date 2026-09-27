@@ -680,6 +680,7 @@ pub extern "user32" fn PostMessageW(HWND, UINT, WPARAM, LPARAM) callconv(.winapi
 /// menu so the EDIT is created after the menu's modal loop fully exits,
 /// avoiding an immediate focus-loss that would commit it empty).
 pub const WM_APP_RENAME: UINT = 0x8000 + 1;
+pub const WM_APP_MUX_RECONNECT: UINT = 0x8000 + 2;
 // Importing anything from comctl32 makes the loader bring it in so
 // the tooltips window class exists.
 pub extern "comctl32" fn InitCommonControls() callconv(.winapi) void;

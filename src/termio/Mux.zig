@@ -31,6 +31,8 @@ io: *termio.Termio = undefined,
 stream: Stream = undefined,
 stream_ready: bool = false,
 disconnected: std.atomic.Value(bool) = .init(false),
+ended: std.atomic.Value(bool) = .init(false),
+initial_exit_code: ?u32 = null,
 mutex: std.Io.Mutex = .init,
 input: [protocol.max_request]u8 = undefined,
 input_len: usize = 0,
@@ -73,6 +75,13 @@ fn load(self: *Mux, name: []const u8) !void {
     var reader: std.Io.Reader = .fixed(bytes[0..header.length]);
     var decoded = try snapshot.decode(alloc, global.io(), &reader, .{ .max_continuation_bytes = 65536 });
     errdefer decoded.deinit(alloc);
+    const status_reply = try client.request(.status, "", 0, bytes);
+    const status = try std.json.parseFromSlice(protocol.Status, alloc, bytes[0..status_reply.length], .{ .ignore_unknown_fields = true });
+    defer status.deinit();
+    if (status.value.output_closed or status.value.exited) {
+        self.ended.store(true, .release);
+        self.initial_exit_code = if (status.value.exited) status.value.exit_code else null;
+    }
     self.client = client;
     self.initial = decoded;
     self.sequence = header.sequence;
@@ -93,6 +102,7 @@ pub fn initTerminal(self: *Mux, t: *terminal.Terminal) !void {
     t.* = self.initial.?.toOwned();
     t.flags.dirty.clear = true;
     t.flags.dirty.palette = true;
+    if (self.ended.load(.acquire)) t.modes.set(.cursor_visible, false);
 }
 
 pub fn threadEnter(self: *Mux, io: *termio.Termio, td: *termio.Termio.ThreadData) !void {
@@ -125,6 +135,7 @@ pub fn threadEnter(self: *Mux, io: *termio.Termio, td: *termio.Termio.ThreadData
     self.initial = null;
     self.stream.handler.effects.title_changed = titleChanged;
     self.setTitle(io.terminal.getTitle() orelse "Multiplexer session");
+    if (self.ended.load(.acquire)) self.showExit(self.initial_exit_code);
     try self.resize(io.size.grid());
     self.thread = try std.Thread.spawn(@import("../os/windows.zig").worker_thread_config, run, .{self});
 }
@@ -136,6 +147,15 @@ pub fn threadExit(self: *Mux) void {
         thread.join();
         self.thread = null;
     }
+}
+
+/// UI-initiated replacement stops network activity before constructing a fresh
+/// surface. Terminal pages remain alive until the old surface is destroyed.
+pub fn disconnect(self: *Mux) void {
+    self.disconnected.store(true, .release);
+    self.threadExit();
+    if (self.client) |*client| client.deinit();
+    self.client = null;
 }
 
 pub fn deinit(self: *Mux) void {
@@ -150,6 +170,7 @@ pub fn deinit(self: *Mux) void {
 }
 
 pub fn resize(self: *Mux, grid: renderer.GridSize) !void {
+    if (self.ended.load(.acquire)) return;
     if (grid.columns == 0 or grid.rows == 0 or grid.columns > 512 or grid.rows > 256) return error.InvalidSize;
     var bytes: [4]u8 = undefined;
     std.mem.writeInt(u16, bytes[0..2], @intCast(grid.columns), .little);
@@ -161,6 +182,7 @@ pub fn resize(self: *Mux, grid: renderer.GridSize) !void {
 }
 
 pub fn queueWrite(self: *Mux, data: []const u8, linefeed: bool) !void {
+    if (self.ended.load(.acquire)) return error.SessionExited;
     if (self.disconnected.load(.acquire)) return error.SessionDisconnected;
     self.mutex.lockUncancelable(global.io());
     defer self.mutex.unlock(global.io());
@@ -180,6 +202,7 @@ pub fn queueWrite(self: *Mux, data: []const u8, linefeed: bool) !void {
 fn titleChanged(handler: *Stream.Handler) void {
     const stream: *Stream = @fieldParentPtr("handler", handler);
     const self: *Mux = @fieldParentPtr("stream", stream);
+    if (self.ended.load(.acquire)) return;
     self.setTitle(handler.terminal.getTitle() orelse "Multiplexer session");
 }
 
@@ -189,12 +212,26 @@ fn setTitle(self: *Mux, text: []const u8) void {
     _ = self.io.surface_mailbox.push(.{ .set_title = title }, .{ .instant = {} });
 }
 
+fn showExit(self: *Mux, code: ?u32) void {
+    self.ended.store(true, .release);
+    if (code) |value| {
+        var buffer: [80]u8 = undefined;
+        self.setTitle(std.fmt.bufPrint(&buffer, "Session exited (code {d})", .{value}) catch "Session exited");
+    } else self.setTitle("Session output closed");
+}
+
 fn run(self: *Mux) void {
     self.loop() catch |err| {
         if (WaitForSingleObject(self.stop, 0) == 0) return;
         self.disconnected.store(true, .release);
         std.log.scoped(.mux).err("native session disconnected: {}", .{err});
         self.setTitle(if (err == error.SessionHistoryExpired) "Session history expired - reopen pane" else "Session disconnected - reopen pane");
+        if (err == error.SessionHistoryExpired) {
+            if (comptime @import("../build_config.zig").app_runtime == .win32) {
+                const core = self.io.surface_mailbox.surface;
+                _ = w.PostMessageW(core.rt_surface.window.hwnd, w.WM_APP_MUX_RECONNECT, @intCast(core.id), 0);
+            }
+        }
         // Keep the terminal and its tracked pins intact. A fresh pane can take
         // a new snapshot; this pane must not silently replace live page state.
     };
@@ -226,8 +263,13 @@ fn loop(self: *Mux) !void {
                     .cols = std.mem.readInt(u16, event.data[0..2], .little),
                     .rows = std.mem.readInt(u16, event.data[2..4], .little),
                 }),
+                .exited => {
+                    self.showExit(if (std.mem.readInt(u32, event.data[4..8], .little) == 1) std.mem.readInt(u32, event.data[0..4], .little) else null);
+                    self.io.terminal.modes.set(.cursor_visible, false);
+                },
             };
             if (self.stream.handler.semantic_failure) return error.TerminalStateFailed;
+            if (self.ended.load(.acquire)) self.io.terminal.modes.set(.cursor_visible, false);
             self.sequence = reply.sequence;
             self.io.renderer_wakeup.notify() catch {};
         }

@@ -33,7 +33,7 @@ pub const Backend = union(Kind) {
     pub fn localResize(self: *const Backend) bool {
         return switch (self.*) {
             .exec => true,
-            .mux => |mux| if (is_windows) mux.disconnected.load(.acquire) else false,
+            .mux => |mux| if (is_windows) mux.disconnected.load(.acquire) or mux.ended.load(.acquire) else false,
         };
     }
 

@@ -42,7 +42,7 @@ function Wait-Title($Window,$Expected) {
     while($limit.Elapsed.TotalSeconds -lt 60) {
         $title=[BenchTitle]::Get($Window)
         if($title.Contains($Expected)){return}
-        if($title -match 'history expired|disconnected|unavailable'){throw "Pane failed: $title"}
+        if($title -match 'disconnected|unavailable' -or ($SuspendViewMs -eq 0 -and $title -match 'history expired')){throw "Pane failed: $title"}
         Start-Sleep -Milliseconds 2
     }
     throw "Timed out waiting for $Expected; title=$([BenchTitle]::Get($Window))"

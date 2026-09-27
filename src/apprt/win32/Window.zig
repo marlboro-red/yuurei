@@ -457,6 +457,7 @@ fn closeAllTabs(self: *Window) void {
 /// directory (session restore), or plainly (all defaults).
 pub const SpawnOpts = struct {
     mux_session: ?[]const u8 = null,
+    mux_restore: bool = false,
     profile: ?*const profiles.Profile = null,
     cwd: ?[]const u8 = null,
     /// Resolved startup command from a separately launched process.
@@ -541,6 +542,7 @@ pub fn restoreTab(self: *Window, saved: @import("../../mux/Workspace.zig").Tab) 
                     .profile = if (pane.profile.len > 0) profile_list.bySavedName(pane.profile) else null,
                     .cwd = if (pane.cwd.len > 0) pane.cwd else null,
                     .mux_session = pane.session,
+                    .mux_restore = true,
                 }, .window);
                 break :leaf .{ .leaf = surface };
             },
@@ -928,6 +930,8 @@ fn showStripMenu(self: *Window, idx: ?usize) void {
         const persistent = self.tabs.items[idx.?].focused.core_surface.io.backend == .mux;
         _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 2, if (persistent) S("Detach Tab") else S("Close Tab"));
         if (persistent) _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 15, S("Terminate Focused Session\u{2026}"));
+        if (persistent and self.tabs.items[idx.?].focused.core_surface.io.backend.mux.disconnected.load(.acquire))
+            _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 16, S("Reconnect Session"));
         if (self.tabs.items.len > 1)
             _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 3, S("Close Other Tabs"));
         _ = winapi.AppendMenuW(menu, winapi.MF_SEPARATOR, 0, null);
@@ -1000,6 +1004,7 @@ fn showStripMenu(self: *Window, idx: ?usize) void {
         14 => _ = self.app.performAction(.app, .open_config, .os_open) catch |err|
             log.err("menu settings err={}", .{err}),
         15 => if (idx) |i| self.terminateSession(self.tabs.items[i].focused),
+        16 => if (idx) |i| self.reconnectSurface(self.tabs.items[i].focused) catch |err| log.err("session reconnect failed: {}", .{err}),
         else => if (cmd >= 1000 and cmd - 1000 < sessions.len) {
             self.attachSession(sessions[@intCast(cmd - 1000)].name) catch |err| log.err("session attachment failed: {}", .{err});
         } else if (cmd >= 100 and cmd < 132) {
@@ -1020,6 +1025,10 @@ pub fn attachSession(self: *Window, name: []const u8) !void {
             var iterator = tab.tree.iterator();
             while (iterator.next()) |entry| {
                 if (entry.view.core_surface.io.backend == .mux and std.mem.eql(u8, entry.view.core_surface.io.backend.mux.name, name)) {
+                    if (entry.view.core_surface.io.backend.mux.disconnected.load(.acquire)) {
+                        try window.reconnectSurface(entry.view);
+                        return;
+                    }
                     window.activateTab(index);
                     window.focusSurface(entry.view);
                     _ = winapi.ShowWindow(window.hwnd, winapi.SW_SHOW);
@@ -1030,6 +1039,38 @@ pub fn attachSession(self: *Window, name: []const u8) !void {
         }
     }
     _ = try self.newTabWithOpts(.{ .mux_session = name });
+}
+
+fn reconnectSurface(self: *Window, surface: *Surface) !void {
+    if (surface.core_surface.io.backend != .mux) return;
+    const index = self.tabOf(surface) orelse return;
+    const alloc = self.app.core_app.alloc;
+    const name = try alloc.dupe(u8, surface.core_surface.io.backend.mux.name);
+    defer alloc.free(name);
+    surface.core_surface.io.backend.mux.disconnect();
+    var replacement = try self.newSurfaceTree(.{
+        .mux_session = name,
+        .profile = if (surface.profile_name) |profile| self.app.ensureProfiles().byName(profile) else null,
+    }, .window);
+    defer replacement.deinit();
+    const fresh = replacement.nodes[0].leaf;
+    const tab = &self.tabs.items[index];
+    const handle = handleOf(&tab.tree, surface) orelse return error.NoFocusedSurface;
+    const tree = try tab.tree.clone(alloc);
+    // This clone has not been published. Replace one reference while keeping
+    // all other panes, split handles, ratios, focus, and zoom unchanged.
+    @constCast(tree.nodes)[handle.idx()] = .{ .leaf = fresh.ref() };
+    surface.unref(alloc); // release the clone's old reference
+    if (self.search) |search| if (search.surface == surface) search.destroy();
+    if (self.divider_drag != null) {
+        self.divider_drag = null;
+        _ = winapi.ReleaseCapture();
+    }
+    var old = tab.tree;
+    tab.tree = tree;
+    if (tab.focused == surface) tab.focused = fresh;
+    old.deinit();
+    self.activateTab(self.active_tab);
 }
 
 fn terminateSession(self: *Window, surface: *Surface) void {
@@ -3288,6 +3329,20 @@ pub fn wndProc(
         },
 
         // Deferred tab rename (posted from the context menu).
+        winapi.WM_APP_MUX_RECONNECT => {
+            // A queued notification can outlive its source surface. Match the
+            // stable random ID against live views before dereferencing it.
+            for (self.tabs.items) |*tab| {
+                var iterator = tab.tree.iterator();
+                while (iterator.next()) |entry| {
+                    if (entry.view.core_surface.id == wparam and entry.view.core_surface.io.backend == .mux and entry.view.core_surface.io.backend.mux.disconnected.load(.acquire)) {
+                        self.reconnectSurface(entry.view) catch |err| log.err("automatic session reconnect failed: {}", .{err});
+                        return 0;
+                    }
+                }
+            }
+            return 0;
+        },
         winapi.WM_APP_RENAME => {
             self.startRenameTab(@truncate(wparam));
             return 0;

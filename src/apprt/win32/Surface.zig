@@ -311,6 +311,7 @@ pub fn init(
 
     if (spawn_opts.mux_session) |name| {
         config.@"windows-mux-session" = try config._arena.?.allocator().dupeZ(u8, name);
+        if (!spawn_opts.mux_restore) config.@"windows-persistent-sessions" = false;
     } else if (context != .window and config.@"windows-mux-session" != null) {
         // A new tab/split gets its own shell, not a second view of the initial
         // command-line attachment target.

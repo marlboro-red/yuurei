@@ -9,6 +9,7 @@ const build_identity = @import("../build_config.zig").version_string;
 extern "kernel32" fn GetCurrentProcess() callconv(.winapi) H;
 extern "kernel32" fn OpenProcess(u32, w.BOOL, u32) callconv(.winapi) ?H;
 extern "kernel32" fn DuplicateHandle(H, H, H, *H, u32, w.BOOL, u32) callconv(.winapi) w.BOOL;
+extern "kernel32" fn WaitNamedPipeW([*:0]const u16, u32) callconv(.winapi) w.BOOL;
 const Client = @This();
 
 pipe: H,
@@ -26,7 +27,14 @@ fn connect(name: []const u8, stop: ?H, control: bool) !Client {
     const identity = try transport.identity(GetCurrentProcess());
     const path = try transport.endpointName(name, identity, control);
     defer alloc.free(path);
-    const pipe = w.CreateFileW(path, w.GENERIC_READ | w.GENERIC_WRITE, 0, null, w.OPEN_EXISTING, w.FILE_FLAG_OVERLAPPED | 0x00110000, null);
+    var pipe = w.CreateFileW(path, w.GENERIC_READ | w.GENERIC_WRITE, 0, null, w.OPEN_EXISTING, w.FILE_FLAG_OVERLAPPED | 0x00110000, null);
+    if (pipe == windows.INVALID_HANDLE_VALUE and windows.GetLastError() == .PIPE_BUSY) {
+        // A just-detached server may still be completing its old connection.
+        if (WaitNamedPipeW(path, 250) != 0)
+            pipe = w.CreateFileW(path, w.GENERIC_READ | w.GENERIC_WRITE, 0, null, w.OPEN_EXISTING, w.FILE_FLAG_OVERLAPPED | 0x00110000, null)
+        else
+            return error.SessionBusy;
+    }
     if (pipe == windows.INVALID_HANDLE_VALUE) return switch (windows.GetLastError()) {
         .FILE_NOT_FOUND, .PATH_NOT_FOUND => error.SessionNotFound,
         .PIPE_BUSY => error.SessionBusy,
