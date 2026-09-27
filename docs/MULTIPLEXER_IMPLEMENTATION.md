@@ -186,6 +186,10 @@ discovery, and reattachment after exit. `test/windows/mux-transport.ps1` uses
 an isolated installation to exercise real pipe framing and timeout failures.
 The four-second suspended-view benchmark verifies automatic history recovery
 and subsequent input to the original shell.
+`test/windows/mux-input.ps1` verifies a 512 KiB input burst byte-for-byte and
+subsequent input; queue unit tests cover a single large append and atomic limit
+rejection. `mux-lifecycle.ps1 -Cycles 10` repeats native crash/reattachment and
+checks the original PID, live output, broker handles, threads, and memory.
 
 ## Current bounds and limitations
 
@@ -197,7 +201,10 @@ experimental backend.
 - The broker uses a blocking output reader and an event-driven input writer.
   Network writes occur outside the terminal lock. An unread response cannot
   retain that lock; subscribed views use the bounded backpressure described below.
-- Requests and the pending input queue are limited to 64 KiB each. Responses
+- Wire requests and broker pending input are limited to 64 KiB each. Native
+  views queue up to 16 MiB of input on demand, split it into bounded requests,
+  and retry when the broker is backpressured. Drained paste storage is freed.
+  Responses
   are limited to 16 MiB, parser continuation to 64 KiB, and scrollback to a
   1 MiB target (terminal page granularity applies). Grid dimensions are limited
   to 512 columns by 256 rows. Kitty image storage is disabled.
@@ -209,7 +216,7 @@ experimental backend.
   OS-reported PID, user SID, integrity SID, Windows session ID, and image path.
   The image must be one of the two expected executables in the same installation
   directory. Remote pipe clients are rejected. A hello exchanges the build version
-  string; protocol version 4 includes ordered shell-exit events. After the
+  string; protocol version 5 includes exit events and input-backpressure replies. After the
   handshake, an idle connection waits indefinitely for the first header byte;
   the rest of each transfer remains bounded.
 - The console client polls at 100 ms and reconstructs the active viewport from

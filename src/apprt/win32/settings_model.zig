@@ -43,7 +43,7 @@ pub const fields = [_]Field{
     .{ .key = "mouse-hide-while-typing", .title = "Hide pointer while typing", .description = "Hide until the next mouse movement.", .category = .input, .kind = .toggle },
     .{ .key = "copy-on-select", .title = "Copy selected text", .description = "Copy selections directly to the Windows clipboard.", .category = .input, .kind = .choice, .choices = &.{ "none", "clipboard" } },
     .{ .key = "win32-input-mode", .title = "Windows keyboard compatibility", .description = "Preserve modifiers such as Shift+Enter in console apps.", .category = .input, .kind = .toggle, .restart = true },
-    .{ .key = "windows-auto-update", .title = "Automatic updates", .description = "Download daily. Install after all Yuurei instances close.", .category = .updates, .kind = .toggle },
+    .{ .key = "windows-auto-update", .title = "Automatic updates", .description = "Download daily. Install after all windows and persistent sessions close.", .category = .updates, .kind = .toggle },
     .{ .key = "windows-persistent-sessions", .title = "Persistent sessions", .description = "Keep shells running when panes close. Applies to new panes.", .category = .windows, .kind = .toggle, .restart = true },
     .{ .key = "windows-workspace", .title = "Workspace name", .description = "Separate names keep independent saved layouts. Applies after restart.", .category = .windows, .kind = .text, .restart = true },
 };

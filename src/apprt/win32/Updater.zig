@@ -188,7 +188,7 @@ pub fn click(self: *Updater, alloc: Allocator, enabled: bool) void {
     if (!self.buttonEnabled(enabled)) return;
     if (self.state == .ready) {
         self.manual_download = true;
-        self.set(.ready, "Update will install after all Yuurei instances close.");
+        self.set(.ready, "Update will install after all windows and persistent sessions close.");
         return;
     }
     const download = self.state == .available;

@@ -1,5 +1,5 @@
 #requires -Version 7.0
-param([string]$Bin="$PSScriptRoot/../../zig-out/bin")
+param([string]$Bin="$PSScriptRoot/../../zig-out/bin", [ValidateRange(1,50)][int]$Cycles=5)
 $ErrorActionPreference='Stop'
 $Bin=(Resolve-Path $Bin).Path
 $dir=Join-Path $env:TEMP ('yuurei-mux-lifecycle-'+[guid]::NewGuid().ToString('N'))
@@ -9,7 +9,7 @@ Invoke-Expression $harness.Substring($harness.IndexOf('Add-Type -AssemblyName'),
 @'
 param([string]$Marker)
 @{pid=$PID;cwd=[Environment]::CurrentDirectory;marker=$Marker;env=$env:YUUREI_MUX_TEST} | ConvertTo-Json | Set-Content "$PSScriptRoot/shell.json"
-while($true){[Console]::WriteLine("SHELL_PID=$PID MARKER=$Marker");Start-Sleep -Milliseconds 100}
+while($true){[Console]::Write("`e]2;MUX_LIFECYCLE_READY`a");[Console]::WriteLine("SHELL_PID=$PID MARKER=$Marker");Start-Sleep -Milliseconds 100}
 '@ | Set-Content "$dir/worker.ps1" -Encoding utf8
 @"
 windows-persistent-sessions = true
@@ -50,10 +50,20 @@ try{
  Start-Sleep -Milliseconds 500
  Assert ((Mux @('status',$name)|ConvertFrom-Json).shell_pid -eq $shell.pid) 'GUI crash killed hosted shell'
  Add-Content "$dir/ghostty/config" "windows-mux-session = $name"
- $gui=Start-Process "$Bin/ghostty.exe" -WindowStyle Hidden -PassThru -Environment @{LOCALAPPDATA=$dir;XDG_CONFIG_HOME=$dir;GHOSTTY_NEW_INSTANCE='1'} -RedirectStandardError "$dir/reconnect.log"
- Wait-For {[TabNative]::Windows($gui.Id).Count -eq 1} 'Reconnect window missing'
- Start-Sleep -Seconds 1
- Assert ((Mux @('status',$name)|ConvertFrom-Json).shell_pid -eq $shell.pid) 'Reattachment created a replacement shell'
+ $samples=@()
+ for($cycle=0;$cycle -lt $Cycles;$cycle++){
+  $gui=Start-Process "$Bin/ghostty.exe" -WindowStyle Hidden -PassThru -Environment @{LOCALAPPDATA=$dir;XDG_CONFIG_HOME=$dir;GHOSTTY_NEW_INSTANCE='1'} -RedirectStandardError "$dir/reconnect-$cycle.log"
+  Wait-For {[TabNative]::Windows($gui.Id).Count -eq 1} 'Reconnect window missing'
+  [void][TabNative]::ShowWindow([TabNative]::Windows($gui.Id)[0],5)
+  Wait-For {$gui.Refresh();$gui.MainWindowTitle.Contains('MUX_LIFECYCLE_READY')} 'Reattached view did not receive live output'
+  Assert ((Mux @('status',$name)|ConvertFrom-Json).shell_pid -eq $shell.pid) 'Reattachment created a replacement shell'
+  $p=Get-Process -Id $sessions[0].broker_pid
+  try{$samples+=[pscustomobject]@{cycle=$cycle;handles=$p.HandleCount;threads=$p.Threads.Count;private_bytes=$p.PrivateMemorySize64}}finally{$p.Dispose()}
+  if($cycle -lt $Cycles-1){$gui.Kill();$gui.WaitForExit();$gui.Dispose();$gui=$null;Start-Sleep -Milliseconds 200}
+ }
+ $samples|ConvertTo-Json|Set-Content "$dir/reconnects.json"
+ Assert ($samples[-1].handles -le $samples[0].handles+2 -and $samples[-1].threads -eq $samples[0].threads) 'Native reconnects leaked broker handles or threads'
+ Assert ($samples[-1].private_bytes -le $samples[0].private_bytes+4MB) 'Native reconnects retained excessive broker memory'
  Mux @('stop',$name)|Out-Null
  Wait-For {!(Get-Process -Id $shell.pid -ErrorAction SilentlyContinue)} 'Control stop with attached GUI left shell running'
  Assert (@(Mux @('list')|ConvertFrom-Json).Count -eq 0) 'Stopped session remained discoverable'

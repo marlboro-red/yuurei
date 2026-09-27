@@ -120,8 +120,10 @@ const Session = struct {
             @memcpy(bytes[0..len], self.input[0..len]);
             self.input_len = 0;
             self.input_mutex.unlock(global.io());
+            _ = SetEvent(self.output_event);
             if (self.stopping.load(.acquire)) return;
             io.transfer(self.pty.in_pipe, bytes[0..len], true) catch {
+                if (WaitForSingleObject(self.command.pid.?, 0) == 0) return;
                 self.failed.store(true, .release);
                 return;
             };
@@ -206,7 +208,7 @@ const Session = struct {
                 std.mem.writeInt(u64, &bytes, @intFromPtr(self.output_event), .little);
                 try out.writeAll(&bytes);
             },
-            .resync => return error.InvalidOperation,
+            .resync, .retry => return error.InvalidOperation,
             .events => {
                 if (payload.len != 0) return error.InvalidPayload;
                 const data = try self.journal.read(request.sequence, out.buffer);
@@ -429,6 +431,7 @@ fn connection(session: *Session, pipe: H, io: *transport.Io, identity: transport
             defer session.mutex.unlock(global.io());
             session.respond(header, payload, &writer) catch |err| switch (err) {
                 error.StaleCursor => response_op = .resync,
+                error.InputQueueFull, error.SessionExited => response_op = .retry,
                 else => return err,
             };
             ready = true;

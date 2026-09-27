@@ -940,7 +940,7 @@ fn showStripMenu(self: *Window, idx: ?usize) void {
     if (sessions.len > 0) {
         if (winapi.CreatePopupMenu()) |sm| {
             for (sessions, 0..) |entry, i| {
-                const label = std.fmt.allocPrint(session_alloc, "{s} (PID {d}){s}", .{ entry.name, entry.shell_pid, if (std.mem.eql(u8, entry.version, @import("../../build_config.zig").version_string)) "" else " [different build]" }) catch continue;
+                const label = std.fmt.allocPrint(session_alloc, "{s} (PID {d}){s}{s}", .{ entry.name, entry.shell_pid, if (entry.exited) " [exited]" else "", if (std.mem.eql(u8, entry.version, @import("../../build_config.zig").version_string)) "" else " [different build]" }) catch continue;
                 const wide = std.unicode.utf8ToUtf16LeAllocZ(session_alloc, label) catch continue;
                 _ = winapi.AppendMenuW(sm, winapi.MF_STRING, 1000 + i, wide);
             }
@@ -1027,6 +1027,9 @@ pub fn attachSession(self: *Window, name: []const u8) !void {
                 if (entry.view.core_surface.io.backend == .mux and std.mem.eql(u8, entry.view.core_surface.io.backend.mux.name, name)) {
                     if (entry.view.core_surface.io.backend.mux.disconnected.load(.acquire)) {
                         try window.reconnectSurface(entry.view);
+                        window.activateTab(index);
+                        _ = winapi.ShowWindow(window.hwnd, winapi.SW_SHOW);
+                        _ = winapi.SetForegroundWindow(window.hwnd);
                         return;
                     }
                     window.activateTab(index);

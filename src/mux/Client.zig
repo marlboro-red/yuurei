@@ -78,6 +78,7 @@ pub fn request(self: *Client, op: protocol.Op, payload: []const u8, sequence: u6
     try self.io.transfer(self.pipe, &bytes, false);
     const header = try protocol.Header.decode(&bytes, @intCast(buffer.len));
     if (header.op == .resync and header.length == 0) return error.SessionHistoryExpired;
+    if (header.op == .retry and header.length == 0) return error.SessionBackpressure;
     if (header.op != op) return error.InvalidResponse;
     try self.io.transfer(self.pipe, buffer[0..header.length], false);
     return header;

@@ -10,6 +10,7 @@ const snapshot = @import("../terminal/snapshot/main.zig");
 const Stream = @import("../terminal/stream_terminal.zig").Stream;
 const Client = @import("../mux/Client.zig");
 const Journal = @import("../mux/Journal.zig");
+const InputQueue = @import("../mux/InputQueue.zig");
 const protocol = @import("../mux/protocol.zig");
 const renderer = @import("../renderer.zig");
 const w = @import("../apprt/win32/winapi.zig");
@@ -34,8 +35,7 @@ disconnected: std.atomic.Value(bool) = .init(false),
 ended: std.atomic.Value(bool) = .init(false),
 initial_exit_code: ?u32 = null,
 mutex: std.Io.Mutex = .init,
-input: [protocol.max_request]u8 = undefined,
-input_len: usize = 0,
+input: InputQueue = .{},
 pending_size: ?[4]u8 = null,
 
 pub fn init(alloc: std.mem.Allocator, name: []const u8, launch: ?*const @import("Exec.zig")) !*Mux {
@@ -113,9 +113,12 @@ pub fn threadEnter(self: *Mux, io: *termio.Termio, td: *termio.Termio.ThreadData
         io.renderer_state.mutex.lockUncancelable(global.io());
         defer io.renderer_state.mutex.unlock(global.io());
         var message: [512]u8 = undefined;
-        const text = try std.fmt.bufPrint(&message, "Unable to attach to this session.\r\n\r\n" ++
-            "Start the broker from the same build directory and close any other\r\n" ++
-            "attached view, then reopen this pane.\r\n\r\nDetails: {s}", .{@errorName(err)});
+        const explanation = switch (err) {
+            error.SessionNotFound => "This session is no longer running.\r\nOpen a new tab to start a new shell.",
+            error.SessionBusy => "This session is attached in another window.\r\nDetach it there, then choose Reconnect Session from the tab menu.",
+            else => "Unable to connect to this session.\r\nChoose Reconnect Session from the tab menu to retry.",
+        };
+        const text = try std.fmt.bufPrint(&message, "{s}\r\n\r\nDetails: {s}", .{ explanation, @errorName(err) });
         var display = io.terminal.vtStream();
         defer display.deinit();
         display.nextSlice(text);
@@ -166,6 +169,7 @@ pub fn deinit(self: *Mux) void {
     _ = w.CloseHandle(self.stop);
     _ = w.CloseHandle(self.wake);
     self.alloc.free(self.name);
+    self.input.deinit(self.alloc);
     self.alloc.destroy(self);
 }
 
@@ -182,20 +186,11 @@ pub fn resize(self: *Mux, grid: renderer.GridSize) !void {
 }
 
 pub fn queueWrite(self: *Mux, data: []const u8, linefeed: bool) !void {
-    if (self.ended.load(.acquire)) return error.SessionExited;
-    if (self.disconnected.load(.acquire)) return error.SessionDisconnected;
     self.mutex.lockUncancelable(global.io());
     defer self.mutex.unlock(global.io());
-    const extra = if (linefeed) std.mem.count(u8, data, "\r") else 0;
-    if (data.len > self.input.len - self.input_len or extra > self.input.len - self.input_len - data.len) return error.InputQueueFull;
-    for (data) |byte| {
-        self.input[self.input_len] = byte;
-        self.input_len += 1;
-        if (linefeed and byte == '\r') {
-            self.input[self.input_len] = '\n';
-            self.input_len += 1;
-        }
-    }
+    if (self.ended.load(.acquire)) return error.SessionExited;
+    if (self.disconnected.load(.acquire)) return error.SessionDisconnected;
+    try self.input.append(self.alloc, data, linefeed);
     _ = SetEvent(self.wake);
 }
 
@@ -214,6 +209,9 @@ fn setTitle(self: *Mux, text: []const u8) void {
 
 fn showExit(self: *Mux, code: ?u32) void {
     self.ended.store(true, .release);
+    self.mutex.lockUncancelable(global.io());
+    self.input.deinit(self.alloc);
+    self.mutex.unlock(global.io());
     if (code) |value| {
         var buffer: [80]u8 = undefined;
         self.setTitle(std.fmt.bufPrint(&buffer, "Session exited (code {d})", .{value}) catch "Session exited");
@@ -243,14 +241,28 @@ fn loop(self: *Mux) !void {
     var input: [protocol.max_request]u8 = undefined;
     while (WaitForSingleObject(self.stop, 0) != 0) {
         self.mutex.lockUncancelable(global.io());
-        const len = self.input_len;
-        @memcpy(input[0..len], self.input[0..len]);
-        self.input_len = 0;
+        const len = @min(input.len, self.input.pending().len);
+        @memcpy(input[0..len], self.input.pending()[0..len]);
         const size = self.pending_size;
         self.pending_size = null;
         self.mutex.unlock(global.io());
         if (size) |bytes| _ = try self.client.?.request(.resize, &bytes, 0, buffer);
-        if (len > 0) _ = try self.client.?.request(.input, input[0..len], 0, buffer);
+        var more_input = false;
+        if (len > 0) {
+            const accepted = block: {
+                _ = self.client.?.request(.input, input[0..len], 0, buffer) catch |err| switch (err) {
+                    error.SessionBackpressure => break :block false,
+                    else => return err,
+                };
+                break :block true;
+            };
+            if (accepted) {
+                self.mutex.lockUncancelable(global.io());
+                self.input.consume(self.alloc, len);
+                more_input = self.input.pending().len > 0;
+                self.mutex.unlock(global.io());
+            }
+        }
         const reply = try self.client.?.request(.events, "", self.sequence, buffer);
         if (reply.sequence < self.sequence or reply.sequence - self.sequence != reply.length) return error.InvalidSequence;
         if (reply.length > 0) {
@@ -275,7 +287,7 @@ fn loop(self: *Mux) !void {
         }
         // Catch up immediately while output is available. Once empty, wait
         // for input, output, shutdown, or broker death without a polling timer.
-        if (reply.length == 0) {
+        if (reply.length == 0 and !more_input) {
             const handles = [_]w.HANDLE{ self.stop, self.wake, self.client.?.notification.?, self.client.?.server.? };
             switch (WaitForMultipleObjects(handles.len, &handles, 0, w.INFINITE)) {
                 0 => return,

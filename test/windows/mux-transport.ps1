@@ -12,7 +12,7 @@ using System; using System.IO; using System.IO.Pipes; using System.Text; using S
 class Probe {
  static byte[] Header(int op,int length) {
   byte[] h=new byte[24];Encoding.ASCII.GetBytes("YMUX").CopyTo(h,0);
-  h[4]=4;h[6]=(byte)op;BitConverter.GetBytes(length).CopyTo(h,8);return h;
+  h[4]=5;h[6]=(byte)op;BitConverter.GetBytes(length).CopyTo(h,8);return h;
  }
  static byte[] Read(NamedPipeClientStream p,int n) {
   byte[] b=new byte[n];int at=0;

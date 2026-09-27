@@ -282,7 +282,7 @@ function Invoke-Update($Job) {
                 [IO.File]::Delete((Get-Within $cache ($pending.tag + '.zip')))
                 return @{state='idle'; message='Update installed.'}
             }
-            return @{state='ready'; message='Update will install after all Yuurei instances close.'}
+            return @{state='ready'; message='Update will install after all windows and persistent sessions close.'}
         }
         if ($Job.mode -notin @('check','download','automatic')) { throw 'Unknown update operation.' }
         if ([IO.File]::Exists($pendingPath)) {
@@ -294,7 +294,7 @@ function Invoke-Update($Job) {
                     $lastInstall = Read-Json $installResult
                     if ($lastInstall.state -eq 'failed') { return @{state='ready'; message=($lastInstall.message + ' Will retry on exit.')} }
                 }
-                return @{state='ready'; message=($pending.tag + ' ready. Installs after all Yuurei instances close.')}
+                return @{state='ready'; message=($pending.tag + ' ready. Installs after all windows and persistent sessions close.')}
             }
         }
         $stamp = Join-Path $cache 'last-check'
@@ -331,7 +331,7 @@ function Invoke-Update($Job) {
         Write-JsonAtomic $pendingPath @{tag=$release.tag_name; sha256=$hash; manual=($Job.mode -eq 'download')}
         $installResult = Join-Path $cache 'install-result.json'
         if ([IO.File]::Exists($installResult)) { [IO.File]::Delete($installResult) }
-        return @{state='ready'; message=($release.tag_name + ' ready. Installs after all Yuurei instances close.')}
+        return @{state='ready'; message=($release.tag_name + ' ready. Installs after all windows and persistent sessions close.')}
     } finally { $lock.Dispose() }
 }
 
