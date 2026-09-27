@@ -325,6 +325,8 @@ fn save(self: *SettingsWindow) void {
     const a = arena.allocator();
     var changes: std.ArrayList(model.Change) = .empty;
     var restart = false;
+    var sessions_changed = false;
+    var workspace_changed = false;
     for (model.fields, 0..) |field, i| {
         if (!self.dirty[i]) continue;
         const raw = self.controlValue(a, i) catch {
@@ -359,6 +361,8 @@ fn save(self: *SettingsWindow) void {
             return;
         };
         restart = restart or field.restart;
+        sessions_changed = sessions_changed or std.mem.eql(u8, field.key, "windows-persistent-sessions");
+        workspace_changed = workspace_changed or std.mem.eql(u8, field.key, "windows-workspace");
     }
     model.save(a, self.path, self.baseline, changes.items) catch |err| {
         self.message(if (err == error.ConfigChanged) "Config changed externally. Revert to reload it before editing." else "Could not save the config file. Changes remain unsaved.", true);
@@ -374,7 +378,14 @@ fn save(self: *SettingsWindow) void {
     };
     self.refreshStyle();
     self.layout();
-    self.message(if (restart) "Saved. Shell and input changes apply to new terminals." else "Settings saved.", false);
+    self.message(if (workspace_changed)
+        "Saved. Reopen Yuurei to switch workspace. Other startup changes apply to new panes."
+    else if (sessions_changed)
+        "Saved. Applies to new panes. Ctrl+Shift+S opens sessions."
+    else if (restart)
+        "Saved. Shell and input changes apply to new terminals."
+    else
+        "Settings saved.", false);
     self.refreshUpdates();
 }
 fn confirmDiscard(self: *SettingsWindow) bool {

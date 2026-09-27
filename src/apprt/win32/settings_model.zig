@@ -9,7 +9,7 @@ pub const categories = [_][]const u8{ "Appearance", "Terminal", "Windows & tabs"
 pub const descriptions = [_][]const u8{
     "Themes, fonts, and transparency.",
     "Shell startup, cursor, and closing behavior.",
-    "Session restore, tab bar, and directory inheritance.",
+    "Persistent sessions, workspace restore, and tab behavior.",
     "Mouse, clipboard, and keyboard behavior.",
     "Release updates and installation status.",
 };
@@ -35,6 +35,7 @@ pub const fields = [_]Field{
     .{ .key = "cursor-style", .title = "Cursor shape", .description = "Default terminal cursor shape.", .category = .terminal, .kind = .choice, .choices = &.{ "block", "bar", "underline", "block_hollow" } },
     .{ .key = "cursor-style-blink", .title = "Blinking cursor", .description = "Enable cursor blinking.", .category = .terminal, .kind = .choice, .choices = &.{ "", "true", "false" } },
     .{ .key = "confirm-close-surface", .title = "Confirm before closing", .description = "Ask before closing a terminal with a running process.", .category = .terminal, .kind = .choice, .choices = &.{ "true", "false", "always" } },
+    .{ .key = "windows-persistent-sessions", .title = "Persistent sessions (experimental)", .description = "Keep shells after windows close. New panes only.", .category = .windows, .kind = .toggle, .restart = true },
     .{ .key = "windows-restore-session", .title = "Restore workspace on launch", .description = "Restore tabs, splits, and folders. Reattach persistent shells.", .category = .windows, .kind = .toggle },
     .{ .key = "windows-titlebar-thin", .title = "Compact tab bar", .description = "Reduce the height of the title bar.", .category = .windows, .kind = .toggle },
     .{ .key = "window-inherit-working-directory", .title = "New windows keep the folder", .description = "Start new windows in the current terminal's directory.", .category = .windows, .kind = .toggle },
@@ -44,7 +45,6 @@ pub const fields = [_]Field{
     .{ .key = "copy-on-select", .title = "Copy selected text", .description = "Copy selections directly to the Windows clipboard.", .category = .input, .kind = .choice, .choices = &.{ "none", "clipboard" } },
     .{ .key = "win32-input-mode", .title = "Windows keyboard compatibility", .description = "Preserve modifiers such as Shift+Enter in console apps.", .category = .input, .kind = .toggle, .restart = true },
     .{ .key = "windows-auto-update", .title = "Automatic updates", .description = "Download daily. Install after all windows and persistent sessions close.", .category = .updates, .kind = .toggle },
-    .{ .key = "windows-persistent-sessions", .title = "Persistent sessions", .description = "Keep shells running when panes close. Applies to new panes.", .category = .windows, .kind = .toggle, .restart = true },
     .{ .key = "windows-workspace", .title = "Workspace name", .description = "Separate names keep independent saved layouts. Applies after restart.", .category = .windows, .kind = .text, .restart = true },
 };
 
@@ -238,8 +238,8 @@ test "windows settings validation and search" {
     try std.testing.expectError(error.InvalidValue, validate(std.testing.allocator, 2, "nan"));
     try std.testing.expectError(error.InvalidValue, validate(std.testing.allocator, 3, "1.5"));
     try std.testing.expectError(error.InvalidValue, validate(std.testing.allocator, 6, "pwsh\ncommand=cmd"));
-    try std.testing.expect(matches(fields[13], "WINDOW folder"));
-    try std.testing.expect(!matches(fields[13], "font"));
+    try std.testing.expect(matches(fields[14], "WINDOW folder"));
+    try std.testing.expect(!matches(fields[14], "font"));
 }
 
 test "windows settings choices use supported config values" {

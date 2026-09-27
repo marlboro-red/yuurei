@@ -78,7 +78,11 @@ own harness. Release installation and automatic updates stay untouched.
 
 ## Build and exercise
 
-Enable **Settings → Windows & tabs → Persistent sessions** for new panes, or
+Enable **Settings → Windows & tabs → Persistent sessions (experimental)** and
+select **Save changes**. The setting is off by default and applies to new tabs
+and splits; existing shells are unchanged. Yuurei starts the background helper
+automatically. **Ctrl+Shift+S** opens the session picker. Disabling the setting
+does not terminate existing persistent sessions. Alternatively,
 set `windows-persistent-sessions = true`. Normal Windows builds now include the
 matching `yuurei-mux.exe`. Each new tab/split starts an independent named broker
 using the usual prepared command, environment, shell integration, and working

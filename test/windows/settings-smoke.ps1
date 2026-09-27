@@ -371,24 +371,34 @@ try {
     Assert ([IO.File]::ReadAllText($config).Contains('theme = Catppuccin Mocha')) 'Theme choice did not save'
     Edit 10 'folder'
     Assert (![SettingsNative]::IsWindowVisible((Control 102))) 'Search did not hide nonmatching controls'
-    Assert ([SettingsNative]::IsWindowVisible((Control 113))) 'Search did not find folder inheritance'
+    Assert ([SettingsNative]::IsWindowVisible((Control 114))) 'Search did not find folder inheritance'
     Capture 'search'
     Edit 10 'this-setting-does-not-exist'
     Capture 'empty-search'
     Edit 10 ''
     Click 22
     Capture 'windows-tabs'
+    Assert ([SettingsNative]::IsWindowVisible((Control 111))) 'Persistent sessions should be on the first Windows settings page'
+    Assert ([SettingsNative]::SendMessage((Control 111), 0xF0, 0, 0) -eq 0) 'Persistent sessions should default to off'
+    Click 111
+    Click 11
+    Assert ([IO.File]::ReadAllText($config).Contains('windows-persistent-sessions = true')) 'Enabling persistent sessions did not save'
+    Assert ([SettingsNative]::SendMessage((Control 111), 0xF0, 0, 0) -eq 1) 'Persistent sessions did not remain enabled after reload'
+    Capture 'persistent-sessions'
+    Click 111
+    Click 11
+    Assert ([IO.File]::ReadAllText($config).Contains('windows-persistent-sessions = false')) 'Disabling persistent sessions did not save'
     Click 23
-    $beforeToggle = [SettingsNative]::SendMessage((Control 116), 0xF0, 0, 0)
-    Click 116
-    Assert ([SettingsNative]::SendMessage((Control 116), 0xF0, 0, 0) -ne $beforeToggle) 'Native toggle did not change state'
-    [void][SettingsNative]::SendMessage($script:settings, 0x28, (Control 116), 1)
-    [void][SettingsNative]::PostMessage((Control 116), 0x100, 0x20, 0)
-    [void][SettingsNative]::PostMessage((Control 116), 0x101, 0x20, 0)
+    $beforeToggle = [SettingsNative]::SendMessage((Control 117), 0xF0, 0, 0)
+    Click 117
+    Assert ([SettingsNative]::SendMessage((Control 117), 0xF0, 0, 0) -ne $beforeToggle) 'Native toggle did not change state'
+    [void][SettingsNative]::SendMessage($script:settings, 0x28, (Control 117), 1)
+    [void][SettingsNative]::PostMessage((Control 117), 0x100, 0x20, 0)
+    [void][SettingsNative]::PostMessage((Control 117), 0x101, 0x20, 0)
     Start-Sleep -Milliseconds 100
-    Assert ([SettingsNative]::SendMessage((Control 116), 0xF0, 0, 0) -eq $beforeToggle) 'Space should toggle a focused checkbox'
+    Assert ([SettingsNative]::SendMessage((Control 117), 0xF0, 0, 0) -eq $beforeToggle) 'Space should toggle a focused checkbox'
     Capture 'input'
-    Edit 117 'To clipboard'
+    Edit 118 'To clipboard'
     Click 11
     Assert ([IO.File]::ReadAllText($config).Contains('copy-on-select = clipboard')) 'Friendly choice label was not converted to config value'
     Click 21
