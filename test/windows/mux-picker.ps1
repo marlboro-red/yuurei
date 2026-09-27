@@ -1,5 +1,6 @@
 #requires -Version 7.0
-param([string]$Bin="$PSScriptRoot/../../zig-out/bin")
+# PostedKeys avoids global SendInput for runs on an isolated Windows desktop.
+param([string]$Bin="$PSScriptRoot/../../zig-out/bin",[switch]$PostedKeys)
 $ErrorActionPreference='Stop'
 $Bin=(Resolve-Path $Bin).Path
 $dir=Join-Path $env:TEMP ('yuurei-mux-picker-'+[guid]::NewGuid().ToString('N'))
@@ -9,6 +10,9 @@ Invoke-Expression $harness.Substring($harness.IndexOf('Add-Type -AssemblyName'),
 Add-Type @'
 using System; using System.Text; using System.Runtime.InteropServices;
 public static class SessionNative {
+ [StructLayout(LayoutKind.Sequential)] public struct Rect { public int left,top,right,bottom; }
+ [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h,out Rect rect);
+ [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint flags);
  [StructLayout(LayoutKind.Explicit,Size=40)] struct Input {
   [FieldOffset(0)] public uint type;
   [FieldOffset(8)] public ushort key;
@@ -29,7 +33,7 @@ public static class SessionNative {
  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h,StringBuilder b,int n);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h,StringBuilder b,int n);
- public static IntPtr Palette(uint pid){IntPtr found=IntPtr.Zero;EnumWindows((h,p)=>{uint owner;GetWindowThreadProcessId(h,out owner);var b=new StringBuilder(128);GetClassName(h,b,128);if(owner==pid&&b.ToString()=="ghostty-palette")found=h;return true;},IntPtr.Zero);return found;}
+ public static IntPtr Palette(uint pid){return Find(pid,"ghostty-palette");} public static IntPtr Dialog(uint pid){return Find(pid,"#32770");} static IntPtr Find(uint pid,string windowClass){IntPtr found=IntPtr.Zero;EnumWindows((h,p)=>{uint owner;GetWindowThreadProcessId(h,out owner);var b=new StringBuilder(128);GetClassName(h,b,128);if(owner==pid&&b.ToString()==windowClass)found=h;return true;},IntPtr.Zero);return found;}
  public static string Title(IntPtr h){var b=new StringBuilder(512);GetWindowText(h,b,512);return b.ToString();}
 }
 '@
@@ -45,8 +49,11 @@ confirm-close-surface = false
 command = pwsh.exe -NoLogo -NoProfile -File "$($dir.Replace('\','\\'))/worker.ps1"
 keybind = f3=session:list
 keybind = f4=new_tab
+keybind = f5=new_split:right
+keybind = f1=toggle_fullscreen
 keybind = f6=session:rename
 keybind = f7=session:detach
+keybind = f8=session:terminate
 keybind = f9=toggle_command_palette
 keybind = f10=text:x
 keybind = f11>f12=session:list
@@ -61,7 +68,16 @@ function Mux([string[]]$Arguments){
 function Launch([string]$Log){Start-Process "$Bin/ghostty.exe" -WindowStyle Hidden -PassThru -Environment @{LOCALAPPDATA=$dir;XDG_CONFIG_HOME=$dir;GHOSTTY_NEW_INSTANCE='1'} -RedirectStandardError "$dir/$Log.log"}
 function Palette(){Wait-For {[SessionNative]::Palette($gui.Id) -ne 0} 'Session picker missing';return [SessionNative]::Palette($gui.Id)}
 function SendText($H,[string]$Text){foreach($ch in $Text.ToCharArray()){[void][SessionNative]::PostMessageW($H,0x102,[int]$ch,0)};Start-Sleep -Milliseconds 100}
-function Screenshot($H,[string]$Name){$r=New-Object TabNative+Rect;[void][TabNative]::GetWindowRect($H,[ref]$r);$bitmap=[Drawing.Bitmap]::new($r.right-$r.left,$r.bottom-$r.top);$g=[Drawing.Graphics]::FromImage($bitmap);try{$g.CopyFromScreen($r.left,$r.top,0,0,$bitmap.Size);$bitmap.Save("$dir/$Name.png")}finally{$g.Dispose();$bitmap.Dispose()}}
+function Assert-BarSpace($H){
+ $client=New-Object SessionNative+Rect;[void][SessionNative]::GetClientRect($H,[ref]$client)
+ $height=[int](26*[TabNative]::GetDpiForWindow($H)/96)
+ foreach($hostWindow in [TabNative]::Hosts($H,$true)){
+  $r=New-Object TabNative+Rect;[void][TabNative]::GetWindowRect($hostWindow,[ref]$r)
+  $point=New-Object TabNative+Point;$point.x=$r.right;$point.y=$r.bottom;[void][TabNative]::ScreenToClient($H,[ref]$point)
+  Assert ($point.y -le $client.bottom-$height) 'Terminal overlaps the session bar'
+ }
+}
+function Screenshot($H,[string]$Name){$r=New-Object TabNative+Rect;[void][TabNative]::GetWindowRect($H,[ref]$r);$bitmap=[Drawing.Bitmap]::new($r.right-$r.left,$r.bottom-$r.top);$g=[Drawing.Graphics]::FromImage($bitmap);try{if($PostedKeys){$dc=$g.GetHdc();try{[void][SessionNative]::PrintWindow($H,$dc,2)}finally{$g.ReleaseHdc($dc)}}else{$g.CopyFromScreen($r.left,$r.top,0,0,$bitmap.Size)};$bitmap.Save("$dir/$Name.png")}finally{$g.Dispose();$bitmap.Dispose()}}
 $gui=$null
 try{
  $gui=Launch 'initial'
@@ -79,8 +95,20 @@ try{
  Wait-For {@(Mux @('list')|ConvertFrom-Json).Count -eq 2} 'Second session missing'
  $second=@(Mux @('list')|ConvertFrom-Json)|Where-Object name -ne $first.name
  Mux @('rename',$second.name,'Frontend')|Out-Null
+ Key $window 0x74 # F5 split: each pane owns a distinct session
+ Wait-For {@(Mux @('list')|ConvertFrom-Json).Count -eq 3} 'Split session missing'
+ $split=@(Mux @('list')|ConvertFrom-Json)|Where-Object { $_.name -ne $first.name -and $_.name -ne $second.name }
+ Assert-BarSpace $window
+ Key $window 0x70;Assert-BarSpace $window;Screenshot $window 'fullscreen-session-bar';Key $window 0x70
+ Key $window 0x77 # F8: end only the selected split
+ Screenshot $window 'end-split-confirmation';Key $window 0x59
+ Wait-For {@(Mux @('list')|ConvertFrom-Json).Count -eq 2} 'Ending a split left its broker registered'
+ Wait-For {!(Get-Process -Id $split.shell_pid -ErrorAction SilentlyContinue)} 'Split shell survived termination'
+ Assert (!(Mux @('status',$second.name)|ConvertFrom-Json).exited) 'Ending a split stopped its sibling'
+ Assert-BarSpace $window
  [void][TabNative]::SetForegroundWindow($window)
- [SessionNative]::OpenDefaultPicker($window) # Actual default Ctrl+Shift+S
+ Start-Sleep -Milliseconds 200
+ if($PostedKeys){Key $window 0x72}else{[SessionNative]::OpenDefaultPicker($window)} # Actual default Ctrl+Shift+S in interactive mode
  $picker=Palette;Screenshot $picker 'sessions'
  Key $picker 0x28;Key $picker 0x0D # Down, Enter -> Frontend
  Wait-For {[SessionNative]::Title($window).Contains("SESSION_PID=$($second.shell_pid)")} 'Arrow navigation selected wrong session'
@@ -109,7 +137,30 @@ try{
  $picker=Palette;SendText $picker '日本語';Screenshot $picker 'after-restart';Key $picker 0x0D
  Wait-For {[SessionNative]::Title($window).Contains("SESSION_PID=$($first.shell_pid)")} 'Named session was lost after GUI restart'
  Assert ((@(Mux @('list')|ConvertFrom-Json)|Where-Object name -eq $first.name).label -eq 'API 日本語') 'Name did not survive GUI restart'
- Write-Output "PASS: keyboard session picker, fuzzy search, arrows, remappable actions, Unicode rename, empty-name rejection, detach/reattach, original PID/input, command-palette entry and GUI restart. Artifacts: $dir"
+ # End a detached session directly from the picker using the inline bar.
+ # Enter must not confirm; Escape must leave both sessions intact.
+ Key $window 0x72;$picker=Palette;SendText $picker 'Frontend';Key $picker 0x2E
+ Assert ([SessionNative]::Dialog($gui.Id) -eq 0) 'Session confirmation opened a Windows dialog'
+ Screenshot $window 'end-detached-confirmation'
+ Key $window 0x0D;Key $window 0x1B
+ Assert (@(Mux @('list')|ConvertFrom-Json).Count -eq 2) 'Enter or Escape ended a session'
+ Assert ((Get-Content "$dir/$($first.shell_pid).input") -eq 'x') 'Confirmation keys leaked into the shell'
+ Key $window 0x72;$picker=Palette;SendText $picker 'Frontend';Key $picker 0x2E;Key $window 0x59
+ Wait-For {@(Mux @('list')|ConvertFrom-Json).Count -eq 1} 'Delete and Y did not remove detached session'
+ Wait-For {!(Get-Process -Id $second.shell_pid -ErrorAction SilentlyContinue)} 'Detached shell survived termination'
+ Assert (!(Mux @('status',$first.name)|ConvertFrom-Json).exited) 'Ending detached session stopped another session'
+ Assert ((Get-Content "$dir/$($first.shell_pid).input") -eq 'x') 'Confirmation Y leaked into another shell'
+ # Command palette exposes the action; Esc cancels it. A remapped action
+ # then ends the current session and closes its last pane.
+ Key $window 0x78;$picker=Palette;SendText $picker 'End Session';Key $picker 0x0D
+ Assert ([SessionNative]::Dialog($gui.Id) -eq 0) 'Command action opened a Windows dialog'
+ Key $window 0x1B
+ Assert (@(Mux @('list')|ConvertFrom-Json).Count -eq 1) 'Escape ended the active session'
+ Key $window 0x77;Screenshot $window 'end-active-confirmation';Key $window 0x59
+ Wait-For {@(Mux @('list')|ConvertFrom-Json).Count -eq 0} 'Remapped terminate action left its broker registered'
+ Wait-For {!(Get-Process -Id $first.shell_pid -ErrorAction SilentlyContinue)} 'Active shell survived termination'
+ Wait-For {$gui.HasExited} 'Ending the last session did not close its pane'
+ Write-Output "PASS: session picker, Unicode rename, detach/reattach, GUI restart, inline cancellation and termination, split isolation, fullscreen bar geometry, and confirmation input isolation. Artifacts: $dir"
 }finally{
  if($gui){if(!$gui.HasExited){$gui.Kill();$gui.WaitForExit()};$gui.Dispose()}
  foreach($entry in @(Mux @('list')|ConvertFrom-Json)){try{Mux @('stop',$entry.name)|Out-Null}catch{}}

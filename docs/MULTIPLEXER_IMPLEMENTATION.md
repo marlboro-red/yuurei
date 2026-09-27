@@ -91,7 +91,7 @@ if the parent job forbids breakaway, startup fails visibly instead of claiming
 the session will survive its GUI.
 
 Closing a persistent tab detaches it. The tab context menu offers **Attach
-Session**, **Detach Tab**, and **Terminate Focused Session** (confirmation
+Session**, **Detach Tab**, and **End Session…** (confirmation
 required). Attaching a session already visible in the current process focuses
 that pane. Discovery validates process creation times and installation identity;
 pipe authentication/version checks remain authoritative.
@@ -101,6 +101,18 @@ pipe authentication/version checks remain authoritative.
 **Ctrl+Shift+S** opens the session picker. Type to fuzzy-search names, IDs, or
 PIDs; use **Up/Down**, **Ctrl+P/Ctrl+N**, or **Page Up/Page Down** to navigate.
 **Enter** focuses an existing local pane or attaches a detached session.
+**Delete** ends the selected session, including a detached or exited session,
+without attaching it first. The bottom session bar asks for confirmation:
+press **Y** to end the named session, or **Esc** / **N** to cancel. Enter does
+not confirm. Confirmation keys are consumed instead of being sent to a shell.
+Persistent tabs show the current pane's session name, state, and shell PID in
+this bar. It follows pane focus, stays visible in fullscreen, and uses the
+terminal's colors. There is no background polling or extra rendering thread.
+The command palette also provides **End Session…** for the current pane.
+Bind `session:terminate` to a preferred shortcut, for example
+`keybind = ctrl+b>x=session:terminate`. Ending a session stops its shell and
+running programs and removes it from the session list; closing a pane only
+detaches it.
 **F2** renames the selected session; type a name and press **Enter** to save,
 or **Escape** to cancel. **F5** refreshes discovery without clearing the search.
 **Escape** closes the picker. No discovery polling runs while it is closed.

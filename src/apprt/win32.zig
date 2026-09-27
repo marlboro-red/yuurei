@@ -17,5 +17,6 @@ test {
     _ = @import("win32/instance.zig");
     _ = @import("win32/Updater.zig");
     _ = @import("win32/settings_model.zig");
+    _ = @import("win32/SessionBar.zig");
     @import("std").testing.refAllDecls(@This());
 }

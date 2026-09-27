@@ -21,6 +21,7 @@ const SearchBar = @import("SearchBar.zig");
 const winapi = @import("winapi.zig");
 const perf = @import("../../perf.zig");
 const key_text = @import("key_text.zig");
+const SessionBar = @import("SessionBar.zig");
 
 const log = std.log.scoped(.win32);
 
@@ -167,6 +168,9 @@ profile_menu_closed_ms: i64 = 0,
 
 /// The search bar while a search is active.
 search: ?*SearchBar = null,
+session_bar: SessionBar = .{},
+session_font: ?*anyopaque = null,
+session_font_dpi: u32 = 0,
 
 /// Whether window-level transparency is currently applied; toggled by
 /// toggle_background_opacity on windows that start transparent.
@@ -426,6 +430,7 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
 /// inside the window procedure.
 pub fn destroy(self: *Window) void {
     const alloc = self.app.core_app.alloc;
+    if (self.session_font) |font| _ = winapi.DeleteObject(font);
     if (self.tab_drag != null) self.updateTabDrop(null);
     self.rename_buf.deinit(alloc);
     if (self.strip_buf) |*buf| buf.deinit();
@@ -818,6 +823,10 @@ pub fn togglePalette(self: *Window) !void {
 pub fn performSessionAction(self: *Window, action: @FieldType(input.Binding.Action, "session")) !bool {
     const surface = self.activeSurface() orelse return false;
     if (action != .list and surface.core_surface.io.backend != .mux) return false;
+    if (action == .terminate) {
+        self.terminateSession(surface);
+        return true;
+    }
     if (action == .detach) {
         surface.should_close = true;
         self.app.wakeup();
@@ -946,7 +955,7 @@ fn showStripMenu(self: *Window, idx: ?usize) void {
         _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 1, S("Rename\u{2026}"));
         const persistent = self.tabs.items[idx.?].focused.core_surface.io.backend == .mux;
         _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 2, if (persistent) S("Detach Tab") else S("Close Tab"));
-        if (persistent) _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 15, S("Terminate Focused Session\u{2026}"));
+        if (persistent) _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 15, S("End Session\u{2026}"));
         if (persistent and self.tabs.items[idx.?].focused.core_surface.io.backend.mux.disconnected.load(.acquire))
             _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 16, S("Reconnect Session"));
         if (self.tabs.items.len > 1)
@@ -1095,21 +1104,50 @@ fn reconnectSurface(self: *Window, surface: *Surface) !void {
 
 fn terminateSession(self: *Window, surface: *Surface) void {
     if (surface.core_surface.io.backend != .mux) return;
-    if (winapi.MessageBoxW(self.hwnd, std.unicode.utf8ToUtf16LeStringLiteral("Terminate this session and its running processes?"), std.unicode.utf8ToUtf16LeStringLiteral("Yuurei"), winapi.MB_YESNO | winapi.MB_ICONWARNING | winapi.MB_DEFBUTTON2) != winapi.IDYES) return;
-    var client = @import("../../mux/Client.zig").initControl(surface.core_surface.io.backend.mux.name, null) catch |err| {
+    var arena = std.heap.ArenaAllocator.init(self.app.core_app.alloc);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const name = alloc.dupe(u8, surface.core_surface.io.backend.mux.name) catch return;
+    const entries = @import("../../mux/Registry.zig").list(alloc) catch &.{};
+    const label = for (entries) |entry| {
+        if (std.mem.eql(u8, entry.name, name) and entry.label.len > 0) break entry.label;
+    } else name;
+    self.endSession(name, label);
+}
+
+pub fn endSession(self: *Window, name: []const u8, label: []const u8) void {
+    self.session_bar.begin(name, label);
+    self.layoutActiveTab();
+    _ = winapi.SetFocus(self.hwnd);
+}
+
+fn confirmEndSession(self: *Window) void {
+    const target = self.session_bar.pending orelse return;
+    self.session_bar.cancel();
+    var client = @import("../../mux/Client.zig").initControl(target.name(), null) catch |err| {
         log.err("session termination failed: {}", .{err});
+        self.session_bar.failed = true;
+        self.invalidateSessionBar();
         return;
     };
     defer client.deinit();
     var buffer: [256]u8 = undefined;
     _ = client.request(.stop, "", 0, &buffer) catch |err| {
         log.err("session termination failed: {}", .{err});
+        self.session_bar.failed = true;
+        self.invalidateSessionBar();
         return;
     };
-    surface.should_close = true;
+    for (self.app.windows.items) |window| for (window.tabs.items) |tab| {
+        var iterator = tab.tree.iterator();
+        while (iterator.next()) |entry| {
+            const surface = entry.view;
+            if (surface.core_surface.io.backend == .mux and std.mem.eql(u8, surface.core_surface.io.backend.mux.name, target.name())) surface.should_close = true;
+        }
+    };
+    self.layoutActiveTab();
     self.app.wakeup();
 }
-
 /// Begin an in-strip rename of tab `idx`: the tab becomes an editable
 /// field pre-filled with the current title. The window proc captures
 /// keys while active (Enter commits, Escape cancels, Backspace edits).
@@ -1433,13 +1471,14 @@ pub fn focusSurface(self: *Window, surface: *Surface) void {
 pub fn layoutActiveTab(self: *Window) void {
     session.changed(self.app);
     const tab = self.activeTab() orelse return;
+    self.refreshSessionBar(false);
     const alloc = self.app.core_app.alloc;
 
     var client: winapi.RECT = undefined;
     _ = winapi.GetClientRect(self.hwnd, &client);
     const strip = self.titlebarHeight();
     const area_w: f32 = @floatFromInt(@max(0, client.right - client.left));
-    const area_h: f32 = @floatFromInt(@max(0, client.bottom - client.top - strip));
+    const area_h: f32 = @floatFromInt(@max(0, client.bottom - client.top - strip - self.sessionBarHeight()));
 
     var sp = tab.tree.spatial(alloc) catch |err| {
         log.err("error computing split layout err={}", .{err});
@@ -1544,7 +1583,8 @@ fn dividerAt(self: *Window, x: i32, y: i32) ?DividerHit {
     _ = winapi.GetClientRect(self.hwnd, &client);
     const strip = self.titlebarHeight();
     const area_w: f32 = @floatFromInt(@max(1, client.right - client.left));
-    const area_h: f32 = @floatFromInt(@max(1, client.bottom - client.top - strip));
+    const area_h: f32 = @floatFromInt(@max(1, client.bottom - client.top - strip - self.sessionBarHeight()));
+    if (y >= client.bottom - self.sessionBarHeight()) return null;
     const grab = self.scale(4);
 
     var sp = tab.tree.spatial(alloc) catch return null;
@@ -1715,7 +1755,7 @@ pub fn toggleSplitZoom(self: *Window) void {
             0,
             strip,
             client.right - client.left,
-            @max(0, client.bottom - client.top - strip),
+            @max(0, client.bottom - client.top - strip - self.sessionBarHeight()),
             winapi.SWP_NOZORDER | winapi.SWP_NOACTIVATE,
         );
         const size = tab.focused.getSize() catch break :zoomed;
@@ -1743,7 +1783,7 @@ pub fn resizeSplit(self: *Window, value: apprt.action.ResizeSplit) void {
     };
     const span: f32 = switch (layout) {
         .horizontal => @floatFromInt(@max(1, client.right - client.left)),
-        .vertical => @floatFromInt(@max(1, client.bottom - client.top - strip)),
+        .vertical => @floatFromInt(@max(1, client.bottom - client.top - strip - self.sessionBarHeight())),
     };
     const ratio: f16 = @floatCast(sign * @as(f32, @floatFromInt(value.amount)) / span);
 
@@ -1801,6 +1841,95 @@ pub fn syncTitle(self: *Window) void {
     buf[len] = 0;
     _ = winapi.SetWindowTextW(self.hwnd, buf[0..len :0]);
     self.invalidateStrip();
+    self.refreshSessionBar(false);
+}
+
+pub fn refreshSessionBar(self: *Window, force: bool) void {
+    const surface = self.activeSurface() orelse return;
+    const name = if (surface.core_surface.io.backend == .mux) surface.core_surface.io.backend.mux.name else "";
+    self.session_bar.refresh(self.app.core_app.alloc, name, force);
+    self.invalidateSessionBar();
+}
+
+fn sessionBarHeight(self: *Window) i32 {
+    if (self.session_bar.pending != null or self.session_bar.failed) return self.scale(26);
+    const tab = self.activeTab() orelse return 0;
+    var iterator = tab.tree.iterator();
+    while (iterator.next()) |entry| if (entry.view.core_surface.io.backend == .mux) return self.scale(26);
+    return 0;
+}
+
+pub fn invalidateSessionBar(self: *Window) void {
+    const height = self.sessionBarHeight();
+    if (height == 0) return;
+    var rect: winapi.RECT = undefined;
+    _ = winapi.GetClientRect(self.hwnd, &rect);
+    rect.top = @max(0, rect.bottom - height);
+    _ = winapi.InvalidateRect(self.hwnd, &rect, winapi.FALSE);
+}
+
+fn paintSessionBar(self: *Window, hdc: winapi.HDC) void {
+    const height = self.sessionBarHeight();
+    if (height == 0) return;
+    var rect: winapi.RECT = undefined;
+    _ = winapi.GetClientRect(self.hwnd, &rect);
+    rect.top = @max(0, rect.bottom - height);
+    const fg = self.app.config.foreground;
+    const bg = self.app.config.background;
+    const color: u32 = @as(u32, fg.b) << 16 | @as(u32, fg.g) << 8 | fg.r;
+    const background: u32 = @as(u32, bg.b) << 16 | @as(u32, bg.g) << 8 | bg.r;
+    if (winapi.CreateSolidBrush(color)) |brush| {
+        defer _ = winapi.DeleteObject(brush);
+        _ = winapi.FillRect(hdc, &rect, brush);
+    }
+    const dpi = winapi.GetDpiForWindow(self.hwnd);
+    if (self.session_font == null or self.session_font_dpi != dpi) {
+        if (self.session_font) |font| _ = winapi.DeleteObject(font);
+        self.session_font = winapi.CreateFontW(-self.scale(12), 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 5, 0, std.unicode.utf8ToUtf16LeStringLiteral("Consolas"));
+        self.session_font_dpi = dpi;
+    }
+    const previous = if (self.session_font) |font| winapi.SelectObject(hdc, font) else null;
+    defer if (previous) |font| {
+        _ = winapi.SelectObject(hdc, font);
+    };
+    _ = winapi.SetBkMode(hdc, winapi.TRANSPARENT_BK);
+    _ = winapi.SetTextColor(hdc, background);
+    var text_buffer: [512]u8 = undefined;
+    const content = if (self.session_bar.pending) |target|
+        std.fmt.bufPrint(&text_buffer, "End session \"{s}\" and its programs?", .{target.title()}) catch "End session?"
+    else if (self.session_bar.failed)
+        "Unable to end session. Refresh the session list and retry."
+    else normal: {
+        const surface = self.activeSurface() orelse break :normal "";
+        if (surface.core_surface.io.backend != .mux) break :normal "Local pane";
+        const mux = surface.core_surface.io.backend.mux;
+        const state: []const u8 = if (mux.ended.load(.acquire)) "exited" else if (mux.disconnected.load(.acquire)) "disconnected" else "running";
+        break :normal std.fmt.bufPrint(&text_buffer, " {s} | {s} | PID {d}", .{ self.session_bar.current.title(), state, self.session_bar.shell_pid }) catch "Session";
+    };
+    const hint: []const u8 = if (self.session_bar.pending != null) "Y: end  Esc: cancel" else if (self.session_bar.failed) "Esc: dismiss" else "Ctrl+Shift+S: sessions";
+    const hint_width = @min(self.scale(186), @divTrunc(rect.right, 2));
+    var left = rect;
+    left.left += self.scale(8);
+    left.right -= hint_width + self.scale(12);
+    var right = rect;
+    right.left = left.right + self.scale(8);
+    right.right -= self.scale(8);
+    var wide: [513]u16 = undefined;
+    const flags = winapi.DT_SINGLELINE | winapi.DT_VCENTER | winapi.DT_END_ELLIPSIS | winapi.DT_NOPREFIX;
+    const n = std.unicode.utf8ToUtf16Le(&wide, content) catch 0;
+    wide[n] = 0;
+    _ = winapi.DrawTextW(hdc, wide[0..n :0], @intCast(n), &left, flags);
+    const hint_n = std.unicode.utf8ToUtf16Le(&wide, hint) catch 0;
+    wide[hint_n] = 0;
+    _ = winapi.DrawTextW(hdc, wide[0..hint_n :0], @intCast(hint_n), &right, flags | winapi.DT_RIGHT);
+}
+
+fn inSessionBar(self: *Window, y: i32) bool {
+    const height = self.sessionBarHeight();
+    if (height == 0) return false;
+    var rect: winapi.RECT = undefined;
+    _ = winapi.GetClientRect(self.hwnd, &rect);
+    return y >= rect.bottom - height and y < rect.bottom;
 }
 
 /// Resolve the effective theme (config, falling back to the OS):
@@ -3265,7 +3394,10 @@ pub fn wndProc(
             var below_strip = false;
             if (winapi.BeginPaint(hwnd, &ps)) |hdc| {
                 const strip_h = self.titlebarHeight();
-                below_strip = ps.rcPaint.bottom > strip_h;
+                var bounds: winapi.RECT = undefined;
+                _ = winapi.GetClientRect(hwnd, &bounds);
+                const bar_top = bounds.bottom - self.sessionBarHeight();
+                below_strip = ps.rcPaint.bottom > strip_h and ps.rcPaint.top < bar_top;
 
                 if (ps.rcPaint.top < strip_h) self.paintTitlebarBuffered(hdc);
 
@@ -3292,6 +3424,8 @@ pub fn wndProc(
                         _ = winapi.FillRect(hdc, &area, brush);
                     }
                 }
+
+                if (ps.rcPaint.bottom > bar_top) self.paintSessionBar(hdc);
 
                 _ = winapi.EndPaint(hwnd, &ps);
             }
@@ -3495,7 +3629,7 @@ pub fn wndProc(
                 var pt: winapi.POINT = undefined;
                 if (winapi.GetCursorPos(&pt) == 0) break :cursor;
                 _ = winapi.ScreenToClient(hwnd, &pt);
-                if (pt.y < self.titlebarHeight()) {
+                if (pt.y < self.titlebarHeight() or self.inSessionBar(pt.y)) {
                     // Keep a normal arrow over the strip; otherwise the
                     // terminal's I-beam lingers there.
                     if (winapi.loadSystemCursor(winapi.IDC_ARROW)) |c| {
@@ -3606,6 +3740,31 @@ pub fn wndProc(
         winapi.WM_SYSKEYDOWN,
         winapi.WM_SYSKEYUP,
         => {
+            const vk: u8 = @truncate(wparam);
+            const released = msg == winapi.WM_KEYUP or msg == winapi.WM_SYSKEYUP;
+            if (self.session_bar.pending != null or self.session_bar.failed or self.session_bar.captured[vk]) {
+                if (msg == winapi.WM_SYSKEYDOWN or msg == winapi.WM_SYSKEYUP)
+                    return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
+                if (released) {
+                    self.session_bar.captured[vk] = false;
+                    return 0;
+                }
+                // Drain TranslateMessage's paired text before changing the
+                // prompt state. Confirmation text must never reach the PTY.
+                const alloc = self.app.core_app.alloc;
+                const text = key_text.take(alloc, hwnd) catch null;
+                if (text) |value| alloc.free(value);
+                _ = key_text.takeDead(hwnd);
+                const repeated = self.session_bar.captured[vk] or (lparam & (1 << 30)) != 0;
+                self.session_bar.captured[vk] = true;
+                if (!repeated and winapi.GetKeyState(winapi.VK_CONTROL) >= 0 and winapi.GetKeyState(winapi.VK_MENU) >= 0) {
+                    if (vk == 'Y' and self.session_bar.pending != null) self.confirmEndSession() else if (vk == winapi.VK_ESCAPE or vk == 'N') {
+                        self.session_bar.cancel();
+                        self.layoutActiveTab();
+                    }
+                }
+                return 0;
+            }
             // While renaming a tab, the window captures the keyboard:
             // Enter/Escape/paste act on the rename, and nothing —
             // including releases and sys keys — reaches the terminal.
@@ -3635,6 +3794,7 @@ pub fn wndProc(
         },
 
         winapi.WM_CHAR => {
+            if (self.session_bar.pending != null or self.session_bar.failed) return 0;
             if (self.renameChar(@truncate(wparam))) return 0;
             self.charEvent(@truncate(wparam));
             return 0;
@@ -3653,6 +3813,7 @@ pub fn wndProc(
             };
             _ = winapi.ScreenToClient(hwnd, &pt);
             const delta: i16 = @bitCast(@as(u16, @truncate(wparam >> 16)));
+            if (self.inSessionBar(pt.y)) return 0;
 
             // Wheel over the strip scrolls the tab strip when it
             // overflows (up/left reveals earlier tabs).
@@ -3720,6 +3881,7 @@ pub fn wndProc(
                 else => return 1,
             };
             const cy = lparamY(lparam);
+            if (self.inSessionBar(cy) and winapi.GetCapture() != hwnd) return 1;
             if (cy >= 0 and cy < self.titlebarHeight()) return 1;
             const surface = self.surfaceAt(lparamX(lparam), cy) orelse
                 self.activeSurface() orelse return 1;
@@ -3918,6 +4080,10 @@ pub fn wndProc(
             // Clicks in the strip operate tabs/buttons, never the
             // terminal.
             const cy = lparamY(lparam);
+            if (!surface_release and self.inSessionBar(cy)) {
+                _ = winapi.SetFocus(hwnd);
+                return 0;
+            }
             if (!surface_release and cy >= 0 and cy < self.titlebarHeight()) {
                 // Tabs activate on press, like native tab strips, and
                 // the press begins a possible drag-reorder.

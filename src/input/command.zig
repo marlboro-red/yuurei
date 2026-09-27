@@ -743,6 +743,7 @@ fn actionCommands(action: Action.Key) []const Command {
             .{ .action = .{ .session = .list }, .title = "Switch Session", .description = "Search and attach persistent sessions" },
             .{ .action = .{ .session = .rename }, .title = "Rename Session", .description = "Name the focused persistent session" },
             .{ .action = .{ .session = .detach }, .title = "Detach Session", .description = "Close the focused pane and keep its shell running" },
+            .{ .action = .{ .session = .terminate }, .title = "End Session...", .description = "Stop the current session and its running programs" },
         } else &.{},
         .toggle_command_palette,
         .toggle_quick_terminal,

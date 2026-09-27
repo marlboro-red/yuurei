@@ -176,6 +176,7 @@ fn saveSessionName(self: *CommandPalette) void {
         self.moveSelection(@intCast(position));
         break;
     };
+    for (self.window.app.windows.items) |window| window.refreshSessionBar(true);
 }
 
 fn saveName(self: *CommandPalette, name: []const u8) !void {
@@ -183,6 +184,21 @@ fn saveName(self: *CommandPalette, name: []const u8) !void {
     defer client.deinit();
     var reply: [256]u8 = undefined;
     _ = try client.request(.rename, name, 0, &reply);
+}
+
+fn endSelectedSession(self: *CommandPalette) void {
+    if (self.mode != .sessions or self.matches.items.len == 0) return;
+    const window = self.window;
+    const alloc = window.app.core_app.alloc;
+    const entry = self.sessions[self.matches.items[self.selected]];
+    const name = alloc.dupe(u8, entry.name) catch return;
+    defer alloc.free(name);
+    const label = alloc.dupe(u8, if (entry.label.len > 0) entry.label else entry.name) catch return;
+    defer alloc.free(label);
+    // Copy the selection before dismissing the palette. The window owns
+    // the inline confirmation, including for detached sessions.
+    self.dismiss();
+    window.endSession(name, label);
 }
 
 /// Dismiss the palette and return focus to the parent window.
@@ -706,7 +722,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
         else if (self.matches.items.len == 0)
             "No matching sessions · F5 refresh"
         else
-            "Enter switch · F2 rename · F5 refresh · Esc close";
+            "Enter switch · F2 rename · Del end · F5 refresh · Esc close";
         var wide: [256]u16 = undefined;
         const n = std.unicode.utf8ToUtf16Le(&wide, hint) catch 0;
         var rect: winapi.RECT = .{ .left = margin, .top = client.bottom - window.scale(30), .right = client.right - margin, .bottom = client.bottom };
@@ -767,6 +783,7 @@ pub fn wndProc(
                 },
                 winapi.VK_F1 + 1 => if (self.mode == .sessions and self.matches.items.len > 0) self.renameSession(self.sessions[self.matches.items[self.selected]].name),
                 winapi.VK_F1 + 4 => if (self.mode == .sessions) self.refreshSessions(),
+                winapi.VK_DELETE => self.endSelectedSession(),
                 winapi.VK_PRIOR => self.moveSelection(
                     -@as(i32, @intCast(max_visible_rows)),
                 ),
