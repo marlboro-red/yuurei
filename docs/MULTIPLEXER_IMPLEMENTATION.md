@@ -130,7 +130,9 @@ the broker, logout, and reboot are outside the persistence guarantee.
 
 `stop` explicitly terminates the hosted session. `status`, `capture`, `snapshot`
 (binary), `input`, and `resize` are diagnostic commands. There is one connected
-client at a time, so detach the native or console client before issuing diagnostic commands.
+view at a time, so detach it before issuing capture/input/resize diagnostics.
+`status` and `stop` use a separate authenticated control endpoint and work while
+a view remains attached. Control connections cannot subscribe, resize, or input.
 The broker retains an exited shell's screen until explicitly stopped.
 
 ## Current bounds and limitations
@@ -180,6 +182,8 @@ experimental backend.
   timer. A broker process handle also wakes it on broker exit. Connection errors retain
   the view and leave the broker alive. Broker exit and automatic reconnect UI
   still need refinement.
+- The updater waits for both GUI and broker processes from the installation;
+  closing the GUI alone no longer makes a live broker eligible for replacement.
 
 Initial validation on 2026-09-27: PowerShell continued producing output after
 test GUI termination; reconnect used the same PID and delivered input. Twenty

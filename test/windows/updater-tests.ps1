@@ -41,6 +41,18 @@ function Make-Installation([string]$Name) {
     return $root
 }
 
+function Test-BrokerBlocksUpdate {
+    $root = Make-Installation 'broker-busy'
+    $broker = Join-Path $root 'bin/yuurei-mux.exe'
+    [IO.File]::Copy($script:oldExe, $broker)
+    $process = Start-Process $broker -WindowStyle Hidden -PassThru
+    try {
+        Wait-Running $process (Join-Path $root 'bin/ghostty.exe')
+        Assert (Test-Running (Join-Path $root 'bin/ghostty.exe')) 'Live broker did not block update.'
+    } finally { if (!$process.HasExited) { $process.Kill(); $process.WaitForExit() }; $process.Dispose() }
+    Assert (!(Test-Running (Join-Path $root 'bin/ghostty.exe'))) 'Exited broker still blocks update.'
+}
+
 Assert ((Get-ReleaseVersion 'v0.2.17') -gt (Get-ReleaseVersion 'v0.2.9')) 'Version ordering is lexical.'
 foreach ($tag in @('v0.2.17-beta','v01.2.3','../../x','v1.2','1.2.3')) { Reject { Get-ReleaseVersion $tag } "Accepted $tag" }
 foreach ($relative in @('../escape','bin/../../escape','C:/escape','bin/a:stream','bin/CON','bin/name.','bin/name ','bin\escape','bin/a?b')) {
@@ -107,6 +119,7 @@ Assert (Install-Package $pending $cache $install) 'Interrupted transaction recov
 Assert ([Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $install '.yuurei-update/backup/bin/ghostty.exe')).ProductVersion -eq '0.2.16') 'Recovery backed up a partially installed version.'
 Assert (Install-Package $pending $cache $install) 'Repeat installation failed.'
 
+Test-BrokerBlocksUpdate
 $busy = Make-Installation 'busy'
 $process = Start-Process -FilePath (Join-Path $busy 'bin/ghostty.exe') -WindowStyle Hidden -PassThru
 try {

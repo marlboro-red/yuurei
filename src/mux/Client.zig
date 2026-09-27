@@ -17,8 +17,14 @@ server_pid: u32,
 notification: ?H = null,
 server: ?H = null,
 pub fn init(name: []const u8, stop: ?H) !Client {
+    return connect(name, stop, false);
+}
+pub fn initControl(name: []const u8, stop: ?H) !Client {
+    return connect(name, stop, true);
+}
+fn connect(name: []const u8, stop: ?H, control: bool) !Client {
     const identity = try transport.identity(GetCurrentProcess());
-    const path = try transport.pipeName(name, identity);
+    const path = try transport.endpointName(name, identity, control);
     defer alloc.free(path);
     const pipe = w.CreateFileW(path, w.GENERIC_READ | w.GENERIC_WRITE, 0, null, w.OPEN_EXISTING, w.FILE_FLAG_OVERLAPPED | 0x00110000, null);
     if (pipe == windows.INVALID_HANDLE_VALUE) return error.SessionUnavailable;

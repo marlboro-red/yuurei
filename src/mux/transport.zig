@@ -128,8 +128,12 @@ pub const Io = struct {
 };
 
 pub fn pipeName(name: []const u8, owner: Identity) ![:0]u16 {
+    return endpointName(name, owner, false);
+}
+
+pub fn endpointName(name: []const u8, owner: Identity, control: bool) ![:0]u16 {
     if (!@import("protocol.zig").validName(name)) return error.InvalidSessionName;
-    const path = try std.fmt.allocPrint(alloc, "\\\\.\\pipe\\LOCAL\\yuurei-mux-experimental-{x}-{s}", .{ owner, name });
+    const path = try std.fmt.allocPrint(alloc, "\\\\.\\pipe\\LOCAL\\yuurei-mux-experimental-{x}-{s}{s}", .{ owner, name, if (control) ".control" else "" });
     defer alloc.free(path);
     return std.unicode.utf8ToUtf16LeAllocZ(alloc, path);
 }

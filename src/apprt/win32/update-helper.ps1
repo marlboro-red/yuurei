@@ -144,11 +144,14 @@ function Assert-Pending($Pending, [string]$Cache) {
 }
 function Test-Running([string]$Executable) {
     $canonical = [IO.Path]::GetFullPath($Executable)
-    foreach ($process in [Diagnostics.Process]::GetProcessesByName('ghostty')) {
+    $directory = [IO.Path]::GetDirectoryName($canonical)
+    $processes = @([Diagnostics.Process]::GetProcessesByName('ghostty')) + @([Diagnostics.Process]::GetProcessesByName('yuurei-mux'))
+    foreach ($process in $processes) {
         try {
             # Windows PowerShell's full-path normalization expands existing
             # DOS 8.3 aliases. Compare both sides in the same representation.
-            if ([IO.Path]::GetFullPath($process.MainModule.FileName) -ieq $canonical) { return $true }
+            $path = [IO.Path]::GetFullPath($process.MainModule.FileName)
+            if ($path -ieq $canonical -or $path -ieq (Join-Path $directory 'yuurei-mux.exe')) { return $true }
         } catch {
             # Unknown/inaccessible instances are conservatively treated as busy.
             if (!$process.HasExited) { return $true }

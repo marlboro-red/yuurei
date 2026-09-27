@@ -104,6 +104,8 @@ keybind = f9=scroll_to_bottom
         if($NativePane) {
             $children=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($gui.Id)" | Where-Object {$_.Name -in @('yuurei-mux.exe','pwsh.exe','cmd.exe','OpenConsole.exe')})
             Assert ($children.Count -eq 0) 'Native pane spawned a helper or shell'
+            $attachedStatus=Invoke-Mux @('status',$name) | ConvertFrom-Json
+            Assert ($attachedStatus.shell_pid -eq $testShellPid -and !$attachedStatus.exited) 'Control query failed while native pane was attached'
         }
         $r=New-Object TabNative+Rect
         [void][TabNative]::GetWindowRect($window,[ref]$r)

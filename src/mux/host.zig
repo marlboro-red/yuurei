@@ -80,6 +80,7 @@ const Session = struct {
     input_event: H = undefined,
     output_event: H = undefined,
     space_event: H = undefined,
+    stop_event: H = undefined,
     protected_cursor: ?u64 = null,
 
     fn detach(self: *Session) void {
@@ -239,6 +240,11 @@ fn serve(name: []const u8, args: anytype) !void {
     const pipe = w.CreateNamedPipeW(path, 3 | w.FILE_FLAG_OVERLAPPED | w.FILE_FLAG_FIRST_PIPE_INSTANCE, 8, 1, 65536, 65536, 0, null);
     if (pipe == windows.INVALID_HANDLE_VALUE) return error.SessionAlreadyExists;
     defer _ = w.CloseHandle(pipe);
+    const control_path = try transport.endpointName(name, identity, true);
+    defer alloc.free(control_path);
+    const control_pipe = w.CreateNamedPipeW(control_path, 3 | w.FILE_FLAG_OVERLAPPED | w.FILE_FLAG_FIRST_PIPE_INSTANCE, 8, 1, 4096, 4096, 0, null);
+    if (control_pipe == windows.INVALID_HANDLE_VALUE) return error.SessionAlreadyExists;
+    defer _ = w.CloseHandle(control_pipe);
     const shell = try alloc.dupeZ(u8, args.next() orelse "pwsh.exe");
     defer alloc.free(shell);
     var argv: std.ArrayList([:0]const u8) = .empty;
@@ -282,6 +288,8 @@ fn serve(name: []const u8, args: anytype) !void {
     defer _ = w.CloseHandle(session.output_event);
     session.space_event = CreateEventW(null, 0, 0, null) orelse return error.CreateEvent;
     defer _ = w.CloseHandle(session.space_event);
+    session.stop_event = CreateEventW(null, 1, 0, null) orelse return error.CreateEvent;
+    defer _ = w.CloseHandle(session.stop_event);
     session.command.pseudo_console = session.pty.pseudo_console;
     try session.command.start(alloc);
     defer session.command.deinit();
@@ -300,36 +308,60 @@ fn serve(name: []const u8, args: anytype) !void {
         while (WaitForSingleObject(reader.getHandle(), 10) != 0) _ = CancelSynchronousIo(reader.getHandle());
         reader.join();
     }
-    const response = try alloc.alloc(u8, Journal.capacity);
+    const control_thread = try std.Thread.spawn(worker_config, controlLoop, .{ &session, control_pipe, identity });
+    defer {
+        _ = SetEvent(session.stop_event);
+        control_thread.join();
+    }
+    try serveConnections(&session, pipe, identity, false);
+}
+
+fn controlLoop(session: *Session, pipe: H, identity: transport.Identity) void {
+    serveConnections(session, pipe, identity, true) catch |err| {
+        std.log.scoped(.mux).err("session control listener failed: {}", .{err});
+        _ = SetEvent(session.stop_event);
+    };
+}
+
+fn serveConnections(session: *Session, pipe: H, identity: transport.Identity, control: bool) !void {
+    const response = try alloc.alloc(u8, if (control) 4096 else Journal.capacity);
     defer alloc.free(response);
     const request_buf = try alloc.alloc(u8, protocol.max_request);
     defer alloc.free(request_buf);
-    var io = try transport.Io.init(null);
+    var io = try transport.Io.init(session.stop_event);
     defer _ = w.CloseHandle(io.event);
     while (true) {
+        if (WaitForSingleObject(session.stop_event, 0) == 0) return;
         var ov = io.begin();
         if (ConnectNamedPipe(pipe, &ov) == 0) switch (windows.GetLastError()) {
             .PIPE_CONNECTED => {},
             .IO_PENDING => {
-                _ = try io.finish(pipe, &ov, w.INFINITE);
+                _ = io.finish(pipe, &ov, w.INFINITE) catch |err| switch (err) {
+                    error.Stopped => return,
+                    else => return err,
+                };
             },
             else => return error.AcceptFailed,
         };
-        const stop = connection(&session, pipe, &io, identity, request_buf, response) catch false;
+        const stop = connection(session, pipe, &io, identity, request_buf, response, control) catch false;
         _ = DisconnectNamedPipe(pipe);
-        if (stop) return;
+        if (stop) {
+            _ = SetEvent(session.stop_event);
+            return;
+        }
     }
 }
 
-fn connection(session: *Session, pipe: H, io: *transport.Io, identity: transport.Identity, request_buf: []u8, response: []u8) !bool {
+fn connection(session: *Session, pipe: H, io: *transport.Io, identity: transport.Identity, request_buf: []u8, response: []u8, control: bool) !bool {
     _ = try transport.peer(pipe, false, identity);
-    defer session.detach();
+    defer if (!control) session.detach();
     var ready = false;
     while (true) {
         var header_bytes: [protocol.header_size]u8 = undefined;
-        if (ready) try io.requestHeader(pipe, &header_bytes) else try io.transfer(pipe, &header_bytes, false);
+        if (ready and !control) try io.requestHeader(pipe, &header_bytes) else try io.transfer(pipe, &header_bytes, false);
         const header = try protocol.Header.decode(&header_bytes, protocol.max_request);
         if (!ready and header.op != .hello) return error.HandshakeRequired;
+        if (control and header.op != .hello and header.op != .status and header.op != .stop) return error.InvalidOperation;
         const payload = request_buf[0..header.length];
         try io.transfer(pipe, payload, false);
         // Snapshots need a larger temporary buffer, not a permanent allocation
@@ -360,7 +392,10 @@ fn connection(session: *Session, pipe: H, io: *transport.Io, identity: transport
 
 pub fn run(operation: []const u8, name: []const u8, args: anytype) !void {
     if (std.mem.eql(u8, operation, "serve")) return serve(name, args);
-    var client = try Client.init(name, null);
+    var client = if (std.mem.eql(u8, operation, "status") or std.mem.eql(u8, operation, "stop"))
+        try Client.initControl(name, null)
+    else
+        try Client.init(name, null);
     defer client.deinit();
     const buffer = try alloc.alloc(u8, protocol.max_response);
     defer alloc.free(buffer);
