@@ -92,6 +92,7 @@ pub fn initTerminal(self: *Mux, t: *terminal.Terminal) !void {
     // Presentation defaults belong to the view. Preserve broker-set dynamic
     // colors while using the GUI theme for default colors and palette entries.
     const restored = &self.initial.?.terminal.?;
+    @import("../mux/cwd.zig").normalize(restored);
     try restored.colors.palette.changeDefault(self.alloc, t.colors.palette.original.*);
     restored.colors.background.default = t.colors.background.default;
     restored.colors.foreground.default = t.colors.foreground.default;
@@ -127,6 +128,7 @@ pub fn threadEnter(self: *Mux, io: *termio.Termio, td: *termio.Termio.ThreadData
         return;
     }
     self.stream = io.terminal.vtStream();
+    self.stream.handler.effects.pwd_changed = @import("../mux/cwd.zig").changed;
     self.stream_ready = true;
     // Restore parser continuation using a readonly handler. No query replies,
     // clipboard writes, notifications or historical effects are replayed.

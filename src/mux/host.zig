@@ -334,6 +334,7 @@ fn serve(name: []const u8, args: anytype) !void {
     current = &session;
     defer current = null;
     session.stream.handler.effects.write_pty = Session.reply;
+    session.stream.handler.effects.pwd_changed = @import("cwd.zig").changed;
     session.stream.handler.effects.device_attributes = struct {
         fn attributes(_: *Handler) @import("../terminal/device_attributes.zig").Attributes {
             return .{};

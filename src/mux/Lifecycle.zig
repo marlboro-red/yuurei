@@ -24,7 +24,19 @@ pub fn start(alloc: std.mem.Allocator, name: []const u8, args: []const []const u
     try argv.appendSlice(a, args);
     const line = try Command.windowsCreateCommandLine(a, argv.items);
     const line_w = try std.unicode.utf8ToUtf16LeAllocZ(a, line);
-    const cwd_w: ?[*:0]const u16 = if (cwd) |value| (try std.unicode.utf8ToUtf16LeAllocZ(a, value)).ptr else null;
+    var cwd_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const valid_cwd: ?[]const u8 = if (cwd) |value| block: {
+        // Match the ordinary exec backend: shell-reported directories can be
+        // stale. Invalid/missing directories must not prevent opening a tab.
+        const native = if (std.mem.startsWith(u8, value, "file://"))
+            @import("cwd.zig").decode(value, &cwd_buffer) orelse break :block null
+        else
+            value;
+        var dir = std.Io.Dir.cwd().openDir(@import("../global.zig").io(), native, .{}) catch break :block null;
+        dir.close(@import("../global.zig").io());
+        break :block native;
+    } else null;
+    const cwd_w: ?[*:0]const u16 = if (valid_cwd) |value| (try std.unicode.utf8ToUtf16LeAllocZ(a, value)).ptr else null;
     const env_w = if (env) |value| try Command.createWindowsEnvBlock(a, value) else null;
     var in_job: w.BOOL = 0;
     if (IsProcessInJob(w.GetCurrentProcess(), null, &in_job) == 0) return error.JobQuery;
@@ -33,8 +45,10 @@ pub fn start(alloc: std.mem.Allocator, name: []const u8, args: []const []const u
     const flags: u32 = 0x00000008 | 0x00000400 | @as(u32, if (in_job != 0) 0x01000000 else 0);
     var si: w.STARTUPINFOW = .{};
     var pi: w.PROCESS_INFORMATION = .{};
-    if (w.CreateProcessW(exe_w, line_w, null, null, 0, flags, if (env_w) |value| @ptrCast(value.ptr) else null, cwd_w, &si, &pi) == 0)
+    if (w.CreateProcessW(exe_w, line_w, null, null, 0, flags, if (env_w) |value| @ptrCast(value.ptr) else null, cwd_w, &si, &pi) == 0) {
+        std.log.scoped(.mux).err("broker CreateProcessW failed: {}", .{std.os.windows.GetLastError()});
         return if (in_job != 0) error.BrokerJobBreakawayFailed else error.BrokerLaunchFailed;
+    }
     _ = w.CloseHandle(pi.hThread.?);
     defer _ = w.CloseHandle(pi.hProcess.?);
     errdefer {

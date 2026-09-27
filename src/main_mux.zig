@@ -20,6 +20,7 @@ test {
     _ = @import("mux/protocol.zig");
     _ = @import("mux/Journal.zig");
     _ = @import("mux/InputQueue.zig");
+    _ = @import("mux/cwd.zig");
     _ = @import("mux/snapshot_test.zig");
     _ = @import("mux/Workspace.zig");
 }
