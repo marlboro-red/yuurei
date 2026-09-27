@@ -138,9 +138,13 @@ keybind = f9=scroll_to_bottom
         # Kill ONLY the test-owned GUI. This is the persistence assertion.
         $before=[int](Get-Content "$dir/counter")
         $gui.Kill(); $gui.WaitForExit(); $gui=$null
-        Start-Sleep -Seconds 4
         Assert (!$broker.HasExited) 'GUI crash killed broker'
-        Assert ([int](Get-Content "$dir/counter") -gt $before) 'GUI crash stalled shell output'
+        try {
+            Wait-For { [int](Get-Content "$dir/counter") -gt $before } 'GUI crash stalled shell output'
+        } catch {
+            @{before=$before;after=(Get-Content "$dir/counter");status=(Invoke-Mux @('status',$name)|ConvertFrom-Json)} | ConvertTo-Json | Set-Content "$dir/stall.json"
+            throw
+        }
     }
     Set-Content "$dir/interactive" ''
     Start-Sleep -Milliseconds 500

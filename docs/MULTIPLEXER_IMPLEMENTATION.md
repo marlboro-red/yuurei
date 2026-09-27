@@ -3,7 +3,8 @@
 Branch: `feature/multiplexer`, based on `6184a41a5` (v0.2.18).
 
 Status: opt-in persistent native panes, automatic broker startup, discovery,
-native session controls, and named workspace restore are implemented. Each
+native session controls, named workspace restore, automatic stale-view recovery,
+exit status, and bounded large-input delivery are implemented. Each
 pane currently owns an independent broker; one view attaches per broker.
 The broker is bundled in normal Windows builds. Research is in
 [`MULTIPLEXER_RESEARCH.md`](MULTIPLEXER_RESEARCH.md).
@@ -63,7 +64,7 @@ transport, simultaneous viewers, and tmux interoperability need later work.
       It redraws the active viewport; it is not the final renderer integration.
 - [x] Test resize, alternate screen, scrollback, partial UTF-8/VT sequences,
       child exit, repeated reconnects, and termination of only the test GUI.
-- [ ] Measure attached/detached CPU, committed memory, resident memory, threads,
+- [x] Measure attached/detached CPU, committed memory, resident memory, threads,
       handles, and reconnect latency against the normal single-pane path.
 - [x] Add named workspaces, tab/split layout ownership, and session controls
       after the persistence gate passes.

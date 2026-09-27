@@ -1,5 +1,58 @@
 # Native multiplexer benchmark — 2026-09-27
 
+## Completed lifecycle follow-up — 2026-09-28
+
+Measured `2f9f27692`, ReleaseFast, portable `x86_64_v2`, with automatic startup,
+workspace restore, separate control connections, exit notifications, stale-view
+recovery, and bounded large-input delivery implemented. Three alternating fresh
+instances per mode, 20 seconds idle, ~8 MiB unpaced ASCII and Unicode output,
+and 60 synthetic input-to-title samples per mode. Same machine and resource
+accounting as below: mux includes GUI plus broker, excluding shell and ConPTY.
+Raw samples: [`mux-2026-09-28-complete.json`](../bench/results/mux-2026-09-28-complete.json).
+
+| Measurement | Direct | Multiplexed |
+|---|---:|---:|
+| Idle private commit, median | 113.5 MiB | 124.0 MiB |
+| Idle summed resident working set, median | 78.5 MiB | 92.7 MiB |
+| Threads at idle, median | 17 | 25 |
+| Handles at idle, median | 472 | 625 |
+| Idle CPU, median percentage of one core | 0.00% | 0.16% |
+| Input-to-title response, median | 0.70 ms | 0.70 ms |
+| Input-to-title response, nearest-rank p95 | 0.84 ms | 0.95 ms |
+| Unpaced ASCII, median | 90.7 MiB/s | 90.1 MiB/s |
+| Unpaced Unicode, median | 71.6 MiB/s | 52.7 MiB/s |
+| Burst completion | 3/3 both workloads | 3/3 both workloads |
+
+Attached commit overhead is about 10.4 MiB (9.2%). Broker-only attached commit
+is 7.4 MiB. Detached brokers used a median 7.37 MiB committed memory and recorded
+0 ms CPU time in each 20-second idle interval. This means no CPU time was observed
+at the process timer's resolution, not that CPU usage is mathematically zero.
+Fresh GUI launch through restored title took 212–221 ms (median 215 ms), including
+process startup and the harness's 100 ms window-discovery polling.
+
+Unicode saturation remains about 26% slower. ASCII medians nearly match in this
+set, but individual runs vary and the earlier comparison found a material mux
+penalty; this does not establish throughput parity. Idle CPU ranges also overlap
+(direct 0–1.01%, mux 0–0.16%). These are short local observations, not long-term
+leak tests or physical keyboard-to-pixel latency measurements.
+
+The final four-second GUI suspension allowed the detached producer to finish,
+expired the old event cursor, and automatically restored the view from the same
+broker. Both workloads and subsequent input completed. Its suspended ASCII rate
+is deliberately excluded from normal throughput figures. Ten native GUI
+crash/reattach cycles also retained the original shell PID: broker handles stayed
+at 194, threads at 11, and private commit between 7.39 and 7.46 MiB.
+
+Validation also passed 199 targeted tests, 512 KiB exact input delivery, normal
+exit and reattachment, malformed/stalled pipe clients, nested workspace restore,
+settings, separate-launch tab transfer, and updater broker gating. Cross-account
+isolation and broader application compatibility remain separate validation work.
+
+```powershell
+pwsh -NoProfile -File bench/multiplexer.ps1
+pwsh -NoProfile -File bench/multiplexer.ps1 -Runs 1 -IdleSeconds 1 -SuspendViewMs 4000
+```
+
 ## Follow-up after output and memory fixes
 
 The later comparison uses `33dc97973` plus the memory changes committed with
@@ -40,12 +93,13 @@ owned GUI for one second held the producer until resume, then completed both
 bursts without loss/disconnect. Suspending it for four seconds allowed the
 producer to finish after protection expired at three seconds; the resumed
 view reported expired history as designed. This prevents a hung view from
-permanently blocking its shell, but such a view still needs reopening.
+permanently blocking its shell. At that revision the view needed reopening;
+the completed lifecycle implementation above now recovers automatically.
 
 ```powershell
 pwsh -NoProfile -File bench/multiplexer.ps1
 pwsh -NoProfile -File bench/multiplexer.ps1 -Runs 1 -IdleSeconds 1 -SuspendViewMs 1000
-# Expected expired-view failure; stall.json confirms producer completed:
+# Historical failure at this revision; now tests automatic recovery:
 pwsh -NoProfile -File bench/multiplexer.ps1 -Runs 1 -IdleSeconds 1 -SuspendViewMs 4000
 ```
 

@@ -66,7 +66,7 @@ instructions, validation, and remaining gates, and
 [`MULTIPLEXER_RESEARCH.md`](MULTIPLEXER_RESEARCH.md) for the original research.
 The broker is bundled by normal Windows builds. Enable
 `windows-persistent-sessions` for new panes; `windows-mux-session` still supports
-explicit attachment. Broader compatibility and adversarial validation remain.
+  explicit attachment. Broader compatibility and cross-account isolation testing remain.
 
 ## Rendering / presentation
 

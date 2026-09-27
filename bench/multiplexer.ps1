@@ -143,6 +143,25 @@ keybind = f5=text:x
                 $latencies+=[BenchTitle]::Roundtrip($window,"BENCH_KEY_${k}_END")
             }
             $result.input_title_roundtrip_ms=$latencies
+            if($broker) {
+                # Measure an idle detached broker separately, then time a new
+                # GUI through visible restoration of the retained title.
+                $gui.Kill();$gui.WaitForExit();$gui.Dispose();$gui=$null
+                $before=Sample @($broker)
+                $timer.Restart()
+                Start-Sleep -Seconds $IdleSeconds
+                $elapsed=$timer.Elapsed.TotalMilliseconds
+                $after=Sample @($broker)
+                $result.detached=@{memory=$after;idle_cpu_ms=$after.cpu_ms-$before.cpu_ms;idle_one_core_percent=100*($after.cpu_ms-$before.cpu_ms)/$elapsed}
+                $timer.Restart()
+                $gui=Start-Process "$Bin/ghostty.exe" -PassThru -Environment @{XDG_CONFIG_HOME=$dir;LOCALAPPDATA=$dir;GHOSTTY_NEW_INSTANCE='1'} -RedirectStandardError "$dir/reattach.log"
+                Wait-For {[TabNative]::Windows($gui.Id).Count -eq 1} 'Reattachment GUI failed to open'
+                $window=[TabNative]::Windows($gui.Id)[0]
+                [void][TabNative]::ShowWindow($window,5)
+                Wait-Title $window 'BENCH_KEY_19_END'
+                $result.reattach_ms=$timer.Elapsed.TotalMilliseconds
+                $result.reattached=Sample @($gui,$broker)
+            }
             $rows.Add([pscustomobject]$result)
             $rows | ConvertTo-Json -Depth 8 | Set-Content "$root/results.json"
             Write-Host "$run $mode done: idle private $([math]::Round($result.idle.private_mib,1)) MiB; ASCII $([math]::Round($result.ascii.mib_per_second,2)) MiB/s; Unicode $([math]::Round($result.unicode.mib_per_second,2)) MiB/s"
