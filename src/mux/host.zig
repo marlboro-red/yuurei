@@ -68,6 +68,8 @@ const Input = struct {
 // owns the process or PTY, and no client socket is used by the output reader.
 const Session = struct {
     name: []const u8,
+    label: [128]u8 = undefined,
+    label_len: usize = 0,
     pty: Pty,
     command: Command,
     term: terminal.Terminal,
@@ -87,6 +89,11 @@ const Session = struct {
     space_event: H = undefined,
     stop_event: H = undefined,
     protected_cursor: ?u64 = null,
+
+    // Caller holds the terminal mutex, serializing atomic record publication.
+    fn publishRecord(self: *Session) void {
+        if (@import("Registry.zig").publish(alloc, self.name, GetProcessId(self.command.pid.?), self.exited.load(.acquire), self.label[0..self.label_len])) |path| alloc.free(path) else |_| {}
+    }
 
     fn detach(self: *Session) void {
         self.mutex.lockUncancelable(global.io());
@@ -149,9 +156,9 @@ const Session = struct {
         std.mem.writeInt(u32, data[4..8], 1, .little);
         self.journal.append(.exited, &data);
         self.sequence = self.journal.end;
+        self.publishRecord();
         self.mutex.unlock(global.io());
         _ = SetEvent(self.output_event);
-        if (@import("Registry.zig").publish(alloc, self.name, GetProcessId(self.command.pid.?), true)) |path| alloc.free(path) else |_| {}
     }
 
     fn read(self: *Session) void {
@@ -170,9 +177,9 @@ const Session = struct {
                 std.mem.writeInt(u32, data[4..8], @intFromBool(exited), .little);
                 self.journal.append(.exited, &data);
                 self.sequence = self.journal.end;
+                self.publishRecord();
                 self.mutex.unlock(global.io());
                 _ = SetEvent(self.output_event);
-                if (@import("Registry.zig").publish(alloc, self.name, GetProcessId(self.command.pid.?), exited)) |path| alloc.free(path) else |_| {}
                 return;
             }
             self.mutex.lockUncancelable(global.io());
@@ -201,6 +208,13 @@ const Session = struct {
 
     fn respond(self: *Session, request: protocol.Header, payload: []const u8, out: *std.Io.Writer) !void {
         switch (request.op) {
+            .rename => {
+                if (!protocol.validLabel(payload)) return error.InvalidSessionLabel;
+                const path = try @import("Registry.zig").publish(alloc, self.name, GetProcessId(self.command.pid.?), self.exited.load(.acquire), payload);
+                alloc.free(path);
+                @memcpy(self.label[0..payload.len], payload);
+                self.label_len = payload.len;
+            },
             .subscribe => {
                 if (payload.len != 0 or self.protected_cursor != null) return error.InvalidPayload;
                 self.protected_cursor = self.sequence;
@@ -336,7 +350,7 @@ fn serve(name: []const u8, args: anytype) !void {
     session.command.pseudo_console = session.pty.pseudo_console;
     try session.command.start(alloc);
     defer session.command.deinit();
-    const record = try @import("Registry.zig").publish(alloc, name, GetProcessId(session.command.pid.?), false);
+    const record = try @import("Registry.zig").publish(alloc, name, GetProcessId(session.command.pid.?), false, "");
     defer {
         std.Io.Dir.deleteFileAbsolute(global.io(), record) catch {};
         alloc.free(record);
@@ -414,7 +428,7 @@ fn connection(session: *Session, pipe: H, io: *transport.Io, identity: transport
         if (ready and !control) try io.requestHeader(pipe, &header_bytes) else try io.transfer(pipe, &header_bytes, false);
         const header = try protocol.Header.decode(&header_bytes, protocol.max_request);
         if (!ready and header.op != .hello) return error.HandshakeRequired;
-        if (control and header.op != .hello and header.op != .status and header.op != .stop) return error.InvalidOperation;
+        if (control and header.op != .hello and header.op != .status and header.op != .stop and header.op != .rename) return error.InvalidOperation;
         const payload = request_buf[0..header.length];
         try io.transfer(pipe, payload, false);
         // Snapshots need a larger temporary buffer, not a permanent allocation
@@ -464,7 +478,7 @@ pub fn run(operation: []const u8, name: []const u8, args: anytype) !void {
         try out.interface.flush();
         return;
     }
-    var client = if (std.mem.eql(u8, operation, "status") or std.mem.eql(u8, operation, "stop"))
+    var client = if (std.mem.eql(u8, operation, "status") or std.mem.eql(u8, operation, "stop") or std.mem.eql(u8, operation, "rename"))
         try Client.initControl(name, null)
     else
         try Client.init(name, null);
@@ -581,6 +595,7 @@ pub fn run(operation: []const u8, name: []const u8, args: anytype) !void {
         const op = std.meta.stringToEnum(protocol.Op, operation) orelse return error.InvalidOperation;
         var size: [4]u8 = undefined;
         const payload = switch (op) {
+            .rename => args.next() orelse return error.ExpectedSessionLabel,
             .input => args.next() orelse return error.ExpectedInput,
             .resize => blk: {
                 std.mem.writeInt(u16, size[0..2], try std.fmt.parseInt(u16, args.next() orelse return error.ExpectedColumns, 10), .little);

@@ -13,6 +13,7 @@ extern "kernel32" fn WaitForSingleObject(w.HANDLE, u32) callconv(.winapi) u32;
 
 pub const Entry = struct {
     name: []const u8,
+    label: []const u8 = "",
     broker_pid: u32,
     shell_pid: u32,
     created: u64,
@@ -36,7 +37,7 @@ fn directory(alloc: std.mem.Allocator) ![]const u8 {
 }
 
 /// Returns the owned record path, removed by the broker on orderly shutdown.
-pub fn publish(alloc: std.mem.Allocator, name: []const u8, shell_pid: u32, exited: bool) ![]const u8 {
+pub fn publish(alloc: std.mem.Allocator, name: []const u8, shell_pid: u32, exited: bool, label: []const u8) ![]const u8 {
     if (!protocol.validName(name)) return error.InvalidSessionName;
     const dir = try directory(alloc);
     defer alloc.free(dir);
@@ -48,6 +49,7 @@ pub fn publish(alloc: std.mem.Allocator, name: []const u8, shell_pid: u32, exite
     defer std.Io.Dir.deleteFileAbsolute(global.io(), tmp) catch {};
     const entry: Entry = .{
         .name = name,
+        .label = label,
         .broker_pid = w.GetCurrentProcessId(),
         .shell_pid = shell_pid,
         .created = try creation(w.GetCurrentProcess()),
@@ -82,6 +84,7 @@ pub fn list(alloc: std.mem.Allocator) ![]Entry {
     errdefer {
         for (result.items) |entry| {
             alloc.free(entry.name);
+            alloc.free(entry.label);
             alloc.free(entry.version);
         }
         result.deinit(alloc);
@@ -104,11 +107,14 @@ pub fn list(alloc: std.mem.Allocator) ![]Entry {
         if ((creation(process) catch continue) != entry.created) continue;
         const owner = transport.identity(process) catch continue;
         if (!std.mem.eql(u8, &owner, &identity)) continue;
+        if (entry.label.len > 0 and !protocol.validLabel(entry.label)) continue;
         const name = try alloc.dupe(u8, entry.name);
         errdefer alloc.free(name);
+        const label = try alloc.dupe(u8, entry.label);
+        errdefer alloc.free(label);
         const version = try alloc.dupe(u8, entry.version);
         errdefer alloc.free(version);
-        try result.append(alloc, .{ .name = name, .version = version, .created = entry.created, .broker_pid = entry.broker_pid, .shell_pid = entry.shell_pid, .exited = entry.exited });
+        try result.append(alloc, .{ .name = name, .label = label, .version = version, .created = entry.created, .broker_pid = entry.broker_pid, .shell_pid = entry.shell_pid, .exited = entry.exited });
     }
     return result.toOwnedSlice(alloc);
 }

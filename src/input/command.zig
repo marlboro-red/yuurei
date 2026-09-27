@@ -739,6 +739,11 @@ fn actionCommands(action: Action.Key) []const Command {
 
         // No commands because I'm not sure they make sense in a command
         // palette context.
+        .session => if (@import("builtin").os.tag == .windows) &.{
+            .{ .action = .{ .session = .list }, .title = "Switch Session", .description = "Search and attach persistent sessions" },
+            .{ .action = .{ .session = .rename }, .title = "Rename Session", .description = "Name the focused persistent session" },
+            .{ .action = .{ .session = .detach }, .title = "Detach Session", .description = "Close the focused pane and keep its shell running" },
+        } else &.{},
         .toggle_command_palette,
         .toggle_quick_terminal,
         .toggle_visibility,

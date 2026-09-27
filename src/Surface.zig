@@ -5669,6 +5669,11 @@ pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool 
             log.debug("mouse reporting toggled: {}", .{self.config.mouse_reporting});
         },
 
+        .session => |session_action| {
+            if (comptime @import("build_config.zig").app_runtime == .win32)
+                return try self.rt_surface.window.performSessionAction(session_action);
+            return false;
+        },
         .toggle_command_palette => return try self.rt_app.performAction(
             .{ .surface = self },
             .toggle_command_palette,

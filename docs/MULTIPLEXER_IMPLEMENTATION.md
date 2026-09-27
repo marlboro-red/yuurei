@@ -92,6 +92,40 @@ required). Attaching a session already visible in the current process focuses
 that pane. Discovery validates process creation times and installation identity;
 pipe authentication/version checks remain authoritative.
 
+### Keyboard session navigation and names
+
+**Ctrl+Shift+S** opens the session picker. Type to fuzzy-search names, IDs, or
+PIDs; use **Up/Down**, **Ctrl+P/Ctrl+N**, or **Page Up/Page Down** to navigate.
+**Enter** focuses an existing local pane or attaches a detached session.
+**F2** renames the selected session; type a name and press **Enter** to save,
+or **Escape** to cancel. **F5** refreshes discovery without clearing the search.
+**Escape** closes the picker. No discovery polling runs while it is closed.
+
+Session names support Unicode and spaces, up to 128 UTF-8 bytes. They are
+independent of tab titles and stable session IDs. The broker retains the name
+across detach, GUI crash/restart, and shell exit. Terminating the broker ends
+the session and its name; this does not add persistence across machine restart.
+Duplicate display names are allowed; the picker also shows the session ID/PID.
+
+The regular **Ctrl+Shift+P** command palette includes **Switch Session**,
+**Rename Session**, and **Detach Session**. Detach closes only the focused
+persistent pane and leaves its shell running. All three actions are remappable,
+including through an optional prefix-key workflow:
+
+```ini
+keybind = ctrl+b>s=session:list
+keybind = ctrl+b>r=session:rename
+keybind = ctrl+b>d=session:detach
+```
+
+These bindings mean press **Ctrl+B**, release, then press **S**, **R**, or **D**.
+The prefix is an example, not an additional default. Direct shortcuts work too.
+The helper supports `yuurei-mux.exe rename <session-id> "Backend"`; `list`
+returns both stable IDs and display labels. Control-channel renaming works while
+a native view is attached. `test/windows/mux-picker.ps1` verifies the complete
+keyboard workflow, Unicode names, validation, original shell identity, and GUI
+restart; the exit test also verifies name retention after shell termination.
+
 `windows-workspace = dev` selects a named saved layout; `windows-restore-session`
 controls saving/restoration. Version 2 preserves complete split trees, ratios,
 focus, zoom, titles, directories, session IDs, and on-screen window geometry.

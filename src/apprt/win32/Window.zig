@@ -815,6 +815,23 @@ pub fn togglePalette(self: *Window) !void {
     _ = winapi.SetFocus(palette.hwnd);
 }
 
+pub fn performSessionAction(self: *Window, action: @FieldType(input.Binding.Action, "session")) !bool {
+    const surface = self.activeSurface() orelse return false;
+    if (action != .list and surface.core_surface.io.backend != .mux) return false;
+    if (action == .detach) {
+        surface.should_close = true;
+        self.app.wakeup();
+        return true;
+    }
+    if (self.palette) |palette| palette.destroy();
+    const palette = try CommandPalette.create(self.app.core_app.alloc, self);
+    self.palette = palette;
+    palette.showSessions();
+    if (action == .rename) palette.renameSession(surface.core_surface.io.backend.mux.name);
+    _ = winapi.SetFocus(palette.hwnd);
+    return true;
+}
+
 /// Remove a surface from whichever tab contains it, collapsing its
 /// split; an empty tab is removed. When the last tab goes, the window
 /// flags itself for close; the App run loop destroys it.
@@ -940,7 +957,7 @@ fn showStripMenu(self: *Window, idx: ?usize) void {
     if (sessions.len > 0) {
         if (winapi.CreatePopupMenu()) |sm| {
             for (sessions, 0..) |entry, i| {
-                const label = std.fmt.allocPrint(session_alloc, "{s} (PID {d}){s}{s}", .{ entry.name, entry.shell_pid, if (entry.exited) " [exited]" else "", if (std.mem.eql(u8, entry.version, @import("../../build_config.zig").version_string)) "" else " [different build]" }) catch continue;
+                const label = std.fmt.allocPrint(session_alloc, "{s} (PID {d}){s}{s}", .{ if (entry.label.len > 0) entry.label else entry.name, entry.shell_pid, if (entry.exited) " [exited]" else "", if (std.mem.eql(u8, entry.version, @import("../../build_config.zig").version_string)) "" else " [different build]" }) catch continue;
                 const wide = std.unicode.utf8ToUtf16LeAllocZ(session_alloc, label) catch continue;
                 _ = winapi.AppendMenuW(sm, winapi.MF_STRING, 1000 + i, wide);
             }

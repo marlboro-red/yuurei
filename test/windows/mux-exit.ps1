@@ -48,12 +48,14 @@ try{
   if($attempt -eq 0){
    Wait-For {@(Mux @('list')|ConvertFrom-Json).Count -eq 1} 'Session missing'
    $sessions=@(Mux @('list')|ConvertFrom-Json);$name=$sessions[0].name
+   Mux @('rename',$name,'Completed Job')|Out-Null
    Set-Content "$dir/exit.go" ''
   }
   Wait-For {[ExitTitle]::Get($window).Contains('Session exited (code 7)')} 'Exit status missing from pane title'
   $status=Mux @('status',$name)|ConvertFrom-Json
   Assert ($status.exited -and !$status.failed -and $status.exit_code -eq 7) 'Normal exit misreported as failure'
   Assert ((@(Mux @('list')|ConvertFrom-Json))[0].exited) 'Discovery did not retain exit state'
+  Assert ((@(Mux @('list')|ConvertFrom-Json))[0].label -eq 'Completed Job') 'Exit notification lost session name'
   $gui.Kill();$gui.WaitForExit();$gui.Dispose();$gui=$null
   Start-Sleep -Milliseconds 300
   Assert ((Mux @('capture',$name)).Contains('FINAL_OUTPUT_RETAINED')) 'Exit lost final output'

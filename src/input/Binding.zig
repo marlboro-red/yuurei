@@ -812,6 +812,10 @@ pub const Action = union(enum) {
     /// version can be found by running `ghostty +version`.
     toggle_command_palette,
 
+    /// Windows persistent sessions: open the picker, rename the focused
+    /// session, or detach its pane. These actions can be used in key sequences.
+    session: enum { list, rename, detach },
+
     /// Toggle the quick terminal.
     ///
     /// The quick terminal, also known as the "Quake-style" or drop-down
@@ -1428,6 +1432,7 @@ pub const Action = union(enum) {
             .toggle_secure_input,
             .toggle_mouse_reporting,
             .toggle_command_palette,
+            .session,
             .toggle_background_opacity,
             .show_on_screen_keyboard,
             .reset_window_size,

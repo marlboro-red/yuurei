@@ -7183,6 +7183,11 @@ pub const Keybinds = struct {
             .toggle_command_palette,
         );
 
+        // Windows persistent-session picker.
+        if (comptime builtin.os.tag == .windows) {
+            try self.set.put(alloc, .{ .key = .{ .unicode = 's' }, .mods = .{ .ctrl = true, .shift = true } }, .{ .session = .list });
+        }
+
         // Mac-specific keyboard bindings.
         if (comptime builtin.target.os.tag.isDarwin()) {
             try self.set.put(

@@ -11,6 +11,7 @@ const input = @import("../../input.zig");
 const App = @import("App.zig");
 const Window = @import("Window.zig");
 const winapi = @import("winapi.zig");
+const Registry = @import("../../mux/Registry.zig");
 
 const log = std.log.scoped(.win32);
 
@@ -34,6 +35,12 @@ selected: usize = 0,
 
 /// Index into matches of the first visible row.
 scroll: usize = 0,
+mode: enum { commands, sessions, rename_session } = .commands,
+session_arena: std.heap.ArenaAllocator,
+sessions: []Registry.Entry = &.{},
+rename_id: ?[]const u8 = null,
+rename_fresh: bool = false,
+error_text: ?[]const u8 = null,
 
 /// Cached fonts, recreated on DPI change. The palette repaints on every
 /// keystroke; re-creating fonts each paint is measurable GDI churn.
@@ -72,7 +79,7 @@ pub fn create(alloc: Allocator, window: *Window) !*CommandPalette {
     ) orelse return error.CreateWindowFailed;
     errdefer _ = winapi.DestroyWindow(hwnd);
 
-    self.* = .{ .window = window, .hwnd = hwnd };
+    self.* = .{ .window = window, .hwnd = hwnd, .session_arena = .init(alloc) };
     _ = winapi.SetWindowLongPtrW(
         hwnd,
         winapi.GWLP_USERDATA,
@@ -97,7 +104,85 @@ pub fn destroy(self: *CommandPalette) void {
     _ = winapi.DestroyWindow(self.hwnd);
     self.filter.deinit(alloc);
     self.matches.deinit(alloc);
+    self.session_arena.deinit();
+    if (self.rename_id) |id| alloc.free(id);
     alloc.destroy(self);
+}
+
+pub fn showSessions(self: *CommandPalette) void {
+    self.mode = .sessions;
+    self.error_text = null;
+    self.filter.clearRetainingCapacity();
+    _ = self.session_arena.reset(.free_all);
+    self.sessions = Registry.list(self.session_arena.allocator()) catch block: {
+        self.error_text = "Unable to load sessions. Press F5 to retry.";
+        break :block &.{};
+    };
+    std.mem.sort(Registry.Entry, self.sessions, {}, struct {
+        fn less(_: void, a: Registry.Entry, b: Registry.Entry) bool {
+            return std.ascii.lessThanIgnoreCase(if (a.label.len > 0) a.label else a.name, if (b.label.len > 0) b.label else b.name);
+        }
+    }.less);
+    self.refilter();
+}
+
+fn refreshSessions(self: *CommandPalette) void {
+    var previous: [filter_max_units]u16 = undefined;
+    const len = self.filter.items.len;
+    @memcpy(previous[0..len], self.filter.items);
+    self.showSessions();
+    self.filter.appendSlice(self.window.app.core_app.alloc, previous[0..len]) catch {};
+    self.refilter();
+}
+
+pub fn renameSession(self: *CommandPalette, id: []const u8) void {
+    const alloc = self.window.app.core_app.alloc;
+    const copy = alloc.dupe(u8, id) catch return;
+    if (self.rename_id) |old| alloc.free(old);
+    self.rename_id = copy;
+    self.mode = .rename_session;
+    self.error_text = null;
+    self.filter.clearRetainingCapacity();
+    for (self.sessions) |entry| {
+        if (!std.mem.eql(u8, entry.name, copy)) continue;
+        const label = if (entry.label.len > 0) entry.label else entry.name;
+        const wide = std.unicode.utf8ToUtf16LeAlloc(alloc, label) catch break;
+        defer alloc.free(wide);
+        self.filter.appendSlice(alloc, wide) catch {};
+        break;
+    }
+    self.rename_fresh = true;
+    self.refilter();
+}
+
+fn saveSessionName(self: *CommandPalette) void {
+    var buffer: [512]u8 = undefined;
+    const n = std.unicode.utf16LeToUtf8(&buffer, self.filter.items) catch 0;
+    const name = std.mem.trim(u8, buffer[0..n], " \t\r\n");
+    if (!@import("../../mux/protocol.zig").validLabel(name)) {
+        self.error_text = "Use 1–128 UTF-8 bytes without control characters.";
+        _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+        return;
+    }
+    self.saveName(name) catch |err| {
+        log.err("session rename failed: {}", .{err});
+        self.error_text = "Rename failed. Check the session is running and retry.";
+        _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+        return;
+    };
+    self.showSessions();
+    if (self.rename_id) |id| for (self.matches.items, 0..) |index, position| {
+        if (!std.mem.eql(u8, self.sessions[index].name, id)) continue;
+        self.moveSelection(@intCast(position));
+        break;
+    };
+}
+
+fn saveName(self: *CommandPalette, name: []const u8) !void {
+    var client = try @import("../../mux/Client.zig").initControl(self.rename_id orelse return error.NoSession, null);
+    defer client.deinit();
+    var reply: [256]u8 = undefined;
+    _ = try client.request(.rename, name, 0, &reply);
 }
 
 /// Dismiss the palette and return focus to the parent window.
@@ -111,6 +196,16 @@ fn dismiss(self: *CommandPalette) void {
 /// or a profile spawn for the appended profile rows.
 fn execute(self: *CommandPalette) void {
     const window = self.window;
+    if (self.mode == .rename_session) return self.saveSessionName();
+    if (self.mode == .sessions) {
+        if (self.matches.items.len == 0) return;
+        const alloc = window.app.core_app.alloc;
+        const id = alloc.dupe(u8, self.sessions[self.matches.items[self.selected]].name) catch return;
+        defer alloc.free(id);
+        self.dismiss();
+        window.attachSession(id) catch |err| log.err("session attachment failed: {}", .{err});
+        return;
+    }
     if (self.matches.items.len == 0) return self.dismiss();
     const idx = self.matches.items[self.selected];
     const cmds = self.commands();
@@ -151,6 +246,8 @@ const EntryRef = struct {
 };
 
 fn entryCount(self: *const CommandPalette) usize {
+    if (self.mode == .rename_session) return 0;
+    if (self.mode == .sessions) return self.sessions.len;
     return self.commands().len +
         self.window.app.ensureProfiles().items.len;
 }
@@ -161,6 +258,15 @@ fn entryAt(
     title_buf: []u8,
     label_buf: []u8,
 ) EntryRef {
+    if (self.mode == .sessions) {
+        const entry = self.sessions[i];
+        return .{
+            .title = if (entry.label.len > 0) entry.label else entry.name,
+            .description = std.fmt.bufPrint(title_buf, "{s} · PID {d} · {s}{s}", .{ if (entry.exited) "Exited" else "Running", entry.shell_pid, entry.name, if (std.mem.eql(u8, entry.version, @import("../../build_config.zig").version_string)) "" else " · Different build" }) catch entry.name,
+            .action = null,
+            .label = null,
+        };
+    }
     const cmds = self.commands();
     if (i < cmds.len) return .{
         .title = cmds[i].title,
@@ -200,6 +306,10 @@ fn keybindLabel(
 /// Paste clipboard text into the filter at the cap, then re-filter.
 fn paste(self: *CommandPalette) void {
     const alloc = self.window.app.core_app.alloc;
+    if (self.mode == .rename_session and self.rename_fresh) {
+        self.filter.clearRetainingCapacity();
+        self.rename_fresh = false;
+    }
     var buf: [filter_max_units]u16 = undefined;
     const room = filter_max_units -| self.filter.items.len;
     if (room == 0) return;
@@ -312,7 +422,7 @@ fn layout(self: *CommandPalette) void {
 
     const client_w = client.right - client.left;
     const w = @min(window.scale(width_logical), client_w - window.scale(40));
-    const h = window.scale(input_height_logical) +
+    const h = window.scale(input_height_logical) + (if (self.mode == .commands) @as(i32, 0) else window.scale(30)) +
         @as(i32, @intCast(self.visibleRows())) * window.scale(row_height_logical);
 
     _ = winapi.SetWindowPos(
@@ -347,6 +457,7 @@ fn moveSelection(self: *CommandPalette, delta: i32) void {
 fn rowAt(self: *const CommandPalette, y: i32) ?usize {
     const top = self.window.scale(input_height_logical);
     if (y < top) return null;
+    if (y >= top + @as(i32, @intCast(self.visibleRows())) * self.window.scale(row_height_logical)) return null;
     const row = self.scroll +
         @as(usize, @intCast(@divTrunc(y - top, self.window.scale(row_height_logical))));
     if (row >= self.matches.items.len) return null;
@@ -408,6 +519,12 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             .bottom = input_h,
         };
         if (self.filter.items.len > 0) {
+            if (self.mode == .rename_session and self.rename_fresh) {
+                if (winapi.CreateSolidBrush(select_bg)) |brush| {
+                    defer _ = winapi.DeleteObject(brush);
+                    _ = winapi.FillRect(hdc, &text_rect, brush);
+                }
+            }
             _ = winapi.SetTextColor(hdc, fg);
             var buf: [512:0]u16 = undefined;
             const n = @min(self.filter.items.len, buf.len - 1);
@@ -437,9 +554,11 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             }
         } else {
             _ = winapi.SetTextColor(hdc, fg_dim);
-            const placeholder = std.unicode.utf8ToUtf16LeStringLiteral(
-                "Type a command\u{2026}",
-            );
+            const placeholder = switch (self.mode) {
+                .commands => std.unicode.utf8ToUtf16LeStringLiteral("Type a command\u{2026}"),
+                .sessions => std.unicode.utf8ToUtf16LeStringLiteral("Search sessions\u{2026}"),
+                .rename_session => std.unicode.utf8ToUtf16LeStringLiteral("Session name\u{2026}"),
+            };
             _ = winapi.DrawTextW(
                 hdc,
                 placeholder,
@@ -581,6 +700,25 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
         }
     }
 
+    if (self.mode != .commands) {
+        const hint = self.error_text orelse if (self.mode == .rename_session)
+            "Rename session · Enter save · Esc cancel"
+        else if (self.matches.items.len == 0)
+            "No matching sessions · F5 refresh"
+        else
+            "Enter switch · F2 rename · F5 refresh · Esc close";
+        var wide: [256]u16 = undefined;
+        const n = std.unicode.utf8ToUtf16Le(&wide, hint) catch 0;
+        var rect: winapi.RECT = .{ .left = margin, .top = client.bottom - window.scale(30), .right = client.right - margin, .bottom = client.bottom };
+        const old_font = if (desc_font) |font| winapi.SelectObject(hdc, font) else null;
+        defer if (old_font) |font| {
+            _ = winapi.SelectObject(hdc, font);
+        };
+        _ = winapi.SetTextColor(hdc, fg_dim);
+        wide[n] = 0;
+        _ = winapi.DrawTextW(hdc, wide[0..n :0], @intCast(n), &rect, winapi.DT_LEFT | winapi.DT_SINGLELINE | winapi.DT_VCENTER | winapi.DT_END_ELLIPSIS);
+    }
+
     // Border.
     if (winapi.CreateSolidBrush(border)) |b| {
         defer _ = winapi.DeleteObject(b);
@@ -615,10 +753,20 @@ pub fn wndProc(
 
         winapi.WM_KEYDOWN => {
             switch (@as(u8, @truncate(wparam))) {
-                winapi.VK_ESCAPE => self.dismiss(),
+                winapi.VK_ESCAPE => if (self.mode == .rename_session) self.showSessions() else self.dismiss(),
                 winapi.VK_RETURN => self.execute(),
                 winapi.VK_UP => self.moveSelection(-1),
                 winapi.VK_DOWN => self.moveSelection(1),
+                'N' => if (winapi.GetKeyState(winapi.VK_CONTROL) < 0) self.moveSelection(1),
+                'P' => if (winapi.GetKeyState(winapi.VK_CONTROL) < 0) self.moveSelection(-1),
+                'A' => if (winapi.GetKeyState(winapi.VK_CONTROL) < 0) {
+                    if (self.mode == .rename_session) {
+                        self.rename_fresh = true;
+                    } else self.filter.clearRetainingCapacity();
+                    self.refilter();
+                },
+                winapi.VK_F1 + 1 => if (self.mode == .sessions and self.matches.items.len > 0) self.renameSession(self.sessions[self.matches.items[self.selected]].name),
+                winapi.VK_F1 + 4 => if (self.mode == .sessions) self.refreshSessions(),
                 winapi.VK_PRIOR => self.moveSelection(
                     -@as(i32, @intCast(max_visible_rows)),
                 ),
@@ -635,6 +783,10 @@ pub fn wndProc(
         winapi.WM_CHAR => {
             const alloc = self.window.app.core_app.alloc;
             const ch: u16 = @truncate(wparam);
+            if ((ch == 0x08 or (ch >= 0x20 and ch != 0x7f)) and self.mode == .rename_session and self.rename_fresh) {
+                self.filter.clearRetainingCapacity();
+                self.rename_fresh = false;
+            }
             if (ch == 0x08) {
                 // Backspace: drop one codepoint (both surrogate halves).
                 if (self.filter.pop()) |unit| {
