@@ -2,7 +2,7 @@
 # GitHub Releases — no winget/Scoop/installers by choice).
 #
 # Push a tag like v0.1.0 to build a ReleaseFast portable zip:
-#   bin/ghostty.exe (+ vendored conpty.dll/OpenConsole.exe, defterm proxy)
+#   bin/ghostty.exe, bin/yuurei-mux.exe (+ ConPTY and defterm proxy)
 #   share/...        (shell integration, terminfo, themes)
 #   LICENSE, README.md, THIRD_PARTY_NOTICES.md
 #
@@ -71,6 +71,7 @@ jobs:
           $pkg = "yuurei-$tag-windows-x64"
           New-Item -ItemType Directory "$pkg\bin" | Out-Null
           Copy-Item zig-out\bin\ghostty.exe "$pkg\bin\"
+          Copy-Item zig-out\bin\yuurei-mux.exe "$pkg\bin\"
           Copy-Item vendor\conpty\conpty.dll, vendor\conpty\OpenConsole.exe "$pkg\bin\"
           # Default-terminal handoff COM proxy/stub, resolved beside the
           # exe by defterm.register(); omit it and registration points COM

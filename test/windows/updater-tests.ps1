@@ -89,6 +89,7 @@ $package = Join-Path $testRoot 'yuurei-v0.2.17-windows-x64'
 [void][IO.Directory]::CreateDirectory((Join-Path $package 'bin'))
 [void][IO.Directory]::CreateDirectory((Join-Path $package 'share'))
 [IO.File]::Copy($newExe, (Join-Path $package 'bin/ghostty.exe'))
+[IO.File]::Copy($newExe, (Join-Path $package 'bin/yuurei-mux.exe'))
 foreach ($file in @('bin/conpty.dll','bin/OpenConsole.exe','bin/yuurei-defterm-proxy.dll','share/theme','LICENSE','README.md','THIRD_PARTY_NOTICES.md')) {
     [IO.File]::WriteAllText((Join-Path $package $file), 'updated')
 }
@@ -99,12 +100,13 @@ Compress-Archive -LiteralPath $package -DestinationPath $zip
 $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 $pending = @{tag='v0.2.17'; sha256=$hash}
 $files = @(Get-PackageFiles $zip 'v0.2.17')
-Assert ($files.Count -eq 8) 'Unexpected extracted file count.'
+Assert ($files.Count -eq 9) 'Unexpected extracted file count.'
 Reject { Assert-Pending @{tag='v0.2.17';sha256=('0'*64)} $cache } 'Accepted checksum mismatch.'
 
 $install = Make-Installation 'install space 日本語'
 Assert (Install-Package $pending $cache $install) 'Installation failed.'
 Assert ([Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $install 'bin/ghostty.exe')).ProductVersion -eq '0.2.17') 'Executable version not updated.'
+Assert ((Get-Sha256 (Join-Path $install 'bin/yuurei-mux.exe')) -eq (Get-Sha256 $newExe)) 'Upgrade from a release without a broker did not install the broker.'
 Assert ([IO.File]::ReadAllText((Join-Path $install 'share/theme')) -eq 'updated') 'Resources not updated.'
 Assert ([IO.File]::ReadAllText((Join-Path $install 'user-custom-file')) -eq 'original') 'Custom file changed.'
 Assert ([IO.File]::Exists((Join-Path $install '.yuurei-update/backup/bin/ghostty.exe'))) 'Backup missing.'
@@ -118,6 +120,21 @@ Write-JsonAtomic $journalPath $interrupted
 Assert (Install-Package $pending $cache $install) 'Interrupted transaction recovery failed.'
 Assert ([Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $install '.yuurei-update/backup/bin/ghostty.exe')).ProductVersion -eq '0.2.16') 'Recovery backed up a partially installed version.'
 Assert (Install-Package $pending $cache $install) 'Repeat installation failed.'
+
+# Subsequent releases must replace the broker alongside the GUI, and a
+# failed update must restore both to their previous build.
+$withBroker = Make-Installation 'existing broker'
+[IO.File]::Copy($oldExe, (Join-Path $withBroker 'bin/yuurei-mux.exe'))
+Assert (Install-Package $pending $cache $withBroker) 'Broker replacement failed.'
+Assert ((Get-Sha256 (Join-Path $withBroker 'bin/yuurei-mux.exe')) -eq (Get-Sha256 $newExe)) 'Existing broker was not updated.'
+Assert ((Get-Sha256 (Join-Path $withBroker '.yuurei-update/backup/bin/yuurei-mux.exe')) -eq (Get-Sha256 $oldExe)) 'Broker backup did not preserve the old build.'
+$brokerJournalPath = Join-Path $withBroker '.yuurei-update/journal.json'
+$brokerJournal = Read-Json $brokerJournalPath
+$brokerJournal.complete = $false
+Write-JsonAtomic $brokerJournalPath $brokerJournal
+Undo-Transaction $withBroker (Join-Path $withBroker '.yuurei-update')
+Assert ((Get-Sha256 (Join-Path $withBroker 'bin/yuurei-mux.exe')) -eq (Get-Sha256 $oldExe)) 'Rollback did not restore the old broker.'
+Assert ((Get-Sha256 (Join-Path $withBroker 'bin/ghostty.exe')) -eq (Get-Sha256 $oldExe)) 'Broker rollback did not restore the matching GUI.'
 
 Test-BrokerBlocksUpdate
 $busy = Make-Installation 'busy'
@@ -136,6 +153,7 @@ finally { $locked.Dispose() }
 Undo-Transaction $rollback (Join-Path $rollback '.yuurei-update')
 Assert ([IO.File]::ReadAllText((Join-Path $rollback 'bin/conpty.dll')) -eq 'original') 'Rollback did not restore a replaced file.'
 Assert ([Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $rollback 'bin/ghostty.exe')).ProductVersion -eq '0.2.16') 'Rollback changed executable.'
+Assert (![IO.File]::Exists((Join-Path $rollback 'bin/yuurei-mux.exe'))) 'Rollback left a newly introduced broker behind.'
 Assert (Install-Package $pending $cache $rollback) 'Retry after rollback failed.'
 
 # Exercise checking, download verification, throttling, and pending recovery
