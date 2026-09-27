@@ -50,8 +50,7 @@ pub fn build(b: *std.Build) !void {
     // Ghostty dependencies used by many artifacts.
     const deps = try buildpkg.SharedDeps.init(b, &config);
 
-    // Explicitly requested only; experimental session hosting is never shipped
-    // or started by the normal application/release build.
+    // Windows session hosting is bundled with the GUI but remains opt-in.
     if (config.target.result.os.tag == .windows) {
         const mux = b.addExecutable(.{
             .name = "yuurei-mux",
@@ -64,6 +63,7 @@ pub fn build(b: *std.Build) !void {
         });
         _ = try deps.add(mux);
         const install_mux = b.addInstallArtifact(mux, .{});
+        if (config.app_runtime == .win32 and config.emit_exe) b.getInstallStep().dependOn(&install_mux.step);
         b.step("mux", "Build the experimental Windows session host").dependOn(&install_mux.step);
         const mux_tests = b.addTest(.{
             .root_module = b.createModule(.{

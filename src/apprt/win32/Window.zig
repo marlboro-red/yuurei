@@ -456,6 +456,7 @@ fn closeAllTabs(self: *Window) void {
 /// How to spawn a surface: under a profile, in a specific working
 /// directory (session restore), or plainly (all defaults).
 pub const SpawnOpts = struct {
+    mux_session: ?[]const u8 = null,
     profile: ?*const profiles.Profile = null,
     cwd: ?[]const u8 = null,
     /// Resolved startup command from a separately launched process.
@@ -519,6 +520,49 @@ pub fn newTabWithOpts(self: *Window, opts: SpawnOpts) !*Surface {
     return surface;
 }
 
+pub fn restoreTab(self: *Window, saved: @import("../../mux/Workspace.zig").Tab) !void {
+    const alloc = self.app.core_app.alloc;
+    _ = self.app.ensureProfiles();
+    const profile_list = &self.app.profiles_list.?;
+    var arena: std.heap.ArenaAllocator = .init(alloc);
+    errdefer arena.deinit();
+    const nodes = try arena.allocator().alloc(Tree.Node, saved.nodes.len);
+    var initialized: usize = 0;
+    errdefer for (nodes[0..initialized]) |node| switch (node) {
+        .leaf => |surface| surface.unref(alloc),
+        .split => {},
+    };
+    for (saved.nodes, 0..) |node, index| {
+        nodes[index] = switch (node) {
+            .leaf => |pane| leaf: {
+                const surface = try alloc.create(Surface);
+                errdefer alloc.destroy(surface);
+                try surface.init(self.app, self, .{
+                    .profile = if (pane.profile.len > 0) profile_list.bySavedName(pane.profile) else null,
+                    .cwd = if (pane.cwd.len > 0) pane.cwd else null,
+                    .mux_session = pane.session,
+                }, .window);
+                break :leaf .{ .leaf = surface };
+            },
+            .split => |split| .{ .split = .{
+                .layout = @enumFromInt(@intFromEnum(split.layout)),
+                .ratio = @floatCast(split.ratio),
+                .left = @enumFromInt(split.left),
+                .right = @enumFromInt(split.right),
+            } },
+        };
+        initialized += 1;
+    }
+    const title = if (saved.title.len > 0) try alloc.dupe(u8, saved.title) else null;
+    errdefer if (title) |value| alloc.free(value);
+    try self.tabs.append(alloc, .{
+        .tree = .{ .arena = arena, .nodes = nodes, .zoomed = if (saved.zoomed) |zoomed| @enumFromInt(zoomed) else null },
+        .focused = nodes[saved.focused].leaf,
+        .custom_title = title,
+    });
+    self.activateTab(self.tabs.items.len - 1);
+}
+
 /// Inform the active tab's surfaces about full-window occlusion
 /// (minimize, quick-terminal hide) so renderers idle while hidden.
 pub fn setOccluded(self: *Window, occluded: bool) void {
@@ -532,6 +576,7 @@ pub fn setOccluded(self: *Window, occluded: bool) void {
 
 /// Move the active tab by the given offset, wrapping cyclically.
 pub fn moveTab(self: *Window, amount: isize) void {
+    defer session.changed(self.app);
     const n = self.tabs.items.len;
     if (n <= 1) return;
     const target: usize = @intCast(@mod(
@@ -874,14 +919,30 @@ fn showStripMenu(self: *Window, idx: ?usize) void {
     const menu = winapi.CreatePopupMenu() orelse return;
     defer _ = winapi.DestroyMenu(menu);
     const S = std.unicode.utf8ToUtf16LeStringLiteral;
+    var session_arena: std.heap.ArenaAllocator = .init(self.app.core_app.alloc);
+    defer session_arena.deinit();
+    const session_alloc = session_arena.allocator();
+    const sessions = @import("../../mux/Registry.zig").list(session_alloc) catch &.{};
     if (idx != null) {
         _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 1, S("Rename\u{2026}"));
-        _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 2, S("Close Tab"));
+        const persistent = self.tabs.items[idx.?].focused.core_surface.io.backend == .mux;
+        _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 2, if (persistent) S("Detach Tab") else S("Close Tab"));
+        if (persistent) _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 15, S("Terminate Focused Session\u{2026}"));
         if (self.tabs.items.len > 1)
             _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 3, S("Close Other Tabs"));
         _ = winapi.AppendMenuW(menu, winapi.MF_SEPARATOR, 0, null);
     }
     _ = winapi.AppendMenuW(menu, winapi.MF_STRING, 10, S("New Tab"));
+    if (sessions.len > 0) {
+        if (winapi.CreatePopupMenu()) |sm| {
+            for (sessions, 0..) |entry, i| {
+                const label = std.fmt.allocPrint(session_alloc, "{s} (PID {d}){s}", .{ entry.name, entry.shell_pid, if (std.mem.eql(u8, entry.version, @import("../../build_config.zig").version_string)) "" else " [different build]" }) catch continue;
+                const wide = std.unicode.utf8ToUtf16LeAllocZ(session_alloc, label) catch continue;
+                _ = winapi.AppendMenuW(sm, winapi.MF_STRING, 1000 + i, wide);
+            }
+            if (winapi.AppendMenuW(menu, winapi.MF_POPUP, @intFromPtr(sm), S("Attach Session")) == 0) _ = winapi.DestroyMenu(sm);
+        }
+    }
 
     // "New Tab with Profile" submenu (IDs 100+i map into the list).
     // Once appended with MF_POPUP the parent owns the submenu; the
@@ -938,7 +999,10 @@ fn showStripMenu(self: *Window, idx: ?usize) void {
         13 => self.togglePalette() catch |err| log.err("menu palette err={}", .{err}),
         14 => _ = self.app.performAction(.app, .open_config, .os_open) catch |err|
             log.err("menu settings err={}", .{err}),
-        else => if (cmd >= 100) {
+        15 => if (idx) |i| self.terminateSession(self.tabs.items[i].focused),
+        else => if (cmd >= 1000 and cmd - 1000 < sessions.len) {
+            self.attachSession(sessions[@intCast(cmd - 1000)].name) catch |err| log.err("session attachment failed: {}", .{err});
+        } else if (cmd >= 100 and cmd < 132) {
             const list = self.app.ensureProfiles();
             const i: usize = @intCast(cmd - 100);
             if (i < list.items.len) {
@@ -947,6 +1011,42 @@ fn showStripMenu(self: *Window, idx: ?usize) void {
             }
         },
     }
+}
+
+pub fn attachSession(self: *Window, name: []const u8) !void {
+    // Focusing an already attached pane avoids creating a duplicate error tab.
+    for (self.app.windows.items) |window| {
+        for (window.tabs.items, 0..) |*tab, index| {
+            var iterator = tab.tree.iterator();
+            while (iterator.next()) |entry| {
+                if (entry.view.core_surface.io.backend == .mux and std.mem.eql(u8, entry.view.core_surface.io.backend.mux.name, name)) {
+                    window.activateTab(index);
+                    window.focusSurface(entry.view);
+                    _ = winapi.ShowWindow(window.hwnd, winapi.SW_SHOW);
+                    _ = winapi.SetForegroundWindow(window.hwnd);
+                    return;
+                }
+            }
+        }
+    }
+    _ = try self.newTabWithOpts(.{ .mux_session = name });
+}
+
+fn terminateSession(self: *Window, surface: *Surface) void {
+    if (surface.core_surface.io.backend != .mux) return;
+    if (winapi.MessageBoxW(self.hwnd, std.unicode.utf8ToUtf16LeStringLiteral("Terminate this session and its running processes?"), std.unicode.utf8ToUtf16LeStringLiteral("Yuurei"), winapi.MB_YESNO | winapi.MB_ICONWARNING | winapi.MB_DEFBUTTON2) != winapi.IDYES) return;
+    var client = @import("../../mux/Client.zig").initControl(surface.core_surface.io.backend.mux.name, null) catch |err| {
+        log.err("session termination failed: {}", .{err});
+        return;
+    };
+    defer client.deinit();
+    var buffer: [256]u8 = undefined;
+    _ = client.request(.stop, "", 0, &buffer) catch |err| {
+        log.err("session termination failed: {}", .{err});
+        return;
+    };
+    surface.should_close = true;
+    self.app.wakeup();
 }
 
 /// Begin an in-strip rename of tab `idx`: the tab becomes an editable
@@ -972,6 +1072,7 @@ fn startRenameTab(self: *Window, idx: usize) void {
 
 /// Commit (save=true) or cancel the in-progress rename.
 fn commitRename(self: *Window, save: bool) void {
+    defer if (save) session.changed(self.app);
     if (!self.rename_active) return;
     self.rename_active = false;
 
@@ -1167,6 +1268,7 @@ pub fn promptTitle(self: *Window, surface: *const Surface) void {
 /// shows again — same semantics as committing an empty inline rename
 /// would have, and how the other apprts treat it.
 pub fn setTabTitle(self: *Window, surface: *const Surface, title: []const u8) void {
+    defer session.changed(self.app);
     const idx = self.tabOf(surface) orelse return;
     const alloc = self.app.core_app.alloc;
     const tab = &self.tabs.items[idx];
@@ -1251,6 +1353,7 @@ pub fn activeSurface(self: *Window) ?*Surface {
 
 /// Move focus within the active tab to the given surface.
 pub fn focusSurface(self: *Window, surface: *Surface) void {
+    defer session.changed(self.app);
     const tab = self.activeTab() orelse return;
     if (tab.focused == surface) return;
     if (handleOf(&tab.tree, surface) == null) return;
@@ -1267,6 +1370,7 @@ pub fn focusSurface(self: *Window, surface: *Surface) void {
 /// Position every GL host of the active tab according to the split
 /// tree's spatial layout within the terminal area (below the strip).
 pub fn layoutActiveTab(self: *Window) void {
+    session.changed(self.app);
     const tab = self.activeTab() orelse return;
     const alloc = self.app.core_app.alloc;
 

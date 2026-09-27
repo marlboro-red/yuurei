@@ -293,6 +293,11 @@ fn serve(name: []const u8, args: anytype) !void {
     session.command.pseudo_console = session.pty.pseudo_console;
     try session.command.start(alloc);
     defer session.command.deinit();
+    const record = try @import("Registry.zig").publish(alloc, name, GetProcessId(session.command.pid.?));
+    defer {
+        std.Io.Dir.deleteFileAbsolute(global.io(), record) catch {};
+        alloc.free(record);
+    }
     const input_writer = try std.Thread.spawn(worker_config, Session.writeLoop, .{&session});
     defer {
         session.stopping.store(true, .release);
@@ -392,6 +397,24 @@ fn connection(session: *Session, pipe: H, io: *transport.Io, identity: transport
 
 pub fn run(operation: []const u8, name: []const u8, args: anytype) !void {
     if (std.mem.eql(u8, operation, "serve")) return serve(name, args);
+    if (std.mem.eql(u8, operation, "start")) {
+        var argv: std.ArrayList([]const u8) = .empty;
+        defer argv.deinit(alloc);
+        while (args.next()) |arg| try argv.append(alloc, arg);
+        return @import("Lifecycle.zig").start(alloc, name, argv.items, null, null);
+    }
+    if (std.mem.eql(u8, operation, "list")) {
+        var arena: std.heap.ArenaAllocator = .init(alloc);
+        defer arena.deinit();
+        const entries = try @import("Registry.zig").list(arena.allocator());
+        const data = try std.json.Stringify.valueAlloc(arena.allocator(), entries, .{});
+        var bytes: [4096]u8 = undefined;
+        var out = std.Io.File.stdout().writer(global.io(), &bytes);
+        try out.interface.writeAll(data);
+        try out.interface.writeByte('\n');
+        try out.interface.flush();
+        return;
+    }
     var client = if (std.mem.eql(u8, operation, "status") or std.mem.eql(u8, operation, "stop"))
         try Client.initControl(name, null)
     else

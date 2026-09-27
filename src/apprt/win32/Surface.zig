@@ -309,6 +309,15 @@ pub fn init(
         );
     defer config.deinit();
 
+    if (spawn_opts.mux_session) |name| {
+        config.@"windows-mux-session" = try config._arena.?.allocator().dupeZ(u8, name);
+    } else if (context != .window and config.@"windows-mux-session" != null) {
+        // A new tab/split gets its own shell, not a second view of the initial
+        // command-line attachment target.
+        config.@"windows-mux-session" = null;
+        config.@"windows-persistent-sessions" = true;
+    }
+
     const parking = global.environ().getWindows(std.unicode.utf8ToUtf16LeStringLiteral("GHOSTTY_PARK_DRAWABLES"));
     self.park_drawable = !config.@"windows-flip-model" and
         parking != null and std.mem.eql(u16, parking.?, &.{'1'});

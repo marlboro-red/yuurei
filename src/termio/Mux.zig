@@ -19,6 +19,7 @@ extern "kernel32" fn WaitForSingleObject(w.HANDLE, u32) callconv(.winapi) u32;
 extern "kernel32" fn WaitForMultipleObjects(u32, [*]const w.HANDLE, w.BOOL, u32) callconv(.winapi) u32;
 
 alloc: std.mem.Allocator,
+name: [:0]const u8,
 client: ?Client = null,
 initial: ?snapshot.Decoded = null,
 init_error: ?anyerror = null,
@@ -35,20 +36,30 @@ input: [protocol.max_request]u8 = undefined,
 input_len: usize = 0,
 pending_size: ?[4]u8 = null,
 
-pub fn init(alloc: std.mem.Allocator, name: []const u8) !*Mux {
+pub fn init(alloc: std.mem.Allocator, name: []const u8, launch: ?*const @import("Exec.zig")) !*Mux {
     const stop = CreateEventW(null, 1, 0, null) orelse return error.CreateEvent;
     errdefer _ = w.CloseHandle(stop);
     const wake = CreateEventW(null, 0, 0, null) orelse return error.CreateEvent;
     errdefer _ = w.CloseHandle(wake);
     const self = try alloc.create(Mux);
-    self.* = .{ .alloc = alloc, .stop = stop, .wake = wake };
+    errdefer alloc.destroy(self);
+    self.* = .{ .alloc = alloc, .name = try alloc.dupeZ(u8, name), .stop = stop, .wake = wake };
     // Preserve the standard IO-startup error pane when a broker is absent,
     // busy or incompatible. Never silently launch a replacement shell.
-    self.load(name) catch |err| {
+    self.connect(name, launch) catch |err| {
         self.init_error = err;
         self.disconnected.store(true, .release);
     };
     return self;
+}
+
+fn connect(self: *Mux, name: []const u8, launch: ?*const @import("Exec.zig")) !void {
+    self.load(name) catch |err| {
+        if (err != error.SessionNotFound) return err;
+        const exec = launch orelse return err;
+        try @import("../mux/Lifecycle.zig").start(self.alloc, name, exec.subprocess.args, exec.subprocess.cwd, if (exec.subprocess.env) |*env| env else null);
+        try self.load(name);
+    };
 }
 
 fn load(self: *Mux, name: []const u8) !void {
@@ -134,6 +145,7 @@ pub fn deinit(self: *Mux) void {
     if (self.client) |*client| client.deinit();
     _ = w.CloseHandle(self.stop);
     _ = w.CloseHandle(self.wake);
+    self.alloc.free(self.name);
     self.alloc.destroy(self);
 }
 

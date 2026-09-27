@@ -55,17 +55,18 @@ Remaining before the flip:
 
 ## Session restore v2
 
-- [ ] Record splits and window geometry (a tab currently restores as its
-      focused pane; windows restore at default size/position).
+- [x] Record split trees, focus/zoom, window geometry and persistent pane IDs
+      on the multiplexer branch, with atomic crash-recovery snapshots.
 
-Multiplexer work is on `feature/multiplexer`. An opt-in single-pane broker and
-native pane backend support experimental live detach/reattach. Named workspaces,
-broker lifecycle integration, and production transport tuning remain outstanding.
+Multiplexer work is on `feature/multiplexer`. Opt-in persistent native panes
+support automatic independent broker startup, discovery, detach/reattach,
+termination controls, and named workspaces with complete tab/split restoration.
 See [`MULTIPLEXER_IMPLEMENTATION.md`](MULTIPLEXER_IMPLEMENTATION.md) for build
 instructions, validation, and remaining gates, and
 [`MULTIPLEXER_RESEARCH.md`](MULTIPLEXER_RESEARCH.md) for the original research.
-The broker is not installed by the normal build; native attachment is disabled
-unless `windows-mux-session` is explicitly configured.
+The broker is bundled by normal Windows builds. Enable
+`windows-persistent-sessions` for new panes; `windows-mux-session` still supports
+explicit attachment. Broader compatibility and adversarial validation remain.
 
 ## Rendering / presentation
 

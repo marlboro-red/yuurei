@@ -2121,6 +2121,17 @@ keybind: Keybinds = .{},
 /// One controlling pane is supported. Unset by default; development use only.
 @"windows-mux-session": ?[:0]const u8 = null,
 
+/// Keep Windows shells alive independently of their windows. New panes launch
+/// a detached broker using their configured command, environment and directory.
+/// Closing a pane detaches; explicitly terminate a session to stop its shell.
+/// Requires the sibling yuurei-mux.exe from the same build. Experimental.
+@"windows-persistent-sessions": bool = false,
+
+/// Named Windows workspace whose tabs, splits, and persistent session IDs are
+/// saved and restored. Applied when the GUI process starts. Separate names
+/// have independent layouts; windows-restore-session controls restoration.
+@"windows-workspace": [:0]const u8 = "default",
+
 /// Windows (yuurei): check GitHub Releases daily and download newer stable
 /// portable releases in the background. Verified updates install on normal
 /// exit once all instances using this installation have closed. Shells are

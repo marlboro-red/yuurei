@@ -12,7 +12,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer args.deinit();
     _ = args.next();
     const operation = args.next() orelse return error.ExpectedOperation;
-    const name = args.next() orelse return error.ExpectedSessionName;
+    const name = args.next() orelse if (std.mem.eql(u8, operation, "list")) "" else return error.ExpectedSessionName;
     try mux.run(operation, name, &args);
 }
 
@@ -20,4 +20,5 @@ test {
     _ = @import("mux/protocol.zig");
     _ = @import("mux/Journal.zig");
     _ = @import("mux/snapshot_test.zig");
+    _ = @import("mux/Workspace.zig");
 }

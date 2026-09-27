@@ -120,6 +120,12 @@ quit: bool = false,
 /// quit-after-last-window-closed linger, so without this a `global:`
 /// new_window during the linger would re-open the entire session.
 session_restored: bool = false,
+workspace_name: ?[]const u8 = null,
+session_restoring: bool = false,
+session_lock_initialized: bool = false,
+session_lock: ?winapi.HANDLE = null,
+session_timer: usize = 0,
+session_deadline_ms: ?i64 = null,
 
 /// Default-terminal handoffs received from the COM server but not yet
 /// turned into windows. EstablishPtyHandoff enqueues here and returns
@@ -352,6 +358,7 @@ pub fn init(
     self.* = .{
         .core_app = core_app,
         .config = config,
+        .workspace_name = try core_app.alloc.dupe(u8, config.@"windows-workspace"),
         .hinstance = hinstance,
         .thread_id = std.os.windows.GetCurrentThreadId(),
         .flip_capable = flip_capable,
@@ -538,6 +545,9 @@ fn prewarmThreadMain(self: *App) void {
 }
 
 pub fn terminate(self: *App) void {
+    if (self.session_timer != 0) _ = winapi.KillTimer(null, self.session_timer);
+    if (self.session_lock) |handle| _ = winapi.CloseHandle(handle);
+    if (self.workspace_name) |name| self.core_app.alloc.free(name);
     self.updater.deinit(self.core_app.alloc, self.config.@"windows-auto-update");
     if (self.wsl_thread) |t| t.join();
     if (self.wsl_result) |*l| l.deinit();
@@ -928,6 +938,7 @@ pub fn run(self: *App) !void {
 
         // Tick the terminal app
         try self.core_app.tick(self);
+        session.tick(self);
         // Restore the host's initial session before forwarded launches,
         // including when several processes start simultaneously.
         if (!self.quit) if (self.instance) |instance| instance.drain();

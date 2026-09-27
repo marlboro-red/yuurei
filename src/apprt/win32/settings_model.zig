@@ -35,7 +35,7 @@ pub const fields = [_]Field{
     .{ .key = "cursor-style", .title = "Cursor shape", .description = "Default terminal cursor shape.", .category = .terminal, .kind = .choice, .choices = &.{ "block", "bar", "underline", "block_hollow" } },
     .{ .key = "cursor-style-blink", .title = "Blinking cursor", .description = "Enable cursor blinking.", .category = .terminal, .kind = .choice, .choices = &.{ "", "true", "false" } },
     .{ .key = "confirm-close-surface", .title = "Confirm before closing", .description = "Ask before closing a terminal with a running process.", .category = .terminal, .kind = .choice, .choices = &.{ "true", "false", "always" } },
-    .{ .key = "windows-restore-session", .title = "Restore tabs on launch", .description = "Reopen profiles, titles, and folders. Starts fresh shells.", .category = .windows, .kind = .toggle },
+    .{ .key = "windows-restore-session", .title = "Restore workspace on launch", .description = "Restore tabs, splits, and folders. Reattach persistent shells.", .category = .windows, .kind = .toggle },
     .{ .key = "windows-titlebar-thin", .title = "Compact tab bar", .description = "Reduce the height of the title bar.", .category = .windows, .kind = .toggle },
     .{ .key = "window-inherit-working-directory", .title = "New windows keep the folder", .description = "Start new windows in the current terminal's directory.", .category = .windows, .kind = .toggle },
     .{ .key = "tab-inherit-working-directory", .title = "New tabs keep the folder", .description = "Start new tabs in the current terminal's directory.", .category = .windows, .kind = .toggle },
@@ -44,6 +44,8 @@ pub const fields = [_]Field{
     .{ .key = "copy-on-select", .title = "Copy selected text", .description = "Copy selections directly to the Windows clipboard.", .category = .input, .kind = .choice, .choices = &.{ "none", "clipboard" } },
     .{ .key = "win32-input-mode", .title = "Windows keyboard compatibility", .description = "Preserve modifiers such as Shift+Enter in console apps.", .category = .input, .kind = .toggle, .restart = true },
     .{ .key = "windows-auto-update", .title = "Automatic updates", .description = "Download daily. Install after all Yuurei instances close.", .category = .updates, .kind = .toggle },
+    .{ .key = "windows-persistent-sessions", .title = "Persistent sessions", .description = "Keep shells running when panes close. Applies to new panes.", .category = .windows, .kind = .toggle, .restart = true },
+    .{ .key = "windows-workspace", .title = "Workspace name", .description = "Separate names keep independent saved layouts. Applies after restart.", .category = .windows, .kind = .text, .restart = true },
 };
 
 pub fn choiceLabel(index: usize, raw: []const u8) []const u8 {

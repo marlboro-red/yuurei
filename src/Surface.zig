@@ -650,8 +650,10 @@ pub fn init(
     {
         var io_backend: termio.Backend = backend: {
             if (comptime builtin.os.tag == .windows) {
-                if (config.@"windows-mux-session") |name| {
-                    break :backend .{ .mux = try termio.backend.Mux.init(alloc, name) };
+                if (!config.@"windows-persistent-sessions") {
+                    if (config.@"windows-mux-session") |name| {
+                        break :backend .{ .mux = try termio.backend.Mux.init(alloc, name, null) };
+                    }
                 }
             }
             var env = rt_surface.defaultTermioEnv() catch |err| env: {
@@ -659,7 +661,8 @@ pub fn init(
                 log.warn("error getting env map for surface err={}", .{err});
                 break :env global.environMap() catch std.process.Environ.Map.init(alloc);
             };
-            errdefer env.deinit();
+            var env_owned = true;
+            errdefer if (env_owned) env.deinit();
 
             // don't leak GHOSTTY_LOG to any subprocesses
             _ = env.orderedRemove("GHOSTTY_LOG");
@@ -680,7 +683,7 @@ pub fn init(
                 null;
 
             // Initialize our IO backend
-            const io_exec = try termio.Exec.init(alloc, .{
+            var io_exec = try termio.Exec.init(alloc, .{
                 .command = command,
                 .env = env,
                 .handoff = handoff,
@@ -694,6 +697,15 @@ pub fn init(
                 .rt_pre_exec_info = .init(config),
                 .rt_post_fork_info = .init(config),
             });
+            env_owned = false;
+            if (comptime builtin.os.tag == .windows) {
+                if (config.@"windows-persistent-sessions" and handoff == null) {
+                    defer io_exec.deinit();
+                    const generated = try std.fmt.allocPrint(alloc, "pane-{x}", .{self.id});
+                    defer alloc.free(generated);
+                    break :backend .{ .mux = try termio.backend.Mux.init(alloc, config.@"windows-mux-session" orelse generated, &io_exec) };
+                }
+            }
             break :backend .{ .exec = io_exec };
         };
         errdefer io_backend.deinit();

@@ -2,9 +2,10 @@
 
 Branch: `feature/multiplexer`, based on `6184a41a5` (v0.2.18).
 
-Status: experimental single-pane broker, native pane backend, and diagnostic
-console client implemented. Native attachment is disabled by default; the broker
-is built only with the explicit `mux` target. Research is in
+Status: opt-in persistent native panes, automatic broker startup, discovery,
+native session controls, and named workspace restore are implemented. Each
+pane currently owns an independent broker; one view attaches per broker.
+The broker is bundled in normal Windows builds. Research is in
 [`MULTIPLEXER_RESEARCH.md`](MULTIPLEXER_RESEARCH.md).
 
 ## First milestone: one persistent native pane
@@ -43,7 +44,7 @@ transport, simultaneous viewers, and tmux interoperability need later work.
 
 ## Implementation gates
 
-- [ ] Specify session/view ownership, detach/terminate semantics, and broker
+- [x] Specify session/view ownership, detach/terminate semantics, and broker
       discovery, authentication, and version compatibility.
 - [x] Implement versioned, bounded framing and a named single-pane endpoint;
       unit-test invalid magic, versions, flags, operations, and payload lengths.
@@ -55,7 +56,7 @@ transport, simultaneous viewers, and tmux interoperability need later work.
       stalled peers, and cross-user/logon/elevation isolation on Windows.
 - [x] Implement an incremental native pane backend with bounded event history.
       A stale client disconnects without stopping shell output.
-- [ ] Replace short polling with independently multiplexed push notifications,
+- [x] Replace short polling with independently multiplexed push notifications,
       and benchmark native attachment latency and idle CPU.
 - [x] Attach a temporary console client using sequenced complete snapshots.
       It redraws the active viewport; it is not the final renderer integration.
@@ -63,7 +64,7 @@ transport, simultaneous viewers, and tmux interoperability need later work.
       child exit, repeated reconnects, and termination of only the test GUI.
 - [ ] Measure attached/detached CPU, committed memory, resident memory, threads,
       handles, and reconnect latency against the normal single-pane path.
-- [ ] Add named workspaces, tab/split layout ownership, and session controls
+- [x] Add named workspaces, tab/split layout ownership, and session controls
       after the persistence gate passes.
 
 ## Test isolation
@@ -75,11 +76,49 @@ own harness. Release installation and automatic updates stay untouched.
 
 ## Build and exercise
 
+Enable **Settings → Windows & tabs → Persistent sessions** for new panes, or
+set `windows-persistent-sessions = true`. Normal Windows builds now include the
+matching `yuurei-mux.exe`. Each new tab/split starts an independent named broker
+using the usual prepared command, environment, shell integration, and working
+directory. Broker creation uses `DETACHED_PROCESS` and explicit job breakaway;
+if the parent job forbids breakaway, startup fails visibly instead of claiming
+the session will survive its GUI.
+
+Closing a persistent tab detaches it. The tab context menu offers **Attach
+Session**, **Detach Tab**, and **Terminate Focused Session** (confirmation
+required). Attaching a session already visible in the current process focuses
+that pane. Discovery validates process creation times and installation identity;
+pipe authentication/version checks remain authoritative.
+
+`windows-workspace = dev` selects a named saved layout; `windows-restore-session`
+controls saving/restoration. Version 2 preserves complete split trees, ratios,
+focus, zoom, titles, directories, session IDs, and on-screen window geometry.
+Changes are saved atomically after a short debounce, including before GUI
+crashes rather than only on exit. An exclusive workspace lock prevents a second
+process from overwriting a live workspace. The original flat format is imported
+on first restoration. Layouts are bounded to 16 windows / 64 panes and 1 MiB.
+
+Manual broker commands remain available:
+
+```powershell
+.\zig-out\bin\yuurei-mux.exe start dev pwsh.exe -NoLogo
+.\zig-out\bin\yuurei-mux.exe list
+.\zig-out\bin\yuurei-mux.exe status dev
+.\zig-out\bin\yuurei-mux.exe stop dev
+```
+
+`start` detaches automatically; `serve` remains a foreground diagnostic command.
+`list` returns live discovery records for the current installation/user/session.
+Existing brokers from incompatible builds are shown, but not silently replaced.
+Running shells are not preserved across broker termination, logoff, or reboot.
+
 ```powershell
 zig build mux -Doptimize=ReleaseFast -Dcpu=x86_64_v2
 zig build -Doptimize=ReleaseFast -Dcpu=x86_64_v2
 zig build test-mux -Doptimize=ReleaseFast -Dcpu=x86_64_v2 -Dtest-filter=mux
 pwsh -NoProfile -File test/windows/mux-smoke.ps1 -GuiExecutable "$PWD/zig-out/bin/ghostty.exe" -NativePane
+pwsh -NoProfile -File test/windows/mux-lifecycle.ps1
+pwsh -NoProfile -File test/windows/mux-workspace.ps1
 ```
 
 The test starts a broker separately from the disposable GUI, kills that GUI
@@ -91,6 +130,12 @@ handling, child exit, and repeated reconnect handle counts. Artifacts include
 screenshots, logs, captures, and memory/idle CPU samples. Omitting `GuiExecutable`
 runs the headless checks only. Omitting `NativePane` exercises the older console
 client, where Ctrl+] detaches.
+
+Lifecycle coverage checks inherited command/Unicode arguments/environment/cwd,
+automatic detached startup, discovery, GUI crash, and termination while attached.
+Workspace coverage creates four shells across two tabs with nested splits,
+kills/reopens the GUI, verifies identical live PIDs/layout/focus/zoom/input,
+and checks exclusive ownership plus independent named workspaces.
 
 To open a native pane after starting a broker named `demo`:
 

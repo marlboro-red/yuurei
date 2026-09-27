@@ -590,7 +590,7 @@ fn createNullDelimitedEnvMap(arena: mem.Allocator, env_map: *const EnvMap) ![:nu
 
 // Copied from Zig. This is a publicly exported function but there is no
 // way to get it from the std package.
-fn createWindowsEnvBlock(allocator: mem.Allocator, env_map: *const EnvMap) ![]u16 {
+pub fn createWindowsEnvBlock(allocator: mem.Allocator, env_map: *const EnvMap) ![]u16 {
     // count bytes needed
     const max_chars_needed = x: {
         var max_chars_needed: usize = 4; // 4 for the final 4 null bytes
@@ -627,14 +627,14 @@ fn createWindowsEnvBlock(allocator: mem.Allocator, env_map: *const EnvMap) ![]u1
 }
 
 /// Copied from Zig. This function could be made public in child_process.zig instead.
-fn windowsCreateCommandLine(allocator: mem.Allocator, argv: []const []const u8) ![:0]u8 {
+pub fn windowsCreateCommandLine(allocator: mem.Allocator, argv: []const []const u8) ![:0]u8 {
     var buf: std.Io.Writer.Allocating = .init(allocator);
     defer buf.deinit();
     const writer = &buf.writer;
 
     for (argv, 0..) |arg, arg_i| {
         if (arg_i != 0) try writer.writeByte(' ');
-        if (mem.indexOfAny(u8, arg, " \t\n\"") == null) {
+        if (arg.len > 0 and mem.indexOfAny(u8, arg, " \t\n\"") == null) {
             try writer.writeAll(arg);
             continue;
         }
@@ -660,6 +660,12 @@ fn windowsCreateCommandLine(allocator: mem.Allocator, argv: []const []const u8) 
     }
 
     return buf.toOwnedSliceSentinel(0);
+}
+
+test "mux launch quoting preserves empty arguments" {
+    const line = try windowsCreateCommandLine(testing.allocator, &.{ "app.exe", "", "a b" });
+    defer testing.allocator.free(line);
+    try testing.expectEqualStrings("app.exe \"\" \"a b\"", line);
 }
 
 test "createNullDelimitedEnvMap" {

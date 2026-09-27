@@ -1,88 +1,123 @@
 //! Session save/restore for the win32 apprt (windows-restore-session).
 //!
-//! State is a small tab-separated text file at
-//! %LOCALAPPDATA%\ghostty\session, rewritten whenever a window closes
-//! or the app quits, and consumed by the first window creation on the
-//! next launch. Per tab: profile name, manual title, and working
-//! directory (splits are not yet recorded; a tab restores as its
-//! focused pane).
-//!
-//! Format (fields are tab-separated, empty allowed):
-//!   yuurei-session 1
-//!   window
-//!   tab\t<profile>\t<title>\t<cwd>
-//!   active\t<idx>
+//! Version 2 JSON stores windows, tabs, complete split trees, and broker IDs.
+//! The default workspace retains the original session path and can import
+//! the legacy tab-separated v1 format. Named workspaces use hashed filenames.
+//! Atomic saves are debounced after layout changes, and an exclusive lock
+//! prevents separate GUI processes from overwriting the same workspace.
 
 const std = @import("std");
 const global = @import("../../global.zig");
 const App = @import("App.zig");
 const Window = @import("Window.zig");
 const Surface = @import("Surface.zig");
+const workspace = @import("../../mux/Workspace.zig");
+const w = @import("winapi.zig");
 
 const log = std.log.scoped(.win32);
 
 const header = "yuurei-session 1";
-const max_file_size = 64 * 1024;
+const max_file_size = 1024 * 1024;
 
-fn sessionPath(alloc: std.mem.Allocator) ?[]const u8 {
+fn sessionPath(app: *App, alloc: std.mem.Allocator) ?[]const u8 {
     const base = global.environ().getAlloc(alloc, "LOCALAPPDATA") catch return null;
     defer alloc.free(base);
-    return std.fs.path.join(alloc, &.{ base, "ghostty", "session" }) catch null;
+    const name = app.workspace_name orelse "default";
+    if (std.mem.eql(u8, name, "default")) return std.fs.path.join(alloc, &.{ base, "ghostty", "session" }) catch null;
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(name, &digest, .{});
+    const file = std.fmt.allocPrint(alloc, "workspace-{x}", .{digest}) catch return null;
+    defer alloc.free(file);
+    return std.fs.path.join(alloc, &.{ base, "ghostty", file }) catch null;
 }
 
-/// A field is one line-cell: tabs and newlines stripped so the format
-/// can't be broken by hostile titles/paths.
-fn writeField(w: anytype, field: []const u8) void {
-    for (field) |c| {
-        if (c == '\t' or c == '\n' or c == '\r') continue;
-        w.writeByte(c) catch return;
+fn ownWorkspace(app: *App) bool {
+    if (app.session_lock_initialized) return app.session_lock != null;
+    app.session_lock_initialized = true;
+    const alloc = app.core_app.alloc;
+    const path = sessionPath(app, alloc) orelse return false;
+    defer alloc.free(path);
+    if (std.fs.path.dirname(path)) |dir| std.Io.Dir.cwd().createDirPath(global.io(), dir) catch return false;
+    const lock_path = std.fmt.allocPrint(alloc, "{s}.lock", .{path}) catch return false;
+    defer alloc.free(lock_path);
+    const wide = std.unicode.utf8ToUtf16LeAllocZ(alloc, lock_path) catch return false;
+    defer alloc.free(wide);
+    const handle = w.CreateFileW(wide, w.GENERIC_READ | w.GENERIC_WRITE, 0, null, 4, 0x80, null);
+    if (handle == std.os.windows.INVALID_HANDLE_VALUE) {
+        log.warn("workspace is already owned or unavailable; layout restore/save disabled", .{});
+        return false;
     }
+    app.session_lock = handle;
+    return true;
+}
+
+/// Coalesce structural changes. No periodic wakeups while the layout is idle.
+pub fn changed(app: *App) void {
+    if (!app.config.@"windows-restore-session" or app.session_restoring or app.session_deadline_ms != null) return;
+    app.session_deadline_ms = std.Io.Timestamp.now(global.io(), .awake).toMilliseconds() + 250;
+    app.session_timer = w.SetTimer(null, 0, 275, null);
+    if (app.session_timer == 0) {
+        app.session_deadline_ms = null;
+        save(app);
+    }
+}
+
+pub fn tick(app: *App) void {
+    const deadline = app.session_deadline_ms orelse return;
+    if (std.Io.Timestamp.now(global.io(), .awake).toMilliseconds() < deadline) return;
+    if (app.session_timer != 0) _ = w.KillTimer(null, app.session_timer);
+    app.session_timer = 0;
+    app.session_deadline_ms = null;
+    save(app);
 }
 
 /// Record the current windows/tabs. Called with all windows still
 /// alive (before teardown). Failures are silent: losing a session
 /// snapshot must never block closing.
 pub fn save(app: *App) void {
-    if (!app.config.@"windows-restore-session") return;
-    const alloc = app.core_app.alloc;
-    const path = sessionPath(alloc) orelse return;
-    defer alloc.free(path);
+    if (!app.config.@"windows-restore-session" or app.session_restoring or !ownWorkspace(app)) return;
+    saveLayout(app) catch |err| log.warn("workspace save failed: {}", .{err});
+}
 
-    var buf: std.Io.Writer.Allocating = .init(alloc);
-    defer buf.deinit();
-    const w = &buf.writer;
-
-    w.writeAll(header ++ "\n") catch return;
-    var recorded: usize = 0;
+fn saveLayout(app: *App) !void {
+    var arena: std.heap.ArenaAllocator = .init(app.core_app.alloc);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const path = sessionPath(app, alloc) orelse return;
+    var windows: std.ArrayList(workspace.Window) = .empty;
     for (app.windows.items) |window| {
-        // The quick terminal is summoned, not restored.
-        if (window.quick) continue;
-        if (window.tabs.items.len == 0) continue;
-        recorded += 1;
-        w.writeAll("window\n") catch return;
+        if (window.quick or window.tabs.items.len == 0) continue;
+        var tabs: std.ArrayList(workspace.Tab) = .empty;
         for (window.tabs.items) |*tab| {
-            const surface = tab.focused;
-            w.writeAll("tab\t") catch return;
-            writeField(w, surface.profile_name orelse "");
-            w.writeByte('\t') catch return;
-            writeField(w, tab.custom_title orelse "");
-            w.writeByte('\t') catch return;
-            const cwd = surface.core_surface.pwd(alloc) catch null;
-            defer if (cwd) |c| alloc.free(c);
-            writeField(w, cwd orelse "");
-            w.writeByte('\n') catch return;
+            const nodes = try alloc.alloc(workspace.Node, tab.tree.nodes.len);
+            var focused: u16 = 0;
+            for (tab.tree.nodes, 0..) |node, index| {
+                nodes[index] = switch (node) {
+                    .leaf => |surface| leaf: {
+                        if (surface == tab.focused) focused = @intCast(index);
+                        break :leaf .{ .leaf = .{
+                            .profile = surface.profile_name orelse "",
+                            .cwd = (surface.core_surface.pwd(alloc) catch null) orelse "",
+                            .session = if (surface.core_surface.io.backend == .mux) surface.core_surface.io.backend.mux.name else null,
+                        } };
+                    },
+                    .split => |split| .{ .split = .{ .layout = @enumFromInt(@intFromEnum(split.layout)), .ratio = split.ratio, .left = @intFromEnum(split.left), .right = @intFromEnum(split.right) } },
+                };
+            }
+            try tabs.append(alloc, .{ .title = tab.custom_title orelse "", .nodes = nodes, .focused = focused, .zoomed = if (tab.tree.zoomed) |z| @intFromEnum(z) else null });
         }
-        w.print("active\t{d}\n", .{window.active_tab}) catch return;
+        var rect: w.RECT = undefined;
+        var geometry: ?workspace.Geometry = null;
+        if (w.GetWindowRect(window.hwnd, &rect) != 0 and rect.right - rect.left >= 200 and rect.bottom - rect.top >= 100 and rect.left > -30000 and rect.top > -30000)
+            geometry = .{ .x = rect.left, .y = rect.top, .width = @intCast(rect.right - rect.left), .height = @intCast(rect.bottom - rect.top) };
+        try windows.append(alloc, .{ .tabs = tabs.items, .active = window.active_tab, .geometry = geometry });
     }
-
-    // Nothing restorable is open — e.g. quitting from a lingering quick
-    // terminal after the real windows already closed (their good snapshot
-    // was written when they closed). Overwriting now with a header-only
-    // file would silently destroy that snapshot, so leave it untouched:
-    // restoring the last real layout beats restoring nothing.
-    if (recorded == 0) return;
-
-    writeAtomic(alloc, path, buf.written());
+    if (windows.items.len == 0) return;
+    const state: workspace.State = .{ .windows = windows.items };
+    try workspace.validate(state);
+    const data = try std.json.Stringify.valueAlloc(alloc, state, .{});
+    if (data.len > max_file_size) return error.WorkspaceTooLarge;
+    writeAtomic(alloc, path, data);
 }
 
 /// Replace the session file atomically: write a sibling temp and rename
@@ -126,14 +161,18 @@ fn writeAtomic(alloc: std.mem.Allocator, path: []const u8, data: []const u8) voi
 /// the caller then creates the default window. The session file is
 /// left in place; it is rewritten at the next close anyway.
 pub fn restore(app: *App) ?*Surface {
-    if (!app.config.@"windows-restore-session") return null;
+    if (!app.config.@"windows-restore-session" or !ownWorkspace(app)) return null;
+    app.session_restoring = true;
+    defer app.session_restoring = false;
     const alloc = app.core_app.alloc;
-    const path = sessionPath(alloc) orelse return null;
+    const path = sessionPath(app, alloc) orelse return null;
     defer alloc.free(path);
 
     const data = std.Io.Dir.cwd().readFileAlloc(global.io(), path, alloc, .limited(max_file_size)) catch
         return null;
     defer alloc.free(data);
+
+    if (std.mem.startsWith(u8, std.mem.trimStart(u8, data, " \r\n\t"), "{")) return restoreLayout(app, data);
 
     var lines = std.mem.splitScalar(u8, data, '\n');
     if (!std.mem.eql(u8, std.mem.trimEnd(u8, lines.next() orelse "", "\r"), header))
@@ -191,6 +230,33 @@ pub fn restore(app: *App) ?*Surface {
             result = kept.activeSurface();
     }
 
+    return result;
+}
+
+fn restoreLayout(app: *App, data: []const u8) ?*Surface {
+    const parsed = std.json.parseFromSlice(workspace.State, app.core_app.alloc, data, .{}) catch return null;
+    defer parsed.deinit();
+    workspace.validate(parsed.value) catch |err| {
+        log.warn("invalid workspace layout: {}", .{err});
+        return null;
+    };
+    var result: ?*Surface = null;
+    for (parsed.value.windows) |saved| {
+        const window = newRestoredWindow(app) orelse continue;
+        if (saved.geometry) |g| {
+            const monitor = w.MonitorFromPoint(.{ .x = g.x, .y = g.y }, w.MONITOR_DEFAULTTONEAREST);
+            var info: w.MONITORINFO = std.mem.zeroes(w.MONITORINFO);
+            info.cbSize = @sizeOf(w.MONITORINFO);
+            if (w.GetMonitorInfoW(monitor, &info) != 0) {
+                const width = @min(@as(i32, @intCast(g.width)), info.rcWork.right - info.rcWork.left);
+                const height = @min(@as(i32, @intCast(g.height)), info.rcWork.bottom - info.rcWork.top);
+                _ = w.SetWindowPos(window.hwnd, null, std.math.clamp(g.x, info.rcWork.left, info.rcWork.right - width), std.math.clamp(g.y, info.rcWork.top, info.rcWork.bottom - height), width, height, w.SWP_NOACTIVATE | w.SWP_NOZORDER);
+            }
+        }
+        for (saved.tabs) |tab| window.restoreTab(tab) catch |err| log.warn("workspace tab restore failed: {}", .{err});
+        if (window.tabs.items.len > 0) window.activateTab(@min(saved.active, window.tabs.items.len - 1));
+        if (finalizeRestoredWindow(app, window)) |kept| result = kept.activeSurface();
+    }
     return result;
 }
 

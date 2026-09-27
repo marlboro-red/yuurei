@@ -27,7 +27,11 @@ fn connect(name: []const u8, stop: ?H, control: bool) !Client {
     const path = try transport.endpointName(name, identity, control);
     defer alloc.free(path);
     const pipe = w.CreateFileW(path, w.GENERIC_READ | w.GENERIC_WRITE, 0, null, w.OPEN_EXISTING, w.FILE_FLAG_OVERLAPPED | 0x00110000, null);
-    if (pipe == windows.INVALID_HANDLE_VALUE) return error.SessionUnavailable;
+    if (pipe == windows.INVALID_HANDLE_VALUE) return switch (windows.GetLastError()) {
+        .FILE_NOT_FOUND, .PATH_NOT_FOUND => error.SessionNotFound,
+        .PIPE_BUSY => error.SessionBusy,
+        else => error.SessionUnavailable,
+    };
     errdefer _ = w.CloseHandle(pipe);
     const server_pid = try transport.peer(pipe, true, identity);
     var result: Client = .{ .pipe = pipe, .io = try transport.Io.init(stop), .server_pid = server_pid };
