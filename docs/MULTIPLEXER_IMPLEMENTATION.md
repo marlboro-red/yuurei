@@ -135,6 +135,10 @@ The broker retains an exited shell's screen until explicitly stopped.
 
 ## Current bounds and limitations
 
+See [native performance measurements](MULTIPLEXER_BENCHMARK.md) for the
+direct-versus-broker comparison, including a reproduced event-history overrun
+under unpaced output. This remains an experimental backend.
+
 - The broker uses a blocking output reader and an event-driven input writer.
   Network writes occur outside the terminal lock, so an unread client response
   does not retain that lock or stop PTY draining.
