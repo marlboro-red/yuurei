@@ -15,6 +15,7 @@ const protocol = @import("protocol.zig");
 const H = w.HANDLE;
 const alloc = std.heap.c_allocator;
 const build_identity = @import("../build_config.zig").version_string;
+const worker_config = @import("../os/windows.zig").worker_thread_config;
 extern "kernel32" fn ConnectNamedPipe(H, ?*anyopaque) callconv(.winapi) w.BOOL;
 extern "kernel32" fn DisconnectNamedPipe(H) callconv(.winapi) w.BOOL;
 extern "kernel32" fn GetProcessId(H) callconv(.winapi) u32;
@@ -284,13 +285,13 @@ fn serve(name: []const u8, args: anytype) !void {
     session.command.pseudo_console = session.pty.pseudo_console;
     try session.command.start(alloc);
     defer session.command.deinit();
-    const input_writer = try std.Thread.spawn(.{}, Session.writeLoop, .{&session});
+    const input_writer = try std.Thread.spawn(worker_config, Session.writeLoop, .{&session});
     defer {
         session.stopping.store(true, .release);
         _ = SetEvent(session.input_event);
         input_writer.join();
     }
-    const reader = try std.Thread.spawn(.{}, Session.read, .{&session});
+    const reader = try std.Thread.spawn(worker_config, Session.read, .{&session});
     defer {
         session.stopping.store(true, .release);
         // Cancellation can race with entry into ReadFile. Retry until the
@@ -299,7 +300,7 @@ fn serve(name: []const u8, args: anytype) !void {
         while (WaitForSingleObject(reader.getHandle(), 10) != 0) _ = CancelSynchronousIo(reader.getHandle());
         reader.join();
     }
-    const response = try alloc.alloc(u8, protocol.max_response);
+    const response = try alloc.alloc(u8, Journal.capacity);
     defer alloc.free(response);
     const request_buf = try alloc.alloc(u8, protocol.max_request);
     defer alloc.free(request_buf);
@@ -331,7 +332,14 @@ fn connection(session: *Session, pipe: H, io: *transport.Io, identity: transport
         if (!ready and header.op != .hello) return error.HandshakeRequired;
         const payload = request_buf[0..header.length];
         try io.transfer(pipe, payload, false);
-        var writer: std.Io.Writer = .fixed(response);
+        // Snapshots need a larger temporary buffer, not a permanent allocation
+        // in every idle broker. Page allocation returns the commit on release.
+        const snapshot_buffer = if (header.op == .snapshot)
+            try std.heap.page_allocator.alloc(u8, protocol.max_response)
+        else
+            null;
+        defer if (snapshot_buffer) |bytes| std.heap.page_allocator.free(bytes);
+        var writer: std.Io.Writer = .fixed(snapshot_buffer orelse response);
         var response_op = header.op;
         const sequence = block: {
             session.mutex.lockUncancelable(global.io());
@@ -383,7 +391,7 @@ pub fn run(operation: []const u8, name: []const u8, args: anytype) !void {
             _ = SetConsoleCP(input_cp);
         };
         var input_state: Input = .{ .handle = input };
-        const input_thread: ?std.Thread = if (interactive) try std.Thread.spawn(.{}, Input.read, .{&input_state}) else null;
+        const input_thread: ?std.Thread = if (interactive) try std.Thread.spawn(worker_config, Input.read, .{&input_state}) else null;
         defer if (input_thread) |thread| {
             input_state.stopped.store(true, .release);
             while (WaitForSingleObject(thread.getHandle(), 10) != 0) _ = CancelSynchronousIo(thread.getHandle());

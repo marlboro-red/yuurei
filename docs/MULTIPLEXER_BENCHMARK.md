@@ -1,5 +1,60 @@
 # Native multiplexer benchmark — 2026-09-27
 
+## Follow-up after output and memory fixes
+
+The later comparison uses `33dc97973` plus the memory changes committed with
+this report: event-driven wakeups, protected journal cursors, 256 KiB initial
+worker stack commits, and temporary page-allocated snapshot buffers. Same
+machine and settings, three alternating fresh instances per mode, 20 seconds
+idle each, then unpaced ~8 MiB ASCII and Unicode workloads. Raw samples:
+`bench/results/mux-2026-09-27-improved.json`.
+
+| Measurement | Direct | Multiplexed |
+|---|---:|---:|
+| Idle private commit, median | 114.4 MiB | 123.1 MiB |
+| Idle resident working set, median | 79.3 MiB | 92.1 MiB |
+| Idle CPU, median percentage of one core | 0.31% | 0.39% |
+| Input-to-title response, median (60 samples) | 0.59 ms | 0.62 ms |
+| Input-to-title response, nearest-rank p95 | 0.70 ms | 0.89 ms |
+| Unpaced ASCII, median | 121.9 MiB/s | 95.2 MiB/s |
+| Unpaced Unicode, median | 83.7 MiB/s | 59.1 MiB/s |
+| Burst completion | 3/3 both workloads | 3/3 both workloads |
+
+Mux commit fell about 46.4 MiB from the original median, reducing the
+direct-relative overhead from 55.6 MiB to 8.7 MiB (about 84%). Broker-only
+private commit is now about 6.25 MiB. Post-workload median commit was
+114.85 MiB direct / 123.70 MiB multiplexed. Resident memory is essentially
+unchanged; reducing unused stack/buffer commit does not imply fewer resident
+pages. Saturated throughput remains lower: approximately 22% for ASCII and
+29% for Unicode in this comparison. Duplicate parsing and transport remain.
+
+The 16 MiB default stack size in Zig 0.16 was committed for each broker worker.
+The existing Yuurei 256 KiB worker setting leaves stack growth available; the
+dedicated test successfully touched a 2 MiB stack frame. The broker now keeps
+only a 1 MiB response buffer and allocates its larger snapshot buffer only
+while producing a snapshot. GUI snapshot staging is also page-allocated and
+released after decoding, avoiding long-lived heap retention.
+
+Additional suspension checks exercised bounded backpressure. Suspending the
+owned GUI for one second held the producer until resume, then completed both
+bursts without loss/disconnect. Suspending it for four seconds allowed the
+producer to finish after protection expired at three seconds; the resumed
+view reported expired history as designed. This prevents a hung view from
+permanently blocking its shell, but such a view still needs reopening.
+
+```powershell
+pwsh -NoProfile -File bench/multiplexer.ps1
+pwsh -NoProfile -File bench/multiplexer.ps1 -Runs 1 -IdleSeconds 1 -SuspendViewMs 1000
+# Expected expired-view failure; stall.json confirms producer completed:
+pwsh -NoProfile -File bench/multiplexer.ps1 -Runs 1 -IdleSeconds 1 -SuspendViewMs 4000
+```
+
+These are short local tests, not proof of long-term stability or physical
+keyboard-to-screen latency. The baseline observations below remain for
+comparison; their burst failure and polling delay describe the old code.
+
+## Original baseline
+
 Measured commit `384a1181a`, ReleaseFast, portable `x86_64_v2`, on Windows
 11 Home 10.0.26200, Ryzen 5 5600X (6 cores / 12 logical processors).
 The existing daily-use Yuurei session remained running. These are local
@@ -76,8 +131,8 @@ pwsh -NoProfile -File bench/multiplexer.ps1 -OutputMiB 0 -IdleSeconds 1
 pwsh -NoProfile -File bench/multiplexer.ps1 -Runs 1 -IdleSeconds 1
 ```
 
-The last command currently fails intentionally upon detecting the burst
-disconnect. The harness creates isolated config and owned test processes;
+On the original baseline the last command fails upon detecting the burst
+disconnect; it passes after the fixes above. The harness creates isolated config and owned test processes;
 it does not stop existing user sessions. Raw completed results are in
 `bench/results/mux-2026-09-27-{paced,latency}.json`. Logs, failed-run details,
 and per-process idle samples remain under `%TEMP%/yuurei-mux-bench/`.

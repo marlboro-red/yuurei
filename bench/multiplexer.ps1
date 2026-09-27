@@ -5,6 +5,7 @@ param(
     [ValidateRange(1,60)][int]$IdleSeconds = 20,
     [ValidateRange(0,1000)][int]$ChunkPauseMs = 0,
     [ValidateRange(0,1024)][int]$OutputMiB = 8,
+    [ValidateRange(0,10000)][int]$SuspendViewMs = 0,
     [string]$Artifacts = "$env:TEMP/yuurei-mux-bench"
 )
 $ErrorActionPreference = 'Stop'
@@ -16,6 +17,9 @@ Invoke-Expression $harness.Substring($harness.IndexOf('Add-Type -AssemblyName'),
 Add-Type @'
 using System; using System.Text; using System.Runtime.InteropServices;
 public static class BenchTitle {
+ [DllImport("ntdll.dll")] static extern int NtSuspendProcess(IntPtr h);
+ [DllImport("ntdll.dll")] static extern int NtResumeProcess(IntPtr h);
+ public static void Suspend(IntPtr h,bool pause) {int status=pause?NtSuspendProcess(h):NtResumeProcess(h);if(status!=0)throw new Exception("Suspend/resume failed: "+status);}
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h,StringBuilder b,int n);
  [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
  public static string Get(IntPtr h) {var b=new StringBuilder(1024);GetWindowText(h,b,1024);return b.ToString();}
@@ -112,11 +116,21 @@ keybind = f5=text:x
             if($broker){$result.broker=Sample @($broker)}
             $result.chunk_pause_ms=$ChunkPauseMs
             $result.output_mib=$OutputMiB
+            $result.suspend_view_ms=$SuspendViewMs
             $result | ConvertTo-Json -Depth 8 | Set-Content "$dir/idle.json"
             foreach($kind in 'ascii','unicode') {
                 $before=Sample $owned
                 $timer.Restart()
-                [IO.File]::WriteAllText("$dir/$kind.go",'go')
+                if($mode -eq 'mux' -and $kind -eq 'ascii' -and $SuspendViewMs -gt 0) {
+                    # Only suspend our explicitly owned test GUI. This checks
+                    # bounded backpressure and drain-after-expiry behavior.
+                    [BenchTitle]::Suspend($gui.Handle,$true)
+                    try {
+                        [IO.File]::WriteAllText("$dir/$kind.go",'go')
+                        Start-Sleep -Milliseconds $SuspendViewMs
+                        @{suspended_ms=$SuspendViewMs;producer_completed=(Test-Path "$dir/$kind.json")} | ConvertTo-Json | Set-Content "$dir/stall.json"
+                    } finally { [BenchTitle]::Suspend($gui.Handle,$false) }
+                } else { [IO.File]::WriteAllText("$dir/$kind.go",'go') }
                 Wait-Title $window "BENCH_DONE_$kind"
                 $elapsed=$timer.Elapsed.TotalMilliseconds
                 Wait-For {Test-Path "$dir/$kind.json"} 'Missing producer measurement'

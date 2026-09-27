@@ -136,8 +136,9 @@ The broker retains an exited shell's screen until explicitly stopped.
 ## Current bounds and limitations
 
 See [native performance measurements](MULTIPLEXER_BENCHMARK.md) for the
-direct-versus-broker comparison, including a reproduced event-history overrun
-under unpaced output. This remains an experimental backend.
+direct-versus-broker comparison, the original event-history overrun, and the
+verified notification/backpressure and memory improvements. This remains an
+experimental backend.
 
 - The broker uses a blocking output reader and an event-driven input writer.
   Network writes occur outside the terminal lock. An unread response cannot
@@ -146,6 +147,9 @@ under unpaced output. This remains an experimental backend.
   are limited to 16 MiB, parser continuation to 64 KiB, and scrollback to a
   1 MiB target (terminal page granularity applies). Grid dimensions are limited
   to 512 columns by 256 rows. Kitty image storage is disabled.
+- Broker workers use the standard 256 KiB initial stack commit with on-demand
+  growth. The broker retains a 1 MiB response buffer; larger snapshot staging
+  buffers use temporary page allocations released after each snapshot transfer.
 - Each transport transfer has a three-second deadline; failed or incompatible
   clients disconnect without terminating the broker. Authentication checks
   OS-reported PID, user SID, integrity SID, Windows session ID, and image path.

@@ -1,0 +1,491 @@
+[
+  {
+    "run": 0,
+    "mode": "direct",
+    "idle": {
+      "cpu_ms": 484.375,
+      "private_mib": 115.1953125,
+      "resident_mib": 79.43359375,
+      "threads": 17,
+      "handles": 471
+    },
+    "idle_cpu_ms": 46.875,
+    "idle_one_core_percent": 0.23424739022046653,
+    "shell": {
+      "cpu_ms": 1093.75,
+      "private_mib": 72.71484375,
+      "resident_mib": 158.01171875,
+      "threads": 21,
+      "handles": 581
+    },
+    "gui": {
+      "cpu_ms": 484.375,
+      "private_mib": 115.1953125,
+      "resident_mib": 79.43359375,
+      "threads": 17,
+      "handles": 471
+    },
+    "chunk_pause_ms": 0,
+    "output_mib": 8,
+    "suspend_view_ms": 0,
+    "ascii": {
+      "mib_per_second": 121.86782293607389,
+      "producer_ms": 53.1632,
+      "cpu_ms": 125.0,
+      "memory": {
+        "cpu_ms": 609.375,
+        "private_mib": 115.1953125,
+        "resident_mib": 80.64453125,
+        "threads": 17,
+        "handles": 471
+      },
+      "observed_ms": 65.5898
+    },
+    "unicode": {
+      "mib_per_second": 75.2730465043741,
+      "producer_ms": 82.4023,
+      "cpu_ms": 109.375,
+      "memory": {
+        "cpu_ms": 718.75,
+        "private_mib": 115.59765625,
+        "resident_mib": 82.40234375,
+        "threads": 17,
+        "handles": 471
+      },
+      "observed_ms": 106.2392
+    },
+    "input_title_roundtrip_ms": [
+      0.7048,
+      0.3259,
+      0.6341,
+      0.5766,
+      0.5787,
+      0.5491,
+      0.5409,
+      0.5571,
+      0.5719,
+      0.6469,
+      0.5786,
+      0.5558,
+      0.5703,
+      0.6012,
+      0.5608,
+      0.6167,
+      0.5818,
+      0.5845,
+      0.5689,
+      0.55
+    ]
+  },
+  {
+    "run": 0,
+    "mode": "mux",
+    "idle": {
+      "cpu_ms": 343.75,
+      "private_mib": 122.5,
+      "resident_mib": 92.09375,
+      "threads": 23,
+      "handles": 618
+    },
+    "idle_cpu_ms": 46.875,
+    "idle_one_core_percent": 0.23426917475703285,
+    "shell": {
+      "cpu_ms": 1046.875,
+      "private_mib": 72.5390625,
+      "resident_mib": 157.4921875,
+      "threads": 21,
+      "handles": 567
+    },
+    "gui": {
+      "cpu_ms": 328.125,
+      "private_mib": 116.23828125,
+      "resident_mib": 78.125,
+      "threads": 14,
+      "handles": 401
+    },
+    "broker": {
+      "cpu_ms": 15.625,
+      "private_mib": 6.26171875,
+      "resident_mib": 13.96875,
+      "threads": 9,
+      "handles": 217
+    },
+    "chunk_pause_ms": 0,
+    "output_mib": 8,
+    "suspend_view_ms": 0,
+    "ascii": {
+      "mib_per_second": 95.9836274437844,
+      "producer_ms": 70.2443,
+      "cpu_ms": 187.5,
+      "memory": {
+        "cpu_ms": 531.25,
+        "private_mib": 122.5,
+        "resident_mib": 94.21484375,
+        "threads": 23,
+        "handles": 620
+      },
+      "observed_ms": 83.2776
+    },
+    "unicode": {
+      "mib_per_second": 59.59928216710788,
+      "producer_ms": 116.1393,
+      "cpu_ms": 265.625,
+      "memory": {
+        "cpu_ms": 796.875,
+        "private_mib": 123.1640625,
+        "resident_mib": 96.21484375,
+        "threads": 23,
+        "handles": 621
+      },
+      "observed_ms": 134.1786
+    },
+    "input_title_roundtrip_ms": [
+      0.3233,
+      0.7859,
+      0.6319,
+      0.6178,
+      1.1578,
+      0.671,
+      0.5785,
+      0.5628,
+      0.5897,
+      0.5779,
+      0.6117,
+      0.6046,
+      0.5832,
+      0.628,
+      0.6637,
+      0.7021,
+      0.8921,
+      0.7516,
+      0.7521,
+      0.7079
+    ]
+  },
+  {
+    "run": 1,
+    "mode": "mux",
+    "idle": {
+      "cpu_ms": 375.0,
+      "private_mib": 123.05078125,
+      "resident_mib": 92.16796875,
+      "threads": 23,
+      "handles": 618
+    },
+    "idle_cpu_ms": 78.125,
+    "idle_one_core_percent": 0.39023617842771907,
+    "shell": {
+      "cpu_ms": 1187.5,
+      "private_mib": 72.5703125,
+      "resident_mib": 159.71875,
+      "threads": 21,
+      "handles": 568
+    },
+    "gui": {
+      "cpu_ms": 343.75,
+      "private_mib": 116.8046875,
+      "resident_mib": 78.23046875,
+      "threads": 14,
+      "handles": 401
+    },
+    "broker": {
+      "cpu_ms": 31.25,
+      "private_mib": 6.24609375,
+      "resident_mib": 13.9375,
+      "threads": 9,
+      "handles": 217
+    },
+    "chunk_pause_ms": 0,
+    "output_mib": 8,
+    "suspend_view_ms": 0,
+    "ascii": {
+      "mib_per_second": 95.21416324377074,
+      "producer_ms": 67.5657,
+      "cpu_ms": 171.875,
+      "memory": {
+        "cpu_ms": 546.875,
+        "private_mib": 123.0546875,
+        "resident_mib": 94.29296875,
+        "threads": 23,
+        "handles": 620
+      },
+      "observed_ms": 83.9506
+    },
+    "unicode": {
+      "mib_per_second": 58.067180627985714,
+      "producer_ms": 117.5442,
+      "cpu_ms": 250.0,
+      "memory": {
+        "cpu_ms": 812.5,
+        "private_mib": 123.703125,
+        "resident_mib": 96.2734375,
+        "threads": 23,
+        "handles": 621
+      },
+      "observed_ms": 137.7189
+    },
+    "input_title_roundtrip_ms": [
+      0.326,
+      0.9485,
+      0.6115,
+      1.3004,
+      0.6217,
+      0.5909,
+      0.5771,
+      0.5826,
+      0.7009,
+      0.5936,
+      0.5848,
+      0.6066,
+      0.6074,
+      0.6676,
+      0.5792,
+      0.6325,
+      0.5736,
+      0.5671,
+      0.7197,
+      0.6497
+    ]
+  },
+  {
+    "run": 1,
+    "mode": "direct",
+    "idle": {
+      "cpu_ms": 531.25,
+      "private_mib": 113.640625,
+      "resident_mib": 79.3046875,
+      "threads": 18,
+      "handles": 471
+    },
+    "idle_cpu_ms": 62.5,
+    "idle_one_core_percent": 0.31222860465226415,
+    "shell": {
+      "cpu_ms": 1078.125,
+      "private_mib": 72.640625,
+      "resident_mib": 159.72265625,
+      "threads": 21,
+      "handles": 576
+    },
+    "gui": {
+      "cpu_ms": 531.25,
+      "private_mib": 113.640625,
+      "resident_mib": 79.3046875,
+      "threads": 18,
+      "handles": 471
+    },
+    "chunk_pause_ms": 0,
+    "output_mib": 8,
+    "suspend_view_ms": 0,
+    "ascii": {
+      "mib_per_second": 105.97745733227576,
+      "producer_ms": 52.7245,
+      "cpu_ms": 140.625,
+      "memory": {
+        "cpu_ms": 671.875,
+        "private_mib": 113.640625,
+        "resident_mib": 80.53515625,
+        "threads": 18,
+        "handles": 471
+      },
+      "observed_ms": 75.4244
+    },
+    "unicode": {
+      "mib_per_second": 84.54818963136137,
+      "producer_ms": 85.0184,
+      "cpu_ms": 125.0,
+      "memory": {
+        "cpu_ms": 796.875,
+        "private_mib": 114.0390625,
+        "resident_mib": 82.2734375,
+        "threads": 18,
+        "handles": 471
+      },
+      "observed_ms": 94.5845
+    },
+    "input_title_roundtrip_ms": [
+      0.245,
+      0.7528,
+      0.6193,
+      0.6066,
+      0.5756,
+      0.5748,
+      0.5868,
+      0.5873,
+      0.5713,
+      0.5809,
+      0.613,
+      0.5902,
+      0.5859,
+      0.5838,
+      0.6629,
+      0.6727,
+      0.6788,
+      0.6058,
+      0.5982,
+      0.5914
+    ]
+  },
+  {
+    "run": 2,
+    "mode": "direct",
+    "idle": {
+      "cpu_ms": 562.5,
+      "private_mib": 114.375,
+      "resident_mib": 79.265625,
+      "threads": 17,
+      "handles": 471
+    },
+    "idle_cpu_ms": 93.75,
+    "idle_one_core_percent": 0.46839397842094205,
+    "shell": {
+      "cpu_ms": 1078.125,
+      "private_mib": 72.953125,
+      "resident_mib": 160.00390625,
+      "threads": 21,
+      "handles": 582
+    },
+    "gui": {
+      "cpu_ms": 562.5,
+      "private_mib": 114.375,
+      "resident_mib": 79.265625,
+      "threads": 17,
+      "handles": 471
+    },
+    "chunk_pause_ms": 0,
+    "output_mib": 8,
+    "suspend_view_ms": 0,
+    "ascii": {
+      "mib_per_second": 125.53710040272362,
+      "producer_ms": 51.6697,
+      "cpu_ms": 78.125,
+      "memory": {
+        "cpu_ms": 640.625,
+        "private_mib": 114.375,
+        "resident_mib": 80.5625,
+        "threads": 17,
+        "handles": 471
+      },
+      "observed_ms": 63.6727
+    },
+    "unicode": {
+      "mib_per_second": 83.7417115608448,
+      "producer_ms": 85.6851,
+      "cpu_ms": 125.0,
+      "memory": {
+        "cpu_ms": 765.625,
+        "private_mib": 114.84765625,
+        "resident_mib": 82.1953125,
+        "threads": 17,
+        "handles": 471
+      },
+      "observed_ms": 95.4954
+    },
+    "input_title_roundtrip_ms": [
+      0.5494,
+      0.7091,
+      0.6239,
+      0.6004,
+      0.5921,
+      0.5795,
+      0.5796,
+      0.638,
+      0.5801,
+      0.6197,
+      0.6165,
+      0.7645,
+      0.6527,
+      0.6069,
+      0.5898,
+      0.5674,
+      0.5555,
+      0.5634,
+      0.5615,
+      0.5495
+    ]
+  },
+  {
+    "run": 2,
+    "mode": "mux",
+    "idle": {
+      "cpu_ms": 437.5,
+      "private_mib": 123.80859375,
+      "resident_mib": 92.046875,
+      "threads": 23,
+      "handles": 618
+    },
+    "idle_cpu_ms": 78.125,
+    "idle_one_core_percent": 0.39036830941446143,
+    "shell": {
+      "cpu_ms": 1140.625,
+      "private_mib": 72.71484375,
+      "resident_mib": 157.95703125,
+      "threads": 21,
+      "handles": 568
+    },
+    "gui": {
+      "cpu_ms": 421.875,
+      "private_mib": 117.63671875,
+      "resident_mib": 78.12109375,
+      "threads": 14,
+      "handles": 401
+    },
+    "broker": {
+      "cpu_ms": 15.625,
+      "private_mib": 6.171875,
+      "resident_mib": 13.92578125,
+      "threads": 9,
+      "handles": 217
+    },
+    "chunk_pause_ms": 0,
+    "output_mib": 8,
+    "suspend_view_ms": 0,
+    "ascii": {
+      "mib_per_second": 86.67655753393798,
+      "producer_ms": 70.631,
+      "cpu_ms": 187.5,
+      "memory": {
+        "cpu_ms": 625.0,
+        "private_mib": 123.80859375,
+        "resident_mib": 94.1953125,
+        "threads": 23,
+        "handles": 620
+      },
+      "observed_ms": 92.2197
+    },
+    "unicode": {
+      "mib_per_second": 59.09307934934012,
+      "producer_ms": 116.592,
+      "cpu_ms": 296.875,
+      "memory": {
+        "cpu_ms": 921.875,
+        "private_mib": 124.2890625,
+        "resident_mib": 96.03515625,
+        "threads": 23,
+        "handles": 621
+      },
+      "observed_ms": 135.328
+    },
+    "input_title_roundtrip_ms": [
+      0.3317,
+      0.8334,
+      0.6513,
+      0.5958,
+      0.6037,
+      0.6447,
+      0.609,
+      0.6272,
+      0.6032,
+      0.5879,
+      0.5872,
+      0.7362,
+      0.5981,
+      0.6102,
+      0.7771,
+      0.67,
+      0.6442,
+      0.6211,
+      0.7035,
+      0.8169
+    ]
+  }
+]

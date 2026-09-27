@@ -56,8 +56,8 @@ fn load(self: *Mux, name: []const u8) !void {
     var client = try Client.init(name, self.stop);
     errdefer client.deinit();
     try client.subscribe();
-    const bytes = try alloc.alloc(u8, protocol.max_response);
-    defer alloc.free(bytes);
+    const bytes = try std.heap.page_allocator.alloc(u8, protocol.max_response);
+    defer std.heap.page_allocator.free(bytes);
     const header = try client.request(.snapshot, "", 0, bytes);
     var reader: std.Io.Reader = .fixed(bytes[0..header.length]);
     var decoded = try snapshot.decode(alloc, global.io(), &reader, .{ .max_continuation_bytes = 65536 });
