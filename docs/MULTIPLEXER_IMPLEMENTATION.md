@@ -140,8 +140,8 @@ direct-versus-broker comparison, including a reproduced event-history overrun
 under unpaced output. This remains an experimental backend.
 
 - The broker uses a blocking output reader and an event-driven input writer.
-  Network writes occur outside the terminal lock, so an unread client response
-  does not retain that lock or stop PTY draining.
+  Network writes occur outside the terminal lock. An unread response cannot
+  retain that lock; subscribed views use the bounded backpressure described below.
 - Requests and the pending input queue are limited to 64 KiB each. Responses
   are limited to 16 MiB, parser continuation to 64 KiB, and scrollback to a
   1 MiB target (terminal page granularity applies). Grid dimensions are limited
@@ -151,7 +151,9 @@ under unpaced output. This remains an experimental backend.
   OS-reported PID, user SID, integrity SID, Windows session ID, and image path.
   The image must be one of the two expected executables in the same installation
   directory. Remote pipe clients are rejected. A hello exchanges the build version
-  string; protocol version 2 rejects the earlier console-only protocol.
+  string; protocol version 3 adds native output-event subscriptions. After the
+  handshake, an idle connection waits indefinitely for the first header byte;
+  the rest of each transfer remains bounded.
 - The console client polls at 100 ms and reconstructs the active viewport from
   snapshots. Its redraw latency, allocations, selection/scrollback behavior,
   and full keyboard/mouse protocol coverage are not production quality.
@@ -160,13 +162,18 @@ under unpaced output. This remains an experimental backend.
   viewport formatter is not a full-fidelity native view. Full-screen application
   compatibility, graphics, clipboard, notifications, and accessibility require
   additional implementation and validation.
-- Native panes use a 1 MiB circular event history. Whole events are evicted, and
-  stale or misaligned cursors are rejected. An expired client retains its last
+- Native panes use a 1 MiB circular event history. A subscribed view protects
+  its undelivered events; the broker pauses PTY reads when that history fills.
+  Copying events to the response releases their journal space. Disconnect
+  releases protection immediately; three seconds without space also releases
+  it so an unresponsive view cannot permanently block shell output. Detached
+  sessions continue draining and evicting old events. An expired client retains its last
   screen and gets a disconnected title; close and reopen the pane to take a fresh
   snapshot. It never replaces a live terminal beneath tracked selection pins.
-- Native input and resize wake the connection worker immediately. Output is
-  currently polled at 8 ms; event-driven notification is still required before
-  making production latency or idle-resource claims. Connection errors retain
+- Native input, resize, and output wake the connection worker immediately.
+  The view duplicates a wait-only handle to the authenticated broker's output
+  event, catches up until the journal is empty, then waits without a polling
+  timer. A broker process handle also wakes it on broker exit. Connection errors retain
   the view and leave the broker alive. Broker exit and automatic reconnect UI
   still need refinement.
 

@@ -9,6 +9,12 @@ bytes: [capacity]u8 = undefined,
 first: u64 = 1,
 end: u64 = 1,
 
+/// Whether an append preserves every event at or after the protected cursor.
+pub fn canAppend(self: *const Journal, cursor: u64, len: usize) bool {
+    return cursor >= self.first and cursor <= self.end and
+        len + header_size <= capacity and self.end - cursor <= capacity - len - header_size;
+}
+
 fn copyOut(self: *const Journal, position: u64, out: []u8) void {
     const start: usize = @intCast(position % capacity);
     const n = @min(out.len, capacity - start);
@@ -100,4 +106,33 @@ test "mux journal wraps evicts whole events and rejects stale cursors" {
 test "mux journal refuses incomplete events" {
     var bytes: []const u8 = &.{ 4, 0, 0, 0, 2, 0, 0, 0, 80 };
     try std.testing.expectError(error.TruncatedEvent, next(&bytes));
+}
+
+test "mux protected cursor prevents overwrite and advances after delivery" {
+    const t = std.testing;
+    const journal = try t.allocator.create(Journal);
+    defer t.allocator.destroy(journal);
+    journal.* = .{};
+    const out = try t.allocator.alloc(u8, capacity);
+    defer t.allocator.free(out);
+    const chunk = [_]u8{'x'} ** 65536;
+    var cursor = journal.end;
+    for (0..8) |_| {
+        var count: usize = 0;
+        while (journal.canAppend(cursor, chunk.len + header_size + 4)) {
+            journal.append(.output, &chunk);
+            count += 1;
+        }
+        try t.expectEqual(@as(usize, 15), count);
+        try t.expect(journal.canAppend(cursor, 4));
+        journal.append(.resize, &.{ 80, 0, 24, 0 });
+        var events = try journal.read(cursor, out);
+        while (try next(&events)) |event| {
+            if (event.kind == .output) try t.expectEqualSlices(u8, &chunk, event.data);
+        }
+        cursor = journal.end;
+    }
+    try t.expect(!journal.canAppend(journal.first - 1, 1));
+    try t.expect(!journal.canAppend(journal.end + 1, 1));
+    try t.expect(!journal.canAppend(cursor, capacity));
 }

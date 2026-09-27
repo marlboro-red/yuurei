@@ -112,6 +112,19 @@ pub const Io = struct {
             offset += n;
         }
     }
+
+    /// Authenticated idle connections may sleep indefinitely. Once the first
+    /// byte arrives, the remaining header/payload still has a bounded deadline.
+    pub fn requestHeader(self: *Io, pipe: H, bytes: []u8) !void {
+        var ov = self.begin();
+        var n: u32 = 0;
+        if (w.ReadFile(pipe, bytes.ptr, 1, &n, &ov) == 0) {
+            if (windows.GetLastError() != .IO_PENDING) return error.PipeIo;
+            n = try self.finish(pipe, &ov, w.INFINITE);
+        }
+        if (n != 1) return error.PipeClosed;
+        try self.transfer(pipe, bytes[1..], false);
+    }
 };
 
 pub fn pipeName(name: []const u8, owner: Identity) ![:0]u16 {

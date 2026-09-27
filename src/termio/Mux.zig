@@ -16,6 +16,7 @@ const w = @import("../apprt/win32/winapi.zig");
 extern "kernel32" fn CreateEventW(?*anyopaque, w.BOOL, w.BOOL, ?[*:0]const u16) callconv(.winapi) ?w.HANDLE;
 extern "kernel32" fn SetEvent(w.HANDLE) callconv(.winapi) w.BOOL;
 extern "kernel32" fn WaitForSingleObject(w.HANDLE, u32) callconv(.winapi) u32;
+extern "kernel32" fn WaitForMultipleObjects(u32, [*]const w.HANDLE, w.BOOL, u32) callconv(.winapi) u32;
 
 alloc: std.mem.Allocator,
 client: ?Client = null,
@@ -54,6 +55,7 @@ fn load(self: *Mux, name: []const u8) !void {
     const alloc = self.alloc;
     var client = try Client.init(name, self.stop);
     errdefer client.deinit();
+    try client.subscribe();
     const bytes = try alloc.alloc(u8, protocol.max_response);
     defer alloc.free(bytes);
     const header = try client.request(.snapshot, "", 0, bytes);
@@ -217,8 +219,15 @@ fn loop(self: *Mux) !void {
             self.sequence = reply.sequence;
             self.io.renderer_wakeup.notify() catch {};
         }
-        // Input and resize wake immediately. Output uses a short bounded poll
-        // until the broker gains independently multiplexed push notifications.
-        _ = WaitForSingleObject(self.wake, 8);
+        // Catch up immediately while output is available. Once empty, wait
+        // for input, output, shutdown, or broker death without a polling timer.
+        if (reply.length == 0) {
+            const handles = [_]w.HANDLE{ self.stop, self.wake, self.client.?.notification.?, self.client.?.server.? };
+            switch (WaitForMultipleObjects(handles.len, &handles, 0, w.INFINITE)) {
+                0 => return,
+                1, 2 => {},
+                else => return error.BrokerExited,
+            }
+        }
     }
 }

@@ -77,6 +77,16 @@ const Session = struct {
     input: [protocol.max_request]u8 = undefined,
     input_len: usize = 0,
     input_event: H = undefined,
+    output_event: H = undefined,
+    space_event: H = undefined,
+    protected_cursor: ?u64 = null,
+
+    fn detach(self: *Session) void {
+        self.mutex.lockUncancelable(global.io());
+        self.protected_cursor = null;
+        self.mutex.unlock(global.io());
+        _ = SetEvent(self.space_event);
+    }
 
     fn write(self: *Session, bytes: []const u8) !void {
         self.input_mutex.lockUncancelable(global.io());
@@ -125,21 +135,46 @@ const Session = struct {
                 return;
             }
             self.mutex.lockUncancelable(global.io());
+            // Leave room for a resize command while output is backpressured.
+            // A disconnected or unresponsive view must not stall a detached
+            // shell forever. The connection owns the cursor under this lock.
+            while (self.protected_cursor) |cursor| {
+                if (self.journal.canAppend(cursor, count + Journal.header_size + 4)) break;
+                self.mutex.unlock(global.io());
+                const waited = WaitForSingleObject(self.space_event, 3000);
+                self.mutex.lockUncancelable(global.io());
+                if (self.stopping.load(.acquire)) {
+                    self.mutex.unlock(global.io());
+                    return;
+                }
+                if (waited != 0) self.protected_cursor = null;
+            }
             self.stream.nextSlice(bytes[0..count]);
             self.journal.append(.output, bytes[0..count]);
             self.sequence = self.journal.end;
             if (self.stream.handler.semantic_failure) self.failed.store(true, .release);
             self.mutex.unlock(global.io());
+            _ = SetEvent(self.output_event);
         }
     }
 
     fn respond(self: *Session, request: protocol.Header, payload: []const u8, out: *std.Io.Writer) !void {
         switch (request.op) {
+            .subscribe => {
+                if (payload.len != 0 or self.protected_cursor != null) return error.InvalidPayload;
+                self.protected_cursor = self.sequence;
+                var bytes: [8]u8 = undefined;
+                std.mem.writeInt(u64, &bytes, @intFromPtr(self.output_event), .little);
+                try out.writeAll(&bytes);
+            },
             .resync => return error.InvalidOperation,
             .events => {
                 if (payload.len != 0) return error.InvalidPayload;
                 const data = try self.journal.read(request.sequence, out.buffer);
                 out.end = data.len;
+                // The reply owns a copy now; the journal may reuse that space.
+                if (self.protected_cursor != null) self.protected_cursor = self.sequence;
+                _ = SetEvent(self.space_event);
             },
             .hello => {
                 if (!std.mem.eql(u8, payload, build_identity)) return error.IncompatibleBuild;
@@ -163,6 +198,7 @@ const Session = struct {
                 const cols = std.mem.readInt(u16, payload[0..2], .little);
                 const rows = std.mem.readInt(u16, payload[2..4], .little);
                 if (cols == 0 or rows == 0 or cols > 512 or rows > 256) return error.InvalidSize;
+                if (self.protected_cursor) |cursor| if (!self.journal.canAppend(cursor, payload.len)) return error.Backpressure;
                 const old_cols = self.term.cols;
                 const old_rows = self.term.rows;
                 try self.term.resize(alloc, .{ .cols = cols, .rows = rows });
@@ -174,6 +210,7 @@ const Session = struct {
                 };
                 self.journal.append(.resize, payload);
                 self.sequence = self.journal.end;
+                _ = SetEvent(self.output_event);
             },
             .snapshot => {
                 if (payload.len != 0) return error.InvalidPayload;
@@ -184,6 +221,8 @@ const Session = struct {
                 try snapshot.encode(alloc, out, &self.term, .{
                     .continuation = if (writer.buffered().len == 0) .ground else .{ .bytes = writer.buffered() },
                 });
+                if (self.protected_cursor != null) self.protected_cursor = self.sequence;
+                _ = SetEvent(self.space_event);
             },
         }
     }
@@ -238,6 +277,10 @@ fn serve(name: []const u8, args: anytype) !void {
     }.attributes;
     session.input_event = CreateEventW(null, 0, 0, null) orelse return error.CreateEvent;
     defer _ = w.CloseHandle(session.input_event);
+    session.output_event = CreateEventW(null, 0, 0, null) orelse return error.CreateEvent;
+    defer _ = w.CloseHandle(session.output_event);
+    session.space_event = CreateEventW(null, 0, 0, null) orelse return error.CreateEvent;
+    defer _ = w.CloseHandle(session.space_event);
     session.command.pseudo_console = session.pty.pseudo_console;
     try session.command.start(alloc);
     defer session.command.deinit();
@@ -252,6 +295,7 @@ fn serve(name: []const u8, args: anytype) !void {
         session.stopping.store(true, .release);
         // Cancellation can race with entry into ReadFile. Retry until the
         // reader exits so no pending read can outlive the PTY or Session.
+        _ = SetEvent(session.space_event);
         while (WaitForSingleObject(reader.getHandle(), 10) != 0) _ = CancelSynchronousIo(reader.getHandle());
         reader.join();
     }
@@ -278,10 +322,11 @@ fn serve(name: []const u8, args: anytype) !void {
 
 fn connection(session: *Session, pipe: H, io: *transport.Io, identity: transport.Identity, request_buf: []u8, response: []u8) !bool {
     _ = try transport.peer(pipe, false, identity);
+    defer session.detach();
     var ready = false;
     while (true) {
         var header_bytes: [protocol.header_size]u8 = undefined;
-        try io.transfer(pipe, &header_bytes, false);
+        if (ready) try io.requestHeader(pipe, &header_bytes) else try io.transfer(pipe, &header_bytes, false);
         const header = try protocol.Header.decode(&header_bytes, protocol.max_request);
         if (!ready and header.op != .hello) return error.HandshakeRequired;
         const payload = request_buf[0..header.length];
