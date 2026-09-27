@@ -648,47 +648,55 @@ pub fn init(
     // This separate block ({}) is important because our errdefers must
     // be scoped here to be valid.
     {
-        var env = rt_surface.defaultTermioEnv() catch |err| env: {
-            // If an error occurs, we don't want to block surface startup.
-            log.warn("error getting env map for surface err={}", .{err});
-            break :env global.environMap() catch std.process.Environ.Map.init(alloc);
+        var io_backend: termio.Backend = backend: {
+            if (comptime builtin.os.tag == .windows) {
+                if (config.@"windows-mux-session") |name| {
+                    break :backend .{ .mux = try termio.backend.Mux.init(alloc, name) };
+                }
+            }
+            var env = rt_surface.defaultTermioEnv() catch |err| env: {
+                // If an error occurs, we don't want to block surface startup.
+                log.warn("error getting env map for surface err={}", .{err});
+                break :env global.environMap() catch std.process.Environ.Map.init(alloc);
+            };
+            errdefer env.deinit();
+
+            // don't leak GHOSTTY_LOG to any subprocesses
+            _ = env.orderedRemove("GHOSTTY_LOG");
+
+            var buf: [18]u8 = undefined;
+            try env.put(
+                "GHOSTTY_SURFACE_ID",
+                std.fmt.bufPrint(&buf, "0x{x:0>16}", .{self.id}) catch unreachable,
+            );
+
+            // Default-terminal handoff (win32 only): a runtime surface may
+            // carry a pre-made pty + client process handed to us by conhost.
+            // The @hasDecl guard keeps every other apprt compiling unchanged
+            // (this is comptime-null there, so `.handoff` stays null).
+            const handoff = if (@hasDecl(@TypeOf(rt_surface.*), "takeHandoff"))
+                rt_surface.takeHandoff()
+            else
+                null;
+
+            // Initialize our IO backend
+            const io_exec = try termio.Exec.init(alloc, .{
+                .command = command,
+                .env = env,
+                .handoff = handoff,
+                .env_override = config.env,
+                .shell_integration = config.@"shell-integration",
+                .shell_integration_features = config.@"shell-integration-features",
+                .cursor_blink = config.@"cursor-style-blink",
+                .working_directory = if (config.@"working-directory") |wd| wd.value() else null,
+                .resources_dir = global.resourcesDir().host(),
+                .term = config.term,
+                .rt_pre_exec_info = .init(config),
+                .rt_post_fork_info = .init(config),
+            });
+            break :backend .{ .exec = io_exec };
         };
-        errdefer env.deinit();
-
-        // don't leak GHOSTTY_LOG to any subprocesses
-        _ = env.orderedRemove("GHOSTTY_LOG");
-
-        var buf: [18]u8 = undefined;
-        try env.put(
-            "GHOSTTY_SURFACE_ID",
-            std.fmt.bufPrint(&buf, "0x{x:0>16}", .{self.id}) catch unreachable,
-        );
-
-        // Default-terminal handoff (win32 only): a runtime surface may
-        // carry a pre-made pty + client process handed to us by conhost.
-        // The @hasDecl guard keeps every other apprt compiling unchanged
-        // (this is comptime-null there, so `.handoff` stays null).
-        const handoff = if (@hasDecl(@TypeOf(rt_surface.*), "takeHandoff"))
-            rt_surface.takeHandoff()
-        else
-            null;
-
-        // Initialize our IO backend
-        var io_exec = try termio.Exec.init(alloc, .{
-            .command = command,
-            .env = env,
-            .handoff = handoff,
-            .env_override = config.env,
-            .shell_integration = config.@"shell-integration",
-            .shell_integration_features = config.@"shell-integration-features",
-            .cursor_blink = config.@"cursor-style-blink",
-            .working_directory = if (config.@"working-directory") |wd| wd.value() else null,
-            .resources_dir = global.resourcesDir().host(),
-            .term = config.term,
-            .rt_pre_exec_info = .init(config),
-            .rt_post_fork_info = .init(config),
-        });
-        errdefer io_exec.deinit();
+        errdefer io_backend.deinit();
 
         // Initialize our IO mailbox
         var io_mailbox = try termio.Mailbox.initSPSC(alloc);
@@ -698,7 +706,7 @@ pub fn init(
             .size = size,
             .full_config = config,
             .config = try termio.Termio.DerivedConfig.init(alloc, config),
-            .backend = .{ .exec = io_exec },
+            .backend = io_backend,
             .mailbox = io_mailbox,
             .renderer_state = &self.renderer_state,
             // The wakeup must point at the renderer thread's final
@@ -1004,6 +1012,9 @@ pub fn needsConfirmQuit(self: *Surface) bool {
         .always => true,
         .false => false,
         .true => true: {
+            // A broker-owned shell survives closing this view. Honor explicit
+            // "always" confirmation above, but normal detach needs no warning.
+            if (self.io.backend == .mux) break :true false;
             self.renderer_state.mutex.lockUncancelable(global.io());
             defer self.renderer_state.mutex.unlock(global.io());
             if (self.io.terminal.cursorIsAtPrompt()) break :true false;
@@ -1401,6 +1412,7 @@ fn childExitedAbnormally(
     // Build up our command for the error message
     const command = try std.mem.join(alloc, " ", switch (self.io.backend) {
         .exec => |*exec| exec.subprocess.args,
+        .mux => &.{"multiplexer session"},
     });
     const runtime_str = try std.fmt.allocPrint(alloc, "{d} ms", .{info.runtime_ms});
 

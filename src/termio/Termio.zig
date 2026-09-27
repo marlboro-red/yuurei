@@ -291,7 +291,7 @@ pub fn init(self: *Termio, alloc: Allocator, opts: termio.Options) !void {
 
     // Setup our backend.
     var backend = opts.backend;
-    backend.initTerminal(&term);
+    try backend.initTerminal(&term);
 
     // Create our stream handler. This points to memory in self so it
     // isn't safe to use until self.* is set.
@@ -311,7 +311,7 @@ pub fn init(self: *Termio, alloc: Allocator, opts: termio.Options) !void {
         .win32_input_allowed = opts.config.win32_input_mode,
     };
 
-    const thread_enter_state = try ThreadEnterState.create(
+    const thread_enter_state = if (backend == .mux) null else try ThreadEnterState.create(
         alloc,
         opts.full_config,
     );
@@ -509,7 +509,7 @@ pub fn resize(
     try self.backend.resize(grid_size, size.terminal());
 
     // Enter the critical area that we want to keep small
-    {
+    if (self.backend.localResize()) {
         self.renderer_state.mutex.lockUncancelable(global.io());
         defer self.renderer_state.mutex.unlock(global.io());
 
@@ -527,7 +527,7 @@ pub fn resize(
         );
 
         // If we have size reporting enabled we need to send a report.
-        if (self.terminal.modes.get(.in_band_size_reports)) {
+        if (self.backend != .mux and self.terminal.modes.get(.in_band_size_reports)) {
             try self.sizeReportLocked(td, .mode_2048);
         }
     }

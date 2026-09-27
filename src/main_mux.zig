@@ -18,5 +18,6 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
 test {
     _ = @import("mux/protocol.zig");
+    _ = @import("mux/Journal.zig");
     _ = @import("mux/snapshot_test.zig");
 }

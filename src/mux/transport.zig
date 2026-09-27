@@ -3,6 +3,7 @@ const std = @import("std");
 const w = @import("../apprt/win32/winapi.zig");
 const windows = std.os.windows;
 const H = w.HANDLE;
+const alloc = std.heap.c_allocator;
 const Overlapped = extern struct {
     internal: usize,
     internal_high: usize,
@@ -46,7 +47,14 @@ pub fn identity(process: H) !Identity {
     var path: [32768]u16 = undefined;
     var len: u32 = path.len;
     if (QueryFullProcessImageNameW(process, 0, &path, &len) == 0) return error.ProcessImage;
-    hash.update(std.mem.sliceAsBytes(path[0..len]));
+    const full = path[0..len];
+    const slash = std.mem.lastIndexOfScalar(u16, full, '\\') orelse return error.ProcessImage;
+    const basename = full[slash + 1 ..];
+    if (!std.mem.eql(u16, basename, std.unicode.utf8ToUtf16LeStringLiteral("ghostty.exe")) and
+        !std.mem.eql(u16, basename, std.unicode.utf8ToUtf16LeStringLiteral("yuurei-mux.exe")))
+        return error.ProcessImage;
+    // The native GUI and helper must be siblings in the same installation.
+    hash.update(std.mem.sliceAsBytes(full[0..slash]));
     return hash.finalResult();
 }
 pub fn peer(pipe: H, server: bool, expected: Identity) !u32 {
@@ -105,3 +113,10 @@ pub const Io = struct {
         }
     }
 };
+
+pub fn pipeName(name: []const u8, owner: Identity) ![:0]u16 {
+    if (!@import("protocol.zig").validName(name)) return error.InvalidSessionName;
+    const path = try std.fmt.allocPrint(alloc, "\\\\.\\pipe\\LOCAL\\yuurei-mux-experimental-{x}-{s}", .{ owner, name });
+    defer alloc.free(path);
+    return std.unicode.utf8ToUtf16LeAllocZ(alloc, path);
+}

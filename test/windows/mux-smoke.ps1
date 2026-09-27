@@ -1,6 +1,7 @@
 param(
     [string]$Executable = "$PSScriptRoot/../../zig-out/bin/yuurei-mux.exe",
     [string]$GuiExecutable,
+    [switch]$NativePane,
     [string]$Artifacts = "$env:TEMP/yuurei-mux-tests"
 )
 $ErrorActionPreference = 'Stop'
@@ -19,7 +20,7 @@ while(!(Test-Path "$PSScriptRoot/interactive")) {
         $i++
     }
     [IO.File]::WriteAllText("$PSScriptRoot/counter", "$i")
-    Start-Sleep -Milliseconds 25
+    Start-Sleep -Milliseconds $(if(Test-Path "$PSScriptRoot/slow"){350}else{25})
 }
 [Console]::WriteLine('READY_FOR_INPUT')
 while($true) {
@@ -79,14 +80,19 @@ try {
         $end=$harness.IndexOf('$isolation = Join-Path $Artifacts')
         Invoke-Expression $harness.Substring($begin,$end-$begin)
         New-Item -ItemType Directory "$dir/ghostty" | Out-Null
+        $paneLaunch=if($NativePane){"windows-mux-session = $name"}else{'command = "{0}" attach {1}' -f $Executable.Replace('\','\\'),$name}
+        $detachBinding=if($NativePane){'close_surface'}else{'text:\x1d'}
+        $closePolicy=if($NativePane){'true'}else{'false'}
         @"
-command = "$($Executable.Replace('\','\\'))" attach $name
+$paneLaunch
 windows-restore-session = false
 windows-auto-update = false
-confirm-close-surface = false
+confirm-close-surface = $closePolicy
 font-size = 12
 keybind = f5=text:x
-keybind = f6=text:\x1d
+keybind = f6=$detachBinding
+keybind = f8=scroll_page_up
+keybind = f9=scroll_to_bottom
 "@ | Set-Content "$dir/ghostty/config"
         $gui=Start-Process $GuiExecutable -WindowStyle Hidden -PassThru -Environment @{XDG_CONFIG_HOME=$dir;LOCALAPPDATA=$dir;GHOSTTY_NEW_INSTANCE='1'} -RedirectStandardError "$dir/gui.log"
         Wait-For { [TabNative]::Windows($gui.Id).Count -eq 1 } 'Test GUI did not open'
@@ -95,12 +101,38 @@ keybind = f6=text:\x1d
         [void][TabNative]::SetWindowPos($window,0,60,60,1400,900,0)
         [void][TabNative]::SetForegroundWindow($window)
         Start-Sleep -Seconds 3
+        if($NativePane) {
+            $children=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($gui.Id)" | Where-Object {$_.Name -in @('yuurei-mux.exe','pwsh.exe','cmd.exe','OpenConsole.exe')})
+            Assert ($children.Count -eq 0) 'Native pane spawned a helper or shell'
+        }
         $r=New-Object TabNative+Rect
         [void][TabNative]::GetWindowRect($window,[ref]$r)
         $bitmap=[Drawing.Bitmap]::new($r.right-$r.left,$r.bottom-$r.top)
         $graphics=[Drawing.Graphics]::FromImage($bitmap)
         try {$graphics.CopyFromScreen($r.left,$r.top,0,0,$bitmap.Size);$bitmap.Save("$dir/attached.png")}
         finally {$graphics.Dispose();$bitmap.Dispose()}
+        if($NativePane) {
+            # Keep this scroll-position check within the broker's bounded
+            # history: the burst workload otherwise evicts these rows in <1s.
+            Set-Content "$dir/slow" ''
+            Start-Sleep -Milliseconds 500
+            [void][TabNative]::PostMessage($window,0x100,0x77,0)
+            [void][TabNative]::PostMessage($window,0x101,0x77,0)
+            foreach($frame in @('scroll-a','scroll-b')) {
+                Start-Sleep -Milliseconds 350
+                $bitmap=[Drawing.Bitmap]::new($r.right-$r.left,$r.bottom-$r.top)
+                $graphics=[Drawing.Graphics]::FromImage($bitmap)
+                try {$graphics.CopyFromScreen($r.left,$r.top,0,0,$bitmap.Size);$bitmap.Save("$dir/$frame.png")}
+                finally {$graphics.Dispose();$bitmap.Dispose()}
+            }
+            $a=[Drawing.Bitmap]::new("$dir/scroll-a.png")
+            $b=[Drawing.Bitmap]::new("$dir/scroll-b.png")
+            try {
+                $different=0
+                for($y=90;$y -lt $a.Height-30;$y+=4){for($x=20;$x -lt [Math]::Min(1000,$a.Width-40);$x+=4){if($a.GetPixel($x,$y).ToArgb() -ne $b.GetPixel($x,$y).ToArgb()){$different++}}}
+                Assert ($different -eq 0) "Native scrollback moved during retained output ($different differing samples)"
+            } finally {$a.Dispose();$b.Dispose()}
+        }
         # Kill ONLY the test-owned GUI. This is the persistence assertion.
         $before=[int](Get-Content "$dir/counter")
         $gui.Kill(); $gui.WaitForExit(); $gui=$null
@@ -130,7 +162,7 @@ keybind = f6=text:\x1d
         finally {$graphics.Dispose();$bitmap.Dispose()}
         [void][TabNative]::PostMessage($window,0x100,0x75,0)
         [void][TabNative]::PostMessage($window,0x101,0x75,0)
-        Assert ($gui.WaitForExit(8000)) 'Ctrl+] failed to detach client'
+        Assert ($gui.WaitForExit(8000)) 'Closing/detaching the view failed'
         $gui=$null
         Assert (!$broker.HasExited) 'Detach killed broker'
     }
@@ -169,6 +201,34 @@ keybind = f6=text:\x1d
     Invoke-Mux @('stop',$name) | Out-Null
     Assert ($broker.WaitForExit(5000)) 'Broker did not stop cleanly'
     Assert ($broker.ExitCode -eq 0) 'Broker shutdown failed'
+    if($NativePane -and $GuiExecutable) {
+        # The same config now names a missing broker. Keep an error pane;
+        # never fall back to silently creating a new shell.
+        $gui=Start-Process $GuiExecutable -WindowStyle Hidden -PassThru -Environment @{XDG_CONFIG_HOME=$dir;LOCALAPPDATA=$dir;GHOSTTY_NEW_INSTANCE='1'} -RedirectStandardError "$dir/missing-session.log"
+        Wait-For { [TabNative]::Windows($gui.Id).Count -eq 1 } 'Missing session did not show an error pane'
+        $window=[TabNative]::Windows($gui.Id)[0]
+        [void][TabNative]::ShowWindow($window,5)
+        [void][TabNative]::SetWindowPos($window,0,60,60,1400,900,0)
+        [void][TabNative]::SetForegroundWindow($window)
+        Start-Sleep -Seconds 1
+        $children=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($gui.Id)" | Where-Object {$_.Name -in @('yuurei-mux.exe','pwsh.exe','cmd.exe','OpenConsole.exe')})
+        Assert ($children.Count -eq 0) 'Missing session silently started a shell'
+        $r=New-Object TabNative+Rect
+        [void][TabNative]::GetWindowRect($window,[ref]$r)
+        $bitmap=[Drawing.Bitmap]::new($r.right-$r.left,$r.bottom-$r.top)
+        $graphics=[Drawing.Graphics]::FromImage($bitmap)
+        try {
+            $graphics.CopyFromScreen($r.left,$r.top,0,0,$bitmap.Size)
+            $bitmap.Save("$dir/missing-session.png")
+            $middle=$bitmap.GetPixel($bitmap.Width-50,[int]($bitmap.Height/2)).ToArgb()
+            $bottom=$bitmap.GetPixel([int]($bitmap.Width/2),$bitmap.Height-40).ToArgb()
+            Assert ($middle -eq $bottom) 'Error pane did not fill the resized terminal area'
+        }
+        finally {$graphics.Dispose();$bitmap.Dispose()}
+        [void][TabNative]::PostMessage($window,0x10,0,0)
+        Assert ($gui.WaitForExit(5000)) 'Missing-session window would not close'
+        $gui=$null
+    }
     # Reclaim the same endpoint, then explicitly terminate a still-running
     # shell. This checks the lifetime distinction between detach and stop.
     $broker=Start-Process $Executable -ArgumentList @('serve',$name,'cmd.exe','/D','/Q','/K') -WindowStyle Hidden -PassThru -RedirectStandardError "$dir/live-stop.log" -RedirectStandardOutput "$dir/live-stop.out"

@@ -4,7 +4,7 @@ const std = @import("std");
 pub const header_size = 24;
 pub const max_request = 64 * 1024;
 pub const max_response = 16 * 1024 * 1024;
-pub const Op = enum(u16) { status = 1, snapshot = 2, input = 3, resize = 4, stop = 5, hello = 6 };
+pub const Op = enum(u16) { status = 1, snapshot = 2, input = 3, resize = 4, stop = 5, hello = 6, events = 7, resync = 8 };
 pub const Header = struct {
     op: Op,
     length: u32,
@@ -13,7 +13,7 @@ pub const Header = struct {
     pub fn encode(self: Header) [header_size]u8 {
         var bytes: [header_size]u8 = @splat(0);
         bytes[0..4].* = "YMUX".*;
-        std.mem.writeInt(u16, bytes[4..6], 1, .little);
+        std.mem.writeInt(u16, bytes[4..6], 2, .little);
         std.mem.writeInt(u16, bytes[6..8], @intFromEnum(self.op), .little);
         std.mem.writeInt(u32, bytes[8..12], self.length, .little);
         std.mem.writeInt(u64, bytes[16..24], self.sequence, .little);
@@ -22,7 +22,7 @@ pub const Header = struct {
 
     pub fn decode(bytes: *const [header_size]u8, limit: u32) !Header {
         if (!std.mem.eql(u8, bytes[0..4], "YMUX")) return error.InvalidMagic;
-        if (std.mem.readInt(u16, bytes[4..6], .little) != 1) return error.IncompatibleVersion;
+        if (std.mem.readInt(u16, bytes[4..6], .little) != 2) return error.IncompatibleVersion;
         if (std.mem.readInt(u32, bytes[12..16], .little) != 0) return error.InvalidFlags;
         const op = std.enums.fromInt(Op, std.mem.readInt(u16, bytes[6..8], .little)) orelse return error.InvalidOperation;
         const length = std.mem.readInt(u32, bytes[8..12], .little);
@@ -43,9 +43,9 @@ test "mux framing validates versions bounds flags and operations" {
     const decoded = try Header.decode(&bytes, max_response);
     try t.expectEqual(@as(u64, 0x123456789abcdef), decoded.sequence);
     try t.expectError(error.PayloadTooLarge, Header.decode(&bytes, 1023));
-    bytes[4] = 2;
-    try t.expectError(error.IncompatibleVersion, Header.decode(&bytes, max_response));
     bytes[4] = 1;
+    try t.expectError(error.IncompatibleVersion, Header.decode(&bytes, max_response));
+    bytes[4] = 2;
     bytes[12] = 1;
     try t.expectError(error.InvalidFlags, Header.decode(&bytes, max_response));
     bytes[12] = 0;

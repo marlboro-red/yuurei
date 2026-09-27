@@ -2,11 +2,12 @@
 
 Branch: `feature/multiplexer`, based on `6184a41a5` (v0.2.18).
 
-Status: experimental single-pane broker and console attachment implemented.
-The normal application and release build do not enable or install it. Research is in
+Status: experimental single-pane broker, native pane backend, and diagnostic
+console client implemented. Native attachment is disabled by default; the broker
+is built only with the explicit `mux` target. Research is in
 [`MULTIPLEXER_RESEARCH.md`](MULTIPLEXER_RESEARCH.md).
 
-## Proposed first milestone: one persistent native pane
+## First milestone: one persistent native pane
 
 The user selected this milestone: prove that one PowerShell process can continue
 running when its GUI closes or crashes, then reconnect with correct terminal
@@ -24,8 +25,8 @@ transport, simultaneous viewers, and tmux interoperability need later work.
 ## Code boundaries verified in the current tree
 
 - `src/apprt/win32/Surface.zig`: split view lifetime from session lifetime.
-- `src/termio/backend.zig`: currently only an `exec` backend; client attachment
-  needs a separate backend or another explicit integration boundary.
+- `src/termio/backend.zig`: the normal `exec` backend and Windows-only `mux`
+  implementation have separate ownership and teardown paths.
 - `src/termio/Termio.zig`: renderer state, wakeups, and surface mailboxes remain
   dependencies. A headless host must address these rather than instantiate a
   normal GUI surface.
@@ -52,8 +53,10 @@ transport, simultaneous viewers, and tmux interoperability need later work.
       Clipboard and desktop effects are disabled in this prototype.
 - [ ] Complete protocol adversarial testing, including fragmented requests,
       stalled peers, and cross-user/logon/elevation isolation on Windows.
-- [ ] Implement an incremental native pane backend.
-      Bound slow-client queues so GUI stalls cannot stall shell output.
+- [x] Implement an incremental native pane backend with bounded event history.
+      A stale client disconnects without stopping shell output.
+- [ ] Replace short polling with independently multiplexed push notifications,
+      and benchmark native attachment latency and idle CPU.
 - [x] Attach a temporary console client using sequenced complete snapshots.
       It redraws the active viewport; it is not the final renderer integration.
 - [x] Test resize, alternate screen, scrollback, partial UTF-8/VT sequences,
@@ -74,16 +77,39 @@ own harness. Release installation and automatic updates stay untouched.
 
 ```powershell
 zig build mux -Doptimize=ReleaseFast -Dcpu=x86_64_v2
+zig build -Doptimize=ReleaseFast -Dcpu=x86_64_v2
 zig build test-mux -Doptimize=ReleaseFast -Dcpu=x86_64_v2 -Dtest-filter=mux
-pwsh -NoProfile -File test/windows/mux-smoke.ps1 -GuiExecutable 'C:\path\to\ghostty.exe'
+pwsh -NoProfile -File test/windows/mux-smoke.ps1 -GuiExecutable "$PWD/zig-out/bin/ghostty.exe" -NativePane
 ```
 
 The test starts a broker separately from the disposable GUI, kills that GUI
 during output, opens a second GUI, verifies input reaches the original shell,
-and detaches with Ctrl+]. It also tests duplicate host rejection, invalid
-dimensions, child exit, and repeated reconnect handle counts. Artifacts include
+and closes the native pane to detach. It verifies that the GUI creates no helper
+shell, and compares retained scrollback screenshots during continued output.
+It also tests duplicate host rejection, invalid dimensions, missing-session
+handling, child exit, and repeated reconnect handle counts. Artifacts include
 screenshots, logs, captures, and memory/idle CPU samples. Omitting `GuiExecutable`
-runs the headless checks only.
+runs the headless checks only. Omitting `NativePane` exercises the older console
+client, where Ctrl+] detaches.
+
+To open a native pane after starting a broker named `demo`:
+
+```powershell
+.\zig-out\bin\ghostty.exe --windows-mux-session=demo --windows-restore-session=false
+```
+
+The GUI and broker must be built from the same revision and installed as siblings
+named `ghostty.exe` and `yuurei-mux.exe`. Closing the native pane detaches. Normal
+close confirmation is skipped because the shell survives; an explicit `always`
+policy still applies. Startup `input` is not replayed on attachment. Opening
+another pane for the same session while one is attached shows an error pane;
+there is no automatic shell fallback or takeover.
+
+The native backend installs one binary snapshot before the surface is exposed,
+then applies ordered VT-output and resize events to the same terminal object.
+Selection pins and viewport state remain local to the view. A read-only parser
+prevents duplicate query replies and external side effects. Resize events are
+ordered with output rather than applied speculatively by the GUI.
 
 For manual experimentation, start a separate host and attach from a console:
 
@@ -104,7 +130,7 @@ the broker, logout, and reboot are outside the persistence guarantee.
 
 `stop` explicitly terminates the hosted session. `status`, `capture`, `snapshot`
 (binary), `input`, and `resize` are diagnostic commands. There is one connected
-client at a time, so detach the console client before issuing diagnostic commands.
+client at a time, so detach the native or console client before issuing diagnostic commands.
 The broker retains an exited shell's screen until explicitly stopped.
 
 ## Current bounds and limitations
@@ -119,21 +145,37 @@ The broker retains an exited shell's screen until explicitly stopped.
 - Each transport transfer has a three-second deadline; failed or incompatible
   clients disconnect without terminating the broker. Authentication checks
   OS-reported PID, user SID, integrity SID, Windows session ID, and image path.
-  Remote pipe clients are rejected. A hello exchanges the build version string.
+  The image must be one of the two expected executables in the same installation
+  directory. Remote pipe clients are rejected. A hello exchanges the build version
+  string; protocol version 2 rejects the earlier console-only protocol.
 - The console client polls at 100 ms and reconstructs the active viewport from
   snapshots. Its redraw latency, allocations, selection/scrollback behavior,
   and full keyboard/mouse protocol coverage are not production quality.
-  This path exists to exercise persistence before adding native pane attachment.
+  It is retained as a diagnostic path; native panes do not use this formatter.
 - Binary snapshots preserve both screens and scrollback, but the temporary
   viewport formatter is not a full-fidelity native view. Full-screen application
   compatibility, graphics, clipboard, notifications, and accessibility require
   additional implementation and validation.
-- Complete snapshots replace previous state at each sequence boundary; there
-  is no accumulated output replay log. Incremental transport is still required
-  for efficient rendering and normal terminal interaction.
+- Native panes use a 1 MiB circular event history. Whole events are evicted, and
+  stale or misaligned cursors are rejected. An expired client retains its last
+  screen and gets a disconnected title; close and reopen the pane to take a fresh
+  snapshot. It never replaces a live terminal beneath tracked selection pins.
+- Native input and resize wake the connection worker immediately. Output is
+  currently polled at 8 ms; event-driven notification is still required before
+  making production latency or idle-resource claims. Connection errors retain
+  the view and leave the broker alive. Broker exit and automatic reconnect UI
+  still need refinement.
 
 Initial validation on 2026-09-27: PowerShell continued producing output after
 test GUI termination; reconnect used the same PID and delivered input. Twenty
 reconnects held broker handles and threads constant. One run measured about
 13 MiB resident and 54 MiB committed. These are prototype observations, not
 performance acceptance thresholds or long-term leak measurements.
+
+Native follow-up: GUI crash/reopen retained the original PID, Unicode rendering,
+and input; there were no GUI-owned shell/helper children. Retained scrollback
+screenshots stayed identical while output continued. Burst tests are separate:
+the 1 MiB history limit can legitimately evict viewed rows during sustained
+output. Unit tests compare complete binary terminal states after snapshot
+restoration plus partial UTF-8, alternate-screen transitions, and ordered resize
+events. Normal tab transfer between independently launched windows also passed.

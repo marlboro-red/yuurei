@@ -9,6 +9,8 @@ const Command = @import("../Command.zig");
 const w = @import("../apprt/win32/winapi.zig");
 const windows = std.os.windows;
 const transport = @import("transport.zig");
+const Client = @import("Client.zig");
+const Journal = @import("Journal.zig");
 const protocol = @import("protocol.zig");
 const H = w.HANDLE;
 const alloc = std.heap.c_allocator;
@@ -70,6 +72,7 @@ const Session = struct {
     stopping: std.atomic.Value(bool) = .init(false),
     failed: std.atomic.Value(bool) = .init(false),
     sequence: u64 = 1,
+    journal: *Journal,
     input_mutex: std.Io.Mutex = .init,
     input: [protocol.max_request]u8 = undefined,
     input_len: usize = 0,
@@ -123,7 +126,8 @@ const Session = struct {
             }
             self.mutex.lockUncancelable(global.io());
             self.stream.nextSlice(bytes[0..count]);
-            self.sequence += 1;
+            self.journal.append(.output, bytes[0..count]);
+            self.sequence = self.journal.end;
             if (self.stream.handler.semantic_failure) self.failed.store(true, .release);
             self.mutex.unlock(global.io());
         }
@@ -131,6 +135,12 @@ const Session = struct {
 
     fn respond(self: *Session, request: protocol.Header, payload: []const u8, out: *std.Io.Writer) !void {
         switch (request.op) {
+            .resync => return error.InvalidOperation,
+            .events => {
+                if (payload.len != 0) return error.InvalidPayload;
+                const data = try self.journal.read(request.sequence, out.buffer);
+                out.end = data.len;
+            },
             .hello => {
                 if (!std.mem.eql(u8, payload, build_identity)) return error.IncompatibleBuild;
                 try out.writeAll(build_identity);
@@ -162,7 +172,8 @@ const Session = struct {
                     };
                     return err;
                 };
-                self.sequence += 1;
+                self.journal.append(.resize, payload);
+                self.sequence = self.journal.end;
             },
             .snapshot => {
                 if (payload.len != 0) return error.InvalidPayload;
@@ -179,16 +190,9 @@ const Session = struct {
 };
 var current: ?*Session = null;
 
-fn pipeName(name: []const u8, identity: transport.Identity) ![:0]u16 {
-    if (!protocol.validName(name)) return error.InvalidSessionName;
-    const path = try std.fmt.allocPrint(alloc, "\\\\.\\pipe\\LOCAL\\yuurei-mux-experimental-{x}-{s}", .{ identity, name });
-    defer alloc.free(path);
-    return std.unicode.utf8ToUtf16LeAllocZ(alloc, path);
-}
-
 fn serve(name: []const u8, args: anytype) !void {
     const identity = try transport.identity(GetCurrentProcess());
-    const path = try pipeName(name, identity);
+    const path = try transport.pipeName(name, identity);
     defer alloc.free(path);
     // Claim the endpoint BEFORE creating a shell. A duplicate host must fail
     // without creating an orphan session. OS identity checked on every connect.
@@ -204,7 +208,11 @@ fn serve(name: []const u8, args: anytype) !void {
     }
     try argv.append(alloc, try alloc.dupeZ(u8, shell));
     while (args.next()) |a| try argv.append(alloc, try alloc.dupeZ(u8, a));
+    const journal = try alloc.create(Journal);
+    defer alloc.destroy(journal);
+    journal.* = .{};
     var session: Session = .{
+        .journal = journal,
         .pty = try Pty.open(.{ .ws_col = 100, .ws_row = 30, .ws_xpixel = 0, .ws_ypixel = 0 }),
         .command = .{ .path = shell, .args = argv.items, .os_pre_exec = null, .rt_pre_exec = null, .rt_post_fork = null, .rt_pre_exec_info = undefined, .rt_post_fork_info = undefined },
         .term = undefined,
@@ -279,58 +287,27 @@ fn connection(session: *Session, pipe: H, io: *transport.Io, identity: transport
         const payload = request_buf[0..header.length];
         try io.transfer(pipe, payload, false);
         var writer: std.Io.Writer = .fixed(response);
+        var response_op = header.op;
         const sequence = block: {
             session.mutex.lockUncancelable(global.io());
             defer session.mutex.unlock(global.io());
-            try session.respond(header, payload, &writer);
+            session.respond(header, payload, &writer) catch |err| switch (err) {
+                error.StaleCursor => response_op = .resync,
+                else => return err,
+            };
             ready = true;
             break :block session.sequence;
         };
-        var reply = (protocol.Header{ .op = header.op, .length = @intCast(writer.buffered().len), .sequence = sequence }).encode();
+        var reply = (protocol.Header{ .op = response_op, .length = @intCast(writer.buffered().len), .sequence = sequence }).encode();
         try io.transfer(pipe, &reply, true);
         try io.transfer(pipe, writer.buffered(), true);
         if (header.op == .stop) return true;
     }
 }
 
-const Client = struct {
-    pipe: H,
-    io: transport.Io,
-    fn init(name: []const u8) !Client {
-        const identity = try transport.identity(GetCurrentProcess());
-        const path = try pipeName(name, identity);
-        defer alloc.free(path);
-        const pipe = w.CreateFileW(path, w.GENERIC_READ | w.GENERIC_WRITE, 0, null, w.OPEN_EXISTING, w.FILE_FLAG_OVERLAPPED | 0x00110000, null);
-        if (pipe == windows.INVALID_HANDLE_VALUE) return error.SessionUnavailable;
-        errdefer _ = w.CloseHandle(pipe);
-        _ = try transport.peer(pipe, true, identity);
-        var result: Client = .{ .pipe = pipe, .io = try transport.Io.init(null) };
-        errdefer _ = w.CloseHandle(result.io.event);
-        var buf: [256]u8 = undefined;
-        const response = try result.request(.hello, build_identity, 0, &buf);
-        if (!std.mem.eql(u8, buf[0..response.length], build_identity)) return error.IncompatibleBuild;
-        return result;
-    }
-    fn deinit(self: *Client) void {
-        _ = w.CloseHandle(self.io.event);
-        _ = w.CloseHandle(self.pipe);
-    }
-    fn request(self: *Client, op: protocol.Op, payload: []const u8, sequence: u64, buffer: []u8) !protocol.Header {
-        if (payload.len > protocol.max_request) return error.PayloadTooLarge;
-        var bytes = (protocol.Header{ .op = op, .length = @intCast(payload.len), .sequence = sequence }).encode();
-        try self.io.transfer(self.pipe, &bytes, true);
-        try self.io.transfer(self.pipe, @constCast(payload), true);
-        try self.io.transfer(self.pipe, &bytes, false);
-        const header = try protocol.Header.decode(&bytes, @intCast(buffer.len));
-        if (header.op != op) return error.InvalidResponse;
-        try self.io.transfer(self.pipe, buffer[0..header.length], false);
-        return header;
-    }
-};
-
 pub fn run(operation: []const u8, name: []const u8, args: anytype) !void {
     if (std.mem.eql(u8, operation, "serve")) return serve(name, args);
-    var client = try Client.init(name);
+    var client = try Client.init(name, null);
     defer client.deinit();
     const buffer = try alloc.alloc(u8, protocol.max_response);
     defer alloc.free(buffer);

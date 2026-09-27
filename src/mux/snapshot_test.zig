@@ -2,6 +2,7 @@ const std = @import("std");
 const terminal = @import("../terminal/main.zig");
 const snapshot = @import("../terminal/snapshot/main.zig");
 const Stream = @import("../terminal/stream_terminal.zig").Stream;
+const Journal = @import("Journal.zig");
 
 test "mux snapshot reconnect preserves pending UTF8 CSI OSC and both screens" {
     const t = std.testing;
@@ -47,4 +48,58 @@ test "mux snapshot reconnect preserves pending UTF8 CSI OSC and both screens" {
         try snapshot.encode(t.allocator, &actual.writer, &restored, .{ .continuation = .ground });
         try t.expectEqualSlices(u8, expected.written(), actual.written());
     }
+}
+
+test "mux native replica applies ordered output and resize after a snapshot" {
+    const t = std.testing;
+    var source = try terminal.Terminal.init(t.io, t.allocator, .{ .cols = 40, .rows = 5 });
+    defer source.deinit(t.allocator);
+    var stream = Stream.init(.{ .allocator = t.allocator, .handler = source.vtHandler(), .continuation_max_bytes = 65536 });
+    defer stream.deinit();
+    stream.nextSlice("before\r\n\xe6\x97");
+    var continuation: std.Io.Writer.Allocating = .init(t.allocator);
+    defer continuation.deinit();
+    try stream.writeContinuation(&continuation.writer);
+    var bytes: std.Io.Writer.Allocating = .init(t.allocator);
+    defer bytes.deinit();
+    try snapshot.encode(t.allocator, &bytes.writer, &source, .{ .continuation = .{ .bytes = continuation.written() } });
+    var reader: std.Io.Reader = .fixed(bytes.written());
+    var decoded = try snapshot.decode(t.allocator, t.io, &reader, .{ .max_continuation_bytes = 65536 });
+    defer decoded.deinit(t.allocator);
+    var replica = decoded.toOwned();
+    defer replica.deinit(t.allocator);
+    var live = replica.vtStream();
+    defer live.deinit();
+    switch (decoded.continuation) {
+        .ground => {},
+        .bytes => |pending| live.nextSlice(pending),
+    }
+    const journal = try t.allocator.create(Journal);
+    defer t.allocator.destroy(journal);
+    journal.* = .{};
+    const cursor = journal.end;
+    const first = "\xa5\r\n\x1b[?1049h\x1b[32mALT\x1b[0m";
+    stream.nextSlice(first);
+    journal.append(.output, first);
+    try source.resize(t.allocator, .{ .cols = 25, .rows = 8 });
+    journal.append(.resize, &.{ 25, 0, 8, 0 });
+    const second = "\x1b[?1049l\r\nafter resize\r\n";
+    stream.nextSlice(second);
+    journal.append(.output, second);
+    var out: [1024]u8 = undefined;
+    var events = try journal.read(cursor, &out);
+    while (try Journal.next(&events)) |event| switch (event.kind) {
+        .output => live.nextSlice(event.data),
+        .resize => try replica.resize(t.allocator, .{
+            .cols = std.mem.readInt(u16, event.data[0..2], .little),
+            .rows = std.mem.readInt(u16, event.data[2..4], .little),
+        }),
+    };
+    var expected: std.Io.Writer.Allocating = .init(t.allocator);
+    defer expected.deinit();
+    var actual: std.Io.Writer.Allocating = .init(t.allocator);
+    defer actual.deinit();
+    try snapshot.encode(t.allocator, &expected.writer, &source, .{ .continuation = .ground });
+    try snapshot.encode(t.allocator, &actual.writer, &replica, .{ .continuation = .ground });
+    try t.expectEqualSlices(u8, expected.written(), actual.written());
 }

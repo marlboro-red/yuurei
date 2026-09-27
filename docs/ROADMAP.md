@@ -59,11 +59,13 @@ Remaining before the flip:
       focused pane; windows restore at default size/position).
 
 Multiplexer work is on `feature/multiplexer`. An opt-in single-pane broker and
-console client exercise live detach/reattach before native workspace integration.
+native pane backend support experimental live detach/reattach. Named workspaces,
+broker lifecycle integration, and production transport tuning remain outstanding.
 See [`MULTIPLEXER_IMPLEMENTATION.md`](MULTIPLEXER_IMPLEMENTATION.md) for build
 instructions, validation, and remaining gates, and
 [`MULTIPLEXER_RESEARCH.md`](MULTIPLEXER_RESEARCH.md) for the original research.
-This experimental tool is not part of the normal application or release build.
+The broker is not installed by the normal build; native attachment is disabled
+unless `windows-mux-session` is explicitly configured.
 
 ## Rendering / presentation
 

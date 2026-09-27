@@ -2115,6 +2115,12 @@ keybind: Keybinds = .{},
 /// as its focused pane).
 @"windows-restore-session": bool = false,
 
+/// Experimental Windows multiplexer: attach a new native pane to an existing
+/// named `yuurei-mux serve` session in the same build directory. No shell is
+/// launched for this pane. Closing it detaches; the broker retains the shell.
+/// One controlling pane is supported. Unset by default; development use only.
+@"windows-mux-session": ?[:0]const u8 = null,
+
 /// Windows (yuurei): check GitHub Releases daily and download newer stable
 /// portable releases in the background. Verified updates install on normal
 /// exit once all instances using this installation have closed. Shells are

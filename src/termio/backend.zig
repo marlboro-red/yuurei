@@ -11,28 +11,43 @@ const ProcessInfo = @import("../pty.zig").ProcessInfo;
 const WRITE_REQ_PREALLOC = std.math.pow(usize, 2, 5);
 
 /// The kinds of backends.
-pub const Kind = enum { exec };
+pub const Kind = enum { exec, mux };
+const is_windows = @import("builtin").os.tag == .windows;
+pub const Mux = if (is_windows) @import("Mux.zig") else void;
 
 /// Configuration for the various backend types.
 pub const Config = union(Kind) {
     /// Exec uses posix exec to run a command with a pty.
     exec: termio.Exec.Config,
+    mux: []const u8,
 };
 
 /// Backend implementations. A backend is responsible for owning the pty
 /// behavior and providing read/write capabilities.
 pub const Backend = union(Kind) {
     exec: termio.Exec,
+    mux: if (is_windows) *Mux else void,
+
+    /// Attached replicas resize only through ordered broker events. A failed
+    /// or disconnected view can resize its retained local display normally.
+    pub fn localResize(self: *const Backend) bool {
+        return switch (self.*) {
+            .exec => true,
+            .mux => |mux| if (is_windows) mux.disconnected.load(.acquire) else false,
+        };
+    }
 
     pub fn deinit(self: *Backend) void {
         switch (self.*) {
             .exec => |*exec| exec.deinit(),
+            .mux => |mux| if (is_windows) mux.deinit(),
         }
     }
 
-    pub fn initTerminal(self: *Backend, t: *terminal.Terminal) void {
+    pub fn initTerminal(self: *Backend, t: *terminal.Terminal) !void {
         switch (self.*) {
             .exec => |*exec| exec.initTerminal(t),
+            .mux => |mux| if (is_windows) try mux.initTerminal(t),
         }
     }
 
@@ -44,12 +59,14 @@ pub const Backend = union(Kind) {
     ) !void {
         switch (self.*) {
             .exec => |*exec| try exec.threadEnter(alloc, io, td),
+            .mux => |mux| if (is_windows) try mux.threadEnter(io, td),
         }
     }
 
     pub fn threadExit(self: *Backend, td: *termio.Termio.ThreadData) void {
         switch (self.*) {
             .exec => |*exec| exec.threadExit(td),
+            .mux => |mux| if (is_windows) mux.threadExit(),
         }
     }
 
@@ -60,6 +77,7 @@ pub const Backend = union(Kind) {
     ) !void {
         switch (self.*) {
             .exec => |*exec| try exec.focusGained(td, focused),
+            .mux => {},
         }
     }
 
@@ -70,6 +88,7 @@ pub const Backend = union(Kind) {
     ) !void {
         switch (self.*) {
             .exec => |*exec| try exec.resize(grid_size, screen_size),
+            .mux => |mux| if (is_windows) try mux.resize(grid_size),
         }
     }
 
@@ -82,6 +101,7 @@ pub const Backend = union(Kind) {
     ) !void {
         switch (self.*) {
             .exec => |*exec| try exec.queueWrite(alloc, td, data, linefeed),
+            .mux => |mux| if (is_windows) try mux.queueWrite(data, linefeed),
         }
     }
 
@@ -99,6 +119,7 @@ pub const Backend = union(Kind) {
                 exit_code,
                 runtime_ms,
             ),
+            .mux => {},
         }
     }
 
@@ -108,6 +129,7 @@ pub const Backend = union(Kind) {
     pub fn getProcessInfo(self: *Backend, comptime info: ProcessInfo) ?ProcessInfo.Type(info) {
         return switch (self.*) {
             .exec => |*exec| exec.getProcessInfo(info),
+            .mux => null,
         };
     }
 };
@@ -115,10 +137,12 @@ pub const Backend = union(Kind) {
 /// Termio thread data. See termio.ThreadData for docs.
 pub const ThreadData = union(Kind) {
     exec: termio.Exec.ThreadData,
+    mux: void,
 
     pub fn deinit(self: *ThreadData, alloc: Allocator) void {
         switch (self.*) {
             .exec => |*exec| exec.deinit(alloc),
+            .mux => {},
         }
     }
 
