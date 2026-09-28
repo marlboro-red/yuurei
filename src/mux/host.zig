@@ -506,6 +506,23 @@ fn connection(session: *Session, pipe: H, io: *transport.Io, identity: transport
 
 pub fn run(operation: []const u8, name: []const u8, args: anytype) !void {
     if (std.mem.eql(u8, operation, "serve")) return serve(name, args);
+    if (std.mem.eql(u8, operation, "workspaces")) {
+        const catalog = @import("WorkspaceCatalog.zig");
+        const base = try global.environ().getAlloc(alloc, "LOCALAPPDATA");
+        defer alloc.free(base);
+        const directory = try std.fs.path.join(alloc, &.{ base, "ghostty" });
+        defer alloc.free(directory);
+        const entries = try catalog.list(global.io(), alloc, directory);
+        defer catalog.deinit(alloc, entries);
+        const data = try std.json.Stringify.valueAlloc(alloc, entries, .{});
+        defer alloc.free(data);
+        var bytes: [4096]u8 = undefined;
+        var out = std.Io.File.stdout().writer(global.io(), &bytes);
+        try out.interface.writeAll(data);
+        try out.interface.writeByte('\n');
+        try out.interface.flush();
+        return;
+    }
     if (std.mem.eql(u8, operation, "start")) {
         var argv: std.ArrayList([]const u8) = .empty;
         defer argv.deinit(alloc);

@@ -12,6 +12,7 @@ const App = @import("App.zig");
 const Window = @import("Window.zig");
 const Surface = @import("Surface.zig");
 const workspace = @import("../../mux/Workspace.zig");
+pub const catalog = @import("../../mux/WorkspaceCatalog.zig");
 const w = @import("winapi.zig");
 
 const log = std.log.scoped(.win32);
@@ -23,12 +24,60 @@ fn sessionPath(app: *App, alloc: std.mem.Allocator) ?[]const u8 {
     const base = global.environ().getAlloc(alloc, "LOCALAPPDATA") catch return null;
     defer alloc.free(base);
     const name = app.workspace_name orelse "default";
-    if (std.mem.eql(u8, name, "default")) return std.fs.path.join(alloc, &.{ base, "ghostty", "session" }) catch null;
-    var digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(name, &digest, .{});
-    const file = std.fmt.allocPrint(alloc, "workspace-{x}", .{digest}) catch return null;
+    const file = catalog.filename(alloc, name) catch return null;
     defer alloc.free(file);
     return std.fs.path.join(alloc, &.{ base, "ghostty", file }) catch null;
+}
+
+/// Saved layouts only. Call from a worker; release results with catalog.deinit.
+pub fn listSaved(alloc: std.mem.Allocator) ![]catalog.Entry {
+    const base = try global.environ().getAlloc(alloc, "LOCALAPPDATA");
+    defer alloc.free(base);
+    const directory = try std.fs.path.join(alloc, &.{ base, "ghostty" });
+    defer alloc.free(directory);
+    return catalog.list(global.io(), alloc, directory);
+}
+
+/// Owns the target lock and parsed layout until the UI commits or cancels.
+/// Preparation must run on a worker. It never changes App or starts a shell.
+pub const PreparedWorkspace = struct {
+    alloc: std.mem.Allocator,
+    name: []const u8,
+    lock: ?w.HANDLE,
+    layout: std.json.Parsed(workspace.State),
+
+    pub fn deinit(self: *PreparedWorkspace) void {
+        self.layout.deinit();
+        if (self.lock) |lock| _ = w.CloseHandle(lock);
+        self.alloc.free(self.name);
+        self.* = undefined;
+    }
+};
+
+/// current_ids must be an owned snapshot when called from a worker. The UI
+/// must reject completion if its workspace/layout generation changed meanwhile.
+pub fn prepareSwitch(alloc: std.mem.Allocator, name: []const u8, current_ids: []const []const u8) !PreparedWorkspace {
+    if (!catalog.validName(name)) return error.InvalidWorkspaceName;
+    const base = try global.environ().getAlloc(alloc, "LOCALAPPDATA");
+    defer alloc.free(base);
+    const filename = try catalog.filename(alloc, name);
+    defer alloc.free(filename);
+    const path = try std.fs.path.join(alloc, &.{ base, "ghostty", filename });
+    defer alloc.free(path);
+    const lock_path = try std.fmt.allocPrint(alloc, "{s}.lock", .{path});
+    defer alloc.free(lock_path);
+    const wide = try std.unicode.utf8ToUtf16LeAllocZ(alloc, lock_path);
+    defer alloc.free(wide);
+    const lock = w.CreateFileW(wide, w.GENERIC_READ | w.GENERIC_WRITE, 0, null, 4, 0x80, null);
+    if (lock == std.os.windows.INVALID_HANDLE_VALUE) return error.WorkspaceUnavailable;
+    errdefer _ = w.CloseHandle(lock);
+    const data = try std.Io.Dir.cwd().readFileAlloc(global.io(), path, alloc, .limited(max_file_size));
+    defer alloc.free(data);
+    // Own every string independently of the temporary file buffer.
+    const parsed = try std.json.parseFromSlice(workspace.State, alloc, data, .{ .allocate = .alloc_always });
+    errdefer parsed.deinit();
+    try @import("../../mux/WorkspaceSwitch.zig").validate(parsed.value, current_ids);
+    return .{ .alloc = alloc, .name = try alloc.dupe(u8, name), .lock = lock, .layout = parsed };
 }
 
 fn ownWorkspace(app: *App) bool {
@@ -53,6 +102,7 @@ fn ownWorkspace(app: *App) bool {
 
 /// Coalesce structural changes. No periodic wakeups while the layout is idle.
 pub fn changed(app: *App) void {
+    if (!app.session_restoring) app.workspace_generation +%= 1;
     if (!app.config.@"windows-restore-session" or app.session_restoring or app.session_deadline_ms != null) return;
     app.session_deadline_ms = std.Io.Timestamp.now(global.io(), .awake).toMilliseconds() + 250;
     app.session_timer = w.SetTimer(null, 0, 275, null);
@@ -68,6 +118,7 @@ pub fn tick(app: *App) void {
     if (app.session_timer != 0) _ = w.KillTimer(null, app.session_timer);
     app.session_timer = 0;
     app.session_deadline_ms = null;
+    if (app.workspace_job != null) return;
     save(app);
 }
 
@@ -75,15 +126,35 @@ pub fn tick(app: *App) void {
 /// alive (before teardown). Failures are silent: losing a session
 /// snapshot must never block closing.
 pub fn save(app: *App) void {
+    // Explicit close/shutdown saves must capture the latest live layout.
+    // Stop a preparation writer first so it cannot overwrite this save later.
+    cancelSwitch(app);
     if (!app.config.@"windows-restore-session" or app.session_restoring or !ownWorkspace(app)) return;
-    saveLayout(app) catch |err| log.warn("workspace save failed: {}", .{err});
+    saveChecked(app) catch |err| log.warn("workspace save failed: {}", .{err});
+}
+
+/// Explicit workspace operations must not detach any views unless this succeeds.
+/// Unlike the best-effort shutdown wrapper, failures remain visible to callers.
+pub fn saveChecked(app: *App) !void {
+    if (app.workspace_job != null) return error.WorkspaceSwitchInProgress;
+    if (app.session_restoring) return error.WorkspaceRestoreInProgress;
+    if (!ownWorkspace(app)) return error.WorkspaceUnavailable;
+    try saveLayout(app);
 }
 
 fn saveLayout(app: *App) !void {
+    const alloc = app.core_app.alloc;
+    const path = sessionPath(app, alloc) orelse return error.WorkspaceUnavailable;
+    defer alloc.free(path);
+    const data = try captureLayout(app, alloc);
+    defer alloc.free(data);
+    try writeSaved(alloc, path, app.workspace_name orelse "default", data);
+}
+
+fn captureLayout(app: *App, output_alloc: std.mem.Allocator) ![]const u8 {
     var arena: std.heap.ArenaAllocator = .init(app.core_app.alloc);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const path = sessionPath(app, alloc) orelse return;
     var windows: std.ArrayList(workspace.Window) = .empty;
     for (app.windows.items) |window| {
         if (window.quick or window.tabs.items.len == 0) continue;
@@ -116,43 +187,200 @@ fn saveLayout(app: *App) !void {
     try workspace.validate(state);
     const data = try std.json.Stringify.valueAlloc(alloc, state, .{});
     if (data.len > max_file_size) return error.WorkspaceTooLarge;
-    writeAtomic(alloc, path, data);
+    return output_alloc.dupe(u8, data);
+}
+
+pub fn writeSaved(alloc: std.mem.Allocator, path: []const u8, name: []const u8, data: []const u8) !void {
+    try writeAtomic(global.io(), alloc, path, data);
+    // Existing configurations with non-displayable names can still save their
+    // layouts. Only publish names suitable for the embedded workspace picker.
+    if (!std.mem.eql(u8, name, "default") and catalog.validName(name)) {
+        const metadata = try std.fmt.allocPrint(alloc, "{s}.name", .{path});
+        defer alloc.free(metadata);
+        try writeAtomic(global.io(), alloc, metadata, name);
+    }
+}
+
+pub fn beginSwitch(app: *App, hwnd: w.HWND, name: []const u8) !void {
+    if (app.workspace_job != null) return error.WorkspaceSwitchInProgress;
+    if (std.mem.eql(u8, app.workspace_name orelse "default", name)) return error.WorkspaceAlreadyActive;
+    if (!ownWorkspace(app)) return error.WorkspaceUnavailable;
+    const Job = @import("WorkspaceJob.zig");
+    const job = try Job.create(hwnd);
+    errdefer job.destroy();
+    job.backend_alloc = app.core_app.alloc;
+    job.target = try Job.alloc.dupe(u8, name);
+    job.source_name = try Job.alloc.dupe(u8, app.workspace_name orelse "default");
+    job.source_path = sessionPath(app, Job.alloc) orelse return error.WorkspaceUnavailable;
+    job.source_data = try captureLayout(app, Job.alloc);
+    job.generation = app.workspace_generation;
+    try job.start();
+    app.workspace_job = job;
+}
+
+pub fn cancelSwitch(app: *App) void {
+    const job = app.workspace_job orelse return;
+    app.workspace_job = null;
+    job.destroy();
+    changed(app);
+}
+
+/// Called outside window procedures so successful switching may destroy old views.
+pub fn pollSwitch(app: *App) void {
+    const job = app.workspace_job orelse return;
+    if (app.quit) {
+        cancelSwitch(app);
+        return;
+    }
+    // Cancel before the close sweep, even while the worker is still running.
+    // The sweep must be able to persist ended panes without a pending worker
+    // later writing an older layout over the termination record.
+    const stale = stale: {
+        if (job.generation != app.workspace_generation) break :stale true;
+        for (app.windows.items) |window| {
+            if (window.should_close) break :stale true;
+            for (window.tabs.items) |tab| for (tab.tree.nodes) |node| {
+                if (node == .leaf and node.leaf.should_close) break :stale true;
+            };
+        }
+        break :stale false;
+    };
+    if (stale) {
+        const owner = job.hwnd;
+        cancelSwitch(app);
+        for (app.windows.items) |window| if (window.palette) |palette| {
+            if (palette.hwnd == owner) palette.workspaceFailed(error.WorkspaceChanged);
+        };
+        return;
+    }
+    if (!job.done.load(.acquire)) return;
+    app.workspace_job = null;
+    defer job.destroy();
+    const failure = job.failure orelse failed: {
+        commitSwitch(app, job) catch |err| break :failed err;
+        return;
+    };
+    log.warn("workspace switch failed: {}", .{failure});
+    for (app.windows.items) |window| if (window.palette) |palette| {
+        if (palette.hwnd == job.hwnd) palette.workspaceFailed(failure);
+    };
+    changed(app);
+}
+
+fn commitSwitch(app: *App, job: *@import("WorkspaceJob.zig")) !void {
+    const prepared = &job.prepared.?;
+    const name = try app.core_app.alloc.dupe(u8, prepared.name);
+    errdefer app.core_app.alloc.free(name);
+    const previous_count = app.windows.items.len;
+    app.session_restoring = true;
+    defer app.session_restoring = false;
+    errdefer while (app.windows.items.len > previous_count) {
+        const window = app.windows.pop().?;
+        window.destroy();
+    };
+    for (prepared.layout.value.windows) |saved| {
+        const window = newRestoredWindow(app) orelse return error.CreateWindowFailed;
+        if (saved.geometry) |g| {
+            const monitor = w.MonitorFromPoint(.{ .x = g.x, .y = g.y }, w.MONITOR_DEFAULTTONEAREST);
+            var info: w.MONITORINFO = std.mem.zeroes(w.MONITORINFO);
+            info.cbSize = @sizeOf(w.MONITORINFO);
+            if (w.GetMonitorInfoW(monitor, &info) != 0) {
+                const width = @min(@as(i32, @intCast(g.width)), info.rcWork.right - info.rcWork.left);
+                const height = @min(@as(i32, @intCast(g.height)), info.rcWork.bottom - info.rcWork.top);
+                _ = w.SetWindowPos(window.hwnd, null, std.math.clamp(g.x, info.rcWork.left, info.rcWork.right - width), std.math.clamp(g.y, info.rcWork.top, info.rcWork.bottom - height), width, height, w.SWP_NOACTIVATE | w.SWP_NOZORDER);
+            }
+        }
+        for (saved.tabs) |tab| try window.restoreTabAttached(tab, job.muxes.items);
+        window.activateTab(saved.active);
+    }
+    if (app.session_timer != 0) _ = w.KillTimer(null, app.session_timer);
+    app.session_timer = 0;
+    app.session_deadline_ms = null;
+    if (app.session_lock) |lock| _ = w.CloseHandle(lock);
+    app.session_lock = prepared.lock;
+    prepared.lock = null;
+    app.session_lock_initialized = true;
+    if (app.workspace_name) |old| app.core_app.alloc.free(old);
+    app.workspace_name = name;
+    // Preserve quick terminals, which are outside saved workspace layouts.
+    var remaining = previous_count;
+    var index: usize = 0;
+    while (remaining > 0) : (remaining -= 1) {
+        if (app.windows.items[index].quick) {
+            index += 1;
+            continue;
+        }
+        const old = app.windows.orderedRemove(index);
+        old.destroy();
+    }
+    for (app.windows.items[index..]) |window| window.applyStartupShow();
+    app.workspace_generation +%= 1;
 }
 
 /// Replace the session file atomically: write a sibling temp and rename
 /// it over the target. A crash or power loss mid-write then leaves the
 /// previous good file intact rather than a truncated/empty one.
-fn writeAtomic(alloc: std.mem.Allocator, path: []const u8, data: []const u8) void {
-    const io = global.io();
+fn writeAtomic(io: std.Io, alloc: std.mem.Allocator, path: []const u8, data: []const u8) !void {
     // The parent (%LOCALAPPDATA%\ghostty) may not exist yet. createDirPath
     // is idempotent (mkdir -p), so an already-present dir is fine.
-    if (std.fs.path.dirname(path)) |dir| std.Io.Dir.cwd().createDirPath(io, dir) catch {};
+    if (std.fs.path.dirname(path)) |dir| try std.Io.Dir.cwd().createDirPath(io, dir);
 
     // Unique per-process temp name: isolated/config-specific instances can
     // save concurrently. A shared
     // deterministic ".tmp" would let two writers interleave truncate/
     // write/rename and corrupt or cross-replace each other's snapshot;
     // per-PID names keep every writer isolated until its atomic rename.
-    const tmp = std.fmt.allocPrint(alloc, "{s}.{d}.tmp", .{
+    const tmp = try std.fmt.allocPrint(alloc, "{s}.{d}.tmp", .{
         path,
         std.os.windows.GetCurrentProcessId(),
-    }) catch return;
+    });
     defer alloc.free(tmp);
-
-    write: {
-        const file = std.Io.Dir.createFileAbsolute(io, tmp, .{ .truncate = true }) catch break :write;
+    // Close the writer before replacement and remove only our temporary file on
+    // failure. The previous layout must remain usable if a switch is aborted.
+    errdefer std.Io.Dir.deleteFileAbsolute(io, tmp) catch {};
+    {
+        const file = try std.Io.Dir.createFileAbsolute(io, tmp, .{ .truncate = true });
         defer file.close(io);
         var wbuf: [4096]u8 = undefined;
         var fw = file.writer(io, &wbuf);
-        fw.interface.writeAll(data) catch break :write;
-        fw.interface.flush() catch break :write;
-        // Rename over the target (atomic replace on NTFS). Only on a
-        // fully-written temp do we touch the real file.
-        std.Io.Dir.renameAbsolute(tmp, path, io) catch break :write;
-        return;
+        try fw.interface.writeAll(data);
+        try fw.interface.flush();
+        try file.sync(io);
     }
-    // Something failed; don't leave a stray temp or the stale target.
-    std.Io.Dir.deleteFileAbsolute(io, tmp) catch {};
+    try std.Io.Dir.renameAbsolute(tmp, path, io);
+}
+
+test "session atomic save replaces a layout and reports replacement failure" {
+    const t = std.testing;
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(t.io, ".", t.allocator);
+    defer t.allocator.free(root);
+    const path = try std.fs.path.join(t.allocator, &.{ root, "session" });
+    defer t.allocator.free(path);
+    try writeAtomic(t.io, t.allocator, path, "previous layout");
+    try writeAtomic(t.io, t.allocator, path, "replacement");
+    const data = try tmp.dir.readFileAlloc(t.io, "session", t.allocator, .limited(1024));
+    defer t.allocator.free(data);
+    try t.expectEqualStrings("replacement", data);
+
+    // A nonempty directory cannot be replaced by a layout file. The error
+    // must reach the caller and the existing contents must survive.
+    try tmp.dir.createDirPath(t.io, "blocked");
+    try tmp.dir.writeFile(t.io, .{ .sub_path = "blocked/marker", .data = "keep" });
+    const blocked = try std.fs.path.join(t.allocator, &.{ root, "blocked" });
+    defer t.allocator.free(blocked);
+    var failed = false;
+    writeAtomic(t.io, t.allocator, blocked, "new layout") catch {
+        failed = true;
+    };
+    try t.expect(failed);
+    const marker = try tmp.dir.readFileAlloc(t.io, "blocked/marker", t.allocator, .limited(1024));
+    defer t.allocator.free(marker);
+    try t.expectEqualStrings("keep", marker);
+    const temporary = try std.fmt.allocPrint(t.allocator, "{s}.{d}.tmp", .{ blocked, std.os.windows.GetCurrentProcessId() });
+    defer t.allocator.free(temporary);
+    try t.expectError(error.FileNotFound, std.Io.Dir.openFileAbsolute(t.io, temporary, .{}));
 }
 
 /// Restore the recorded session, returning the surface of the last

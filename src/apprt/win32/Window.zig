@@ -463,6 +463,7 @@ fn closeAllTabs(self: *Window) void {
 pub const SpawnOpts = struct {
     mux_session: ?[]const u8 = null,
     mux_restore: bool = false,
+    prepared_mux: ?*@import("../../termio/Mux.zig") = null,
     profile: ?*const profiles.Profile = null,
     cwd: ?[]const u8 = null,
     /// Resolved startup command from a separately launched process.
@@ -527,6 +528,17 @@ pub fn newTabWithOpts(self: *Window, opts: SpawnOpts) !*Surface {
 }
 
 pub fn restoreTab(self: *Window, saved: @import("../../mux/Workspace.zig").Tab) !void {
+    return self.restoreTabMode(saved, null);
+}
+
+/// Transactional workspace attachment must report missing/busy brokers instead
+/// of accepting an error pane or launching a replacement shell.
+pub fn restoreTabAttached(self: *Window, saved: @import("../../mux/Workspace.zig").Tab, prepared: []?*@import("../../termio/Mux.zig")) !void {
+    return self.restoreTabMode(saved, prepared);
+}
+
+fn restoreTabMode(self: *Window, saved: @import("../../mux/Workspace.zig").Tab, prepared: ?[]?*@import("../../termio/Mux.zig")) !void {
+    const attach_only = prepared != null;
     const alloc = self.app.core_app.alloc;
     _ = self.app.ensureProfiles();
     const profile_list = &self.app.profiles_list.?;
@@ -541,14 +553,32 @@ pub fn restoreTab(self: *Window, saved: @import("../../mux/Workspace.zig").Tab) 
     for (saved.nodes, 0..) |node, index| {
         nodes[index] = switch (node) {
             .leaf => |pane| leaf: {
+                if (attach_only and pane.session == null) return error.NonPersistentWorkspace;
                 const surface = try alloc.create(Surface);
                 errdefer alloc.destroy(surface);
+                const mux = if (prepared) |items| found: {
+                    for (items) |*item| if (item.*) |value| {
+                        if (std.mem.eql(u8, value.name, pane.session.?)) {
+                            item.* = null;
+                            break :found value;
+                        }
+                    };
+                    return error.MissingPreparedSession;
+                } else null;
                 try surface.init(self.app, self, .{
                     .profile = if (pane.profile.len > 0) profile_list.bySavedName(pane.profile) else null,
                     .cwd = if (pane.cwd.len > 0) pane.cwd else null,
                     .mux_session = pane.session,
-                    .mux_restore = true,
+                    .mux_restore = !attach_only,
+                    .prepared_mux = mux,
                 }, .window);
+                errdefer surface.deinit();
+                if (attach_only) {
+                    const backend = &surface.core_surface.io.backend;
+                    if (backend.* != .mux) return error.NonPersistentWorkspace;
+                    if (backend.mux.init_error) |err| return err;
+                    if (backend.mux.ended.load(.acquire)) return error.SessionEnded;
+                }
                 break :leaf .{ .leaf = surface };
             },
             .split => |split| .{ .split = .{
@@ -822,7 +852,7 @@ pub fn togglePalette(self: *Window) !void {
 
 pub fn performSessionAction(self: *Window, action: @FieldType(input.Binding.Action, "session")) !bool {
     const surface = self.activeSurface() orelse return false;
-    if (action != .list and surface.core_surface.io.backend != .mux) return false;
+    if (action != .list and action != .workspaces and surface.core_surface.io.backend != .mux) return false;
     if (action == .terminate) {
         self.terminateSession(surface);
         return true;
@@ -835,7 +865,7 @@ pub fn performSessionAction(self: *Window, action: @FieldType(input.Binding.Acti
     if (self.palette) |palette| palette.destroy();
     const palette = try CommandPalette.createSessions(self.app.core_app.alloc, self);
     self.palette = palette;
-    palette.showSessions();
+    if (action == .workspaces) palette.showWorkspaces() else palette.showSessions();
     if (action == .rename) palette.renameSession(surface.core_surface.io.backend.mux.name);
     _ = winapi.SetFocus(palette.hwnd);
     return true;

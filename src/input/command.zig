@@ -741,6 +741,7 @@ fn actionCommands(action: Action.Key) []const Command {
         // palette context.
         .session => if (@import("builtin").os.tag == .windows) &.{
             .{ .action = .{ .session = .list }, .title = "Switch Session", .description = "Search and attach persistent sessions" },
+            .{ .action = .{ .session = .workspaces }, .title = "Switch Workspace", .description = "Switch saved tabs and panes while preserving shells" },
             .{ .action = .{ .session = .rename }, .title = "Rename Session", .description = "Name the focused persistent session" },
             .{ .action = .{ .session = .detach }, .title = "Detach Session", .description = "Close the focused pane and keep its shell running" },
             .{ .action = .{ .session = .terminate }, .title = "End Session...", .description = "Stop the current session and its running programs" },

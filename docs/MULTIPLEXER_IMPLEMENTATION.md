@@ -78,6 +78,46 @@ own harness. Release installation and automatic updates stay untouched.
 
 ## Build and exercise
 
+### Switching saved workspaces
+
+Open the session picker with **Ctrl+Shift+S**, then press **F6** to list saved
+workspaces. **Enter** switches the selected workspace, **F5** refreshes, and
+**Escape** closes the picker or cancels preparation. **F6** returns to the shell
+session list. The command palette also exposes **Switch Workspace**, and
+`session:workspaces` can be assigned in Keyboard shortcuts settings.
+
+Named workspaces use the existing `windows-workspace` setting, or the launch
+argument `--windows-workspace=project-name`. Enable persistent sessions and
+workspace restoration when creating them. All normal windows, tabs, split
+ratios, tab titles, focus, zoom, and geometry form one workspace; quick terminals
+remain outside it. Workspace switching currently opens the target's saved
+windows rather than reusing the original window handle.
+
+Switching requires persistent panes in both layouts and live, compatible target
+brokers. A workspace already owned by another GUI cannot be switched into.
+Missing brokers, overlapping shell IDs, cancellation, or changes to the source
+layout abort the operation without replacing the current views. Startup restore
+retains its separate behavior; explicit switching never launches replacement
+shells for missing target sessions.
+
+Discovery and broker preparation run on workers with the Windows port's bounded
+stack configuration. Preparation holds the target workspace lock and acquires
+connections and terminal snapshots. The UI then creates the target views from
+those prepared backends before detaching the old views. It rejects stale results
+by workspace generation. Escape cancels pipe operations and joins the worker
+before releasing its state.
+
+The existing v2 layout JSON is unchanged. A `.name` companion records each named
+workspace's display name; older named layouts become discoverable after their
+next save. `yuurei-mux workspaces` returns saved names and window/tab/pane counts
+as JSON. These are layout counts, not a claim that their shells are running.
+
+Regression coverage: `test/windows/mux-workspace-switch.ps1` on an isolated
+Win32 desktop. It checks round-trip switching, unchanged PIDs, restored input,
+tab/split/zoom state, target ownership conflicts, and missing-session failures.
+
+### Persistent panes
+
 Enable **Settings → Windows & tabs → Persistent sessions (experimental)** and
 select **Save changes**. The setting is off by default and applies to new tabs
 and splits; existing shells are unchanged. Yuurei starts the background helper

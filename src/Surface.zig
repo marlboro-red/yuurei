@@ -649,6 +649,9 @@ pub fn init(
     // be scoped here to be valid.
     {
         var io_backend: termio.Backend = backend: {
+            if (comptime builtin.os.tag == .windows and @hasDecl(@TypeOf(rt_surface.*), "takePreparedMux")) {
+                if (rt_surface.takePreparedMux()) |mux| break :backend .{ .mux = mux };
+            }
             if (comptime builtin.os.tag == .windows) {
                 if (!config.@"windows-persistent-sessions") {
                     if (config.@"windows-mux-session") |name| {

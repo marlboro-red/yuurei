@@ -121,6 +121,8 @@ quit: bool = false,
 /// new_window during the linger would re-open the entire session.
 session_restored: bool = false,
 workspace_name: ?[]const u8 = null,
+workspace_generation: u64 = 0,
+workspace_job: ?*@import("WorkspaceJob.zig") = null,
 session_restoring: bool = false,
 session_lock_initialized: bool = false,
 session_lock: ?winapi.HANDLE = null,
@@ -545,6 +547,7 @@ fn prewarmThreadMain(self: *App) void {
 }
 
 pub fn terminate(self: *App) void {
+    session.cancelSwitch(self);
     if (self.session_timer != 0) _ = winapi.KillTimer(null, self.session_timer);
     if (self.session_lock) |handle| _ = winapi.CloseHandle(handle);
     if (self.workspace_name) |name| self.core_app.alloc.free(name);
@@ -939,6 +942,7 @@ pub fn run(self: *App) !void {
         // Tick the terminal app
         try self.core_app.tick(self);
         session.tick(self);
+        session.pollSwitch(self);
         // Restore the host's initial session before forwarded launches,
         // including when several processes start simultaneously.
         if (!self.quit) if (self.instance) |instance| instance.drain();

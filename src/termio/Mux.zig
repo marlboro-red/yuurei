@@ -44,13 +44,7 @@ pending_size: ?[12]u8 = null,
 pending_clear: ?bool = null,
 
 pub fn init(alloc: std.mem.Allocator, name: []const u8, launch: ?*const @import("Exec.zig")) !*Mux {
-    const stop = CreateEventW(null, 1, 0, null) orelse return error.CreateEvent;
-    errdefer _ = w.CloseHandle(stop);
-    const wake = CreateEventW(null, 0, 0, null) orelse return error.CreateEvent;
-    errdefer _ = w.CloseHandle(wake);
-    const self = try alloc.create(Mux);
-    errdefer alloc.destroy(self);
-    self.* = .{ .alloc = alloc, .name = try alloc.dupeZ(u8, name), .stop = stop, .wake = wake };
+    const self = try createUnconnected(alloc, name);
     // Preserve the standard IO-startup error pane when a broker is absent,
     // busy or incompatible. Never silently launch a replacement shell.
     self.connect(name, launch) catch |err| {
@@ -58,6 +52,24 @@ pub fn init(alloc: std.mem.Allocator, name: []const u8, launch: ?*const @import(
         self.disconnected.store(true, .release);
     };
     return self;
+}
+
+/// Workspace preparation publishes this object before connecting so its stop
+/// event can cancel a pipe request. Only the preparing worker may mutate it.
+pub fn createUnconnected(alloc: std.mem.Allocator, name: []const u8) !*Mux {
+    const stop = CreateEventW(null, 1, 0, null) orelse return error.CreateEvent;
+    errdefer _ = w.CloseHandle(stop);
+    const wake = CreateEventW(null, 0, 0, null) orelse return error.CreateEvent;
+    errdefer _ = w.CloseHandle(wake);
+    const self = try alloc.create(Mux);
+    errdefer alloc.destroy(self);
+    self.* = .{ .alloc = alloc, .name = try alloc.dupeZ(u8, name), .stop = stop, .wake = wake };
+    return self;
+}
+
+pub fn connectExisting(self: *Mux) !void {
+    try self.load(self.name);
+    if (self.ended.load(.acquire)) return error.SessionEnded;
 }
 
 fn connect(self: *Mux, name: []const u8, launch: ?*const @import("Exec.zig")) !void {

@@ -130,6 +130,13 @@ refs: u32 = 1,
 /// The adopted HPCON keeps conhost's ConPTY alive; it is released when the
 /// pty (or, if never consumed, deinit via `defterm.closeHandoff`) closes.
 pending_handoff: ?defterm.Handoff = null,
+pending_mux: ?*@import("../../termio/Mux.zig") = null,
+
+pub fn takePreparedMux(self: *Self) ?*@import("../../termio/Mux.zig") {
+    const result = self.pending_mux;
+    self.pending_mux = null;
+    return result;
+}
 
 /// Increase the reference count (SplitTree view contract).
 pub fn ref(self: *Self) *Self {
@@ -163,6 +170,8 @@ pub fn init(
     // conhost's session hung on a terminal that will never read.
     var handoff_owned = spawn_opts.handoff;
     errdefer if (handoff_owned) |h| defterm.closeHandoff(h);
+    var mux_owned = spawn_opts.prepared_mux;
+    errdefer if (mux_owned) |mux| mux.deinit();
 
     // The GL host child fills the client area below the title strip.
     // It is created hidden; activateTab shows the active one.
@@ -241,11 +250,14 @@ pub fn init(
         // (below) can pull it into termio (the adopted HPCON moves into the
         // pty, which keeps conhost's ConPTY alive and releases it on close).
         .pending_handoff = handoff_owned,
+        .pending_mux = mux_owned,
     };
     // Ownership handed to self: from here a failure releases the handoff
     // through pending_handoff (null once takeHandoff consumed it into
     // termio, whose pty then owns the handles).
     handoff_owned = null;
+    mux_owned = null;
+    errdefer if (self.pending_mux) |mux| mux.deinit();
     errdefer if (self.pending_handoff) |h| {
         defterm.closeHandoff(h);
         self.pending_handoff = null;

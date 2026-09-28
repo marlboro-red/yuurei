@@ -14,6 +14,8 @@ const Window = @import("Window.zig");
 const winapi = @import("winapi.zig");
 const SessionPreview = @import("SessionPreview.zig");
 const Registry = @import("../../mux/Registry.zig");
+const session = @import("session.zig");
+const WorkspaceJob = @import("WorkspaceJob.zig");
 
 const log = std.log.scoped(.win32);
 
@@ -39,7 +41,10 @@ selected: usize = 0,
 
 /// Index into matches of the first visible row.
 scroll: usize = 0,
-mode: enum { commands, sessions, rename_session } = .commands,
+mode: enum { commands, sessions, rename_session, workspaces } = .commands,
+workspace_listing: ?*WorkspaceJob = null,
+workspace_loaded: bool = false,
+workspaces: []session.catalog.Entry = &.{},
 session_arena: std.heap.ArenaAllocator,
 sessions: []Registry.Entry = &.{},
 rename_id: ?[]const u8 = null,
@@ -112,6 +117,10 @@ fn createView(alloc: Allocator, window: *Window, embedded: bool) !*CommandPalett
 /// focus-loss path, and the tail of every other path).
 pub fn destroy(self: *CommandPalette) void {
     const alloc = self.window.app.core_app.alloc;
+    if (self.workspace_listing) |job| job.destroy();
+    if (self.window.app.workspace_job) |job| {
+        if (job.hwnd == self.hwnd) session.cancelSwitch(self.window.app);
+    }
     self.window.palette = null;
     _ = winapi.KillTimer(self.hwnd, 1);
     if (self.preview) |preview| preview.destroy();
@@ -129,6 +138,10 @@ pub fn destroy(self: *CommandPalette) void {
 }
 
 pub fn showSessions(self: *CommandPalette) void {
+    if (self.workspace_listing) |job| job.destroy();
+    self.workspace_listing = null;
+    self.workspaces = &.{};
+    if (self.embedded and self.preview == null) self.preview = SessionPreview.create(self.hwnd) catch null;
     self.mode = .sessions;
     self.error_text = null;
     self.filter.clearRetainingCapacity();
@@ -154,8 +167,48 @@ pub fn showSessions(self: *CommandPalette) void {
     self.refilter();
 }
 
+pub fn showWorkspaces(self: *CommandPalette) void {
+    if (self.preview) |preview| preview.destroy();
+    self.preview = null;
+    if (self.workspace_listing) |job| job.destroy();
+    self.workspace_listing = null;
+    self.workspace_loaded = false;
+    self.workspaces = &.{};
+    self.mode = .workspaces;
+    self.filter.clearRetainingCapacity();
+    self.error_text = "Loading workspaces…";
+    self.refilter();
+    const job = WorkspaceJob.create(self.hwnd) catch {
+        self.workspaceFailed(error.OutOfMemory);
+        return;
+    };
+    job.start() catch |err| {
+        job.destroy();
+        self.workspaceFailed(err);
+        return;
+    };
+    self.workspace_listing = job;
+}
+
+pub fn workspaceFailed(self: *CommandPalette, err: anyerror) void {
+    self.error_text = switch (err) {
+        error.WorkspaceAlreadyActive => "This workspace is already active.",
+        error.WorkspaceSwitchInProgress => "Preparing workspace. Escape cancels.",
+        error.WorkspaceUnavailable => "Workspace is open elsewhere or unavailable.",
+        error.NonPersistentWorkspace => "Switching requires persistent sessions in both workspaces.",
+        error.WorkspaceSessionOverlap => "These workspaces contain the same shell. Switch cancelled.",
+        error.WorkspaceChanged => "Current layout changed. Press Enter to retry.",
+        error.SessionBusy => "A target session is attached elsewhere. Switch cancelled.",
+        error.SessionNotFound, error.SessionEnded => "A target session has ended. Switch cancelled.",
+        error.IncompatibleBuild => "Target sessions use a different build. Switch cancelled.",
+        error.EmptyWorkspace => "This workspace has no saved panes.",
+        else => "Workspace unavailable. Press F5 to refresh.",
+    };
+    _ = winapi.InvalidateRect(self.hwnd, null, 0);
+}
+
 pub fn sessionClosed(self: *CommandPalette, name: []const u8) void {
-    if (self.mode == .commands) return;
+    if (self.mode == .commands or self.mode == .workspaces) return;
     const editing = self.mode == .rename_session;
     if (editing) self.mode = .sessions;
     var live: usize = 0;
@@ -283,6 +336,15 @@ fn dismiss(self: *CommandPalette) void {
 /// or a profile spawn for the appended profile rows.
 fn execute(self: *CommandPalette) void {
     const window = self.window;
+    if (self.mode == .workspaces) {
+        if (self.matches.items.len == 0) return;
+        session.beginSwitch(window.app, self.hwnd, self.workspaces[self.matches.items[self.selected]].name) catch |err| {
+            self.workspaceFailed(err);
+            return;
+        };
+        self.workspaceFailed(error.WorkspaceSwitchInProgress);
+        return;
+    }
     if (self.mode == .rename_session) return self.saveSessionName();
     if (self.mode == .sessions) {
         if (self.matches.items.len == 0) return;
@@ -333,6 +395,7 @@ const EntryRef = struct {
 };
 
 fn entryCount(self: *const CommandPalette) usize {
+    if (self.mode == .workspaces) return self.workspaces.len;
     if (self.mode != .commands) return self.sessions.len;
     return self.commands().len +
         self.window.app.ensureProfiles().items.len;
@@ -344,6 +407,10 @@ fn entryAt(
     title_buf: []u8,
     label_buf: []u8,
 ) EntryRef {
+    if (self.mode == .workspaces) {
+        const entry = self.workspaces[i];
+        return .{ .title = entry.name, .description = "Saved workspace", .action = null, .label = std.fmt.bufPrint(label_buf, "Tabs {d} · Panes {d}{s}", .{ entry.tabs, entry.panes, if (std.mem.eql(u8, entry.name, self.window.app.workspace_name orelse "default")) " · Active" else "" }) catch "" };
+    }
     if (self.mode != .commands) {
         const entry = self.sessions[i];
         return .{
@@ -504,13 +571,14 @@ fn rowHeight(self: *const CommandPalette) i32 {
 }
 
 fn listWidth(self: *const CommandPalette, width: i32) i32 {
+    if (self.mode == .workspaces) return width;
     return if (self.embedded and self.mode != .commands and width >= self.window.scale(600)) @divTrunc(width * 2, 5) else width;
 }
 
 fn selectPreview(self: *CommandPalette) void {
     _ = winapi.KillTimer(self.hwnd, 1);
     const preview = self.preview orelse return;
-    const id = if (self.mode != .commands and self.selected < self.matches.items.len)
+    const id = if ((self.mode == .sessions or self.mode == .rename_session) and self.selected < self.matches.items.len)
         self.sessions[self.matches.items[self.selected]].name
     else
         "";
@@ -686,6 +754,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             const placeholder = switch (self.mode) {
                 .commands => std.unicode.utf8ToUtf16LeStringLiteral("Type a command\u{2026}"),
                 .sessions, .rename_session => std.unicode.utf8ToUtf16LeStringLiteral("Search sessions\u{2026}"),
+                .workspaces => std.unicode.utf8ToUtf16LeStringLiteral("Search workspaces\u{2026}"),
             };
             _ = winapi.DrawTextW(
                 hdc,
@@ -745,7 +814,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             _ = winapi.SetTextColor(hdc, row_fg);
             var wide: [512]u16 = undefined;
             const n = std.unicode.utf8ToUtf16Le(&wide, Window.utf8Capped(cmd.title, wide.len - 1)) catch 0;
-            var rect: winapi.RECT = .{ .left = margin, .top = top, .right = list_width - margin - window.scale(100), .bottom = top + row_h };
+            var rect: winapi.RECT = .{ .left = margin, .top = top, .right = list_width - margin - window.scale(if (self.mode == .workspaces) @as(i32, 250) else 100), .bottom = top + row_h };
             wide[n] = 0;
             if (self.mode == .rename_session and row == self.selected) {
                 const count = @min(self.rename_text.items.len, wide.len - 1);
@@ -773,7 +842,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
                 _ = winapi.DrawTextW(hdc, wide[0..n :0], @intCast(n), &rect, winapi.DT_LEFT | winapi.DT_VCENTER | winapi.DT_SINGLELINE | winapi.DT_END_ELLIPSIS | winapi.DT_NOPREFIX);
             }
             var pid_buf: [32]u8 = undefined;
-            const pid = std.fmt.bufPrint(&pid_buf, "PID {d}", .{self.sessions[cmd_idx].shell_pid}) catch "";
+            const pid = if (self.mode == .workspaces) cmd.label orelse "" else std.fmt.bufPrint(&pid_buf, "PID {d}", .{self.sessions[cmd_idx].shell_pid}) catch "";
             const pn = std.unicode.utf8ToUtf16Le(&wide, pid) catch 0;
             wide[pn] = 0;
             rect.left = @max(margin, rect.right);
@@ -910,12 +979,14 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
     }
 
     if (self.mode != .commands) {
-        const hint = self.error_text orelse if (self.mode == .rename_session)
+        const hint = self.error_text orelse if (self.mode == .workspaces)
+            "Enter switch workspace · F5 refresh · F6 sessions · Esc close"
+        else if (self.mode == .rename_session)
             "Rename session · Enter save · Esc cancel"
         else if (self.matches.items.len == 0)
             "No matching sessions · F5 refresh"
         else
-            "Enter switch · F2 rename · Del end · F5 refresh · Esc close";
+            "Enter switch · F2 rename · Del end · F5 refresh · F6 workspaces · Esc close";
         var wide: [256]u16 = undefined;
         const n = std.unicode.utf8ToUtf16Le(&wide, hint) catch 0;
         var rect: winapi.RECT = .{ .left = margin, .top = client.bottom - window.scale(30), .right = client.right - margin, .bottom = client.bottom };
@@ -949,6 +1020,21 @@ pub fn wndProc(
     const self: *CommandPalette = @ptrFromInt(@as(usize, @bitCast(ptr)));
 
     switch (msg) {
+        WorkspaceJob.ready_message => {
+            if (self.workspace_listing) |job| {
+                if (!self.workspace_loaded and job.done.load(.acquire)) {
+                    if (job.thread) |thread| thread.join();
+                    job.thread = null;
+                    self.workspace_loaded = true;
+                    if (job.failure) |err| self.workspaceFailed(err) else {
+                        self.workspaces = job.entries orelse &.{};
+                        self.error_text = null;
+                    }
+                    self.refilter();
+                }
+            }
+            return 0;
+        },
         winapi.WM_TIMER => {
             if (wparam == 1) {
                 _ = winapi.KillTimer(hwnd, 1);
@@ -986,7 +1072,11 @@ pub fn wndProc(
                     self.refilter();
                 },
                 winapi.VK_F1 + 1 => if (self.mode == .sessions and self.matches.items.len > 0) self.renameSession(self.sessions[self.matches.items[self.selected]].name),
-                winapi.VK_F1 + 4 => if (self.mode == .sessions) self.refreshSessions(),
+                winapi.VK_F1 + 4 => if (self.mode == .sessions) self.refreshSessions() else if (self.mode == .workspaces) self.showWorkspaces(),
+                winapi.VK_F1 + 5 => if (self.mode == .sessions) self.showWorkspaces() else if (self.mode == .workspaces) {
+                    session.cancelSwitch(self.window.app);
+                    self.showSessions();
+                },
                 winapi.VK_DELETE => self.endSelectedSession(),
                 winapi.VK_PRIOR => self.moveSelection(
                     -@as(i32, @intCast(@max(1, self.visibleRows()))),
