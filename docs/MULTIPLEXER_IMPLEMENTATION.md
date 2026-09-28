@@ -115,8 +115,10 @@ Bind `session:terminate` to a preferred shortcut, for example
 `keybind = ctrl+b>x=session:terminate`. Ending a session stops its shell and
 running programs and removes it from the session list; closing a pane only
 detaches it.
-**F2** renames the selected session; type a name and press **Enter** to save,
-or **Escape** to cancel. **F5** refreshes discovery without clearing the search.
+**F2** edits the selected session name in its row, keeping the list, search,
+and preview visible. Type a name and press **Enter** to save, or **Escape** to
+cancel without losing the search or selection. Navigation stays on the edited
+row until the rename is saved or cancelled. **F5** refreshes discovery without clearing the search.
 **Escape** closes the picker. No discovery polling runs while it is closed.
 
 At widths of at least 600 logical pixels, a side panel previews the selected

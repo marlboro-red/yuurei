@@ -44,6 +44,7 @@ session_arena: std.heap.ArenaAllocator,
 sessions: []Registry.Entry = &.{},
 rename_id: ?[]const u8 = null,
 rename_fresh: bool = false,
+rename_text: std.ArrayList(u16) = .empty,
 error_text: ?[]const u8 = null,
 preview: ?*SessionPreview = null,
 
@@ -120,6 +121,7 @@ pub fn destroy(self: *CommandPalette) void {
     _ = winapi.DestroyWindow(self.hwnd);
     if (self.embedded) self.window.refreshActiveTab();
     self.filter.deinit(alloc);
+    self.rename_text.deinit(alloc);
     self.matches.deinit(alloc);
     self.session_arena.deinit();
     if (self.rename_id) |id| alloc.free(id);
@@ -154,6 +156,8 @@ pub fn showSessions(self: *CommandPalette) void {
 
 pub fn sessionClosed(self: *CommandPalette, name: []const u8) void {
     if (self.mode == .commands) return;
+    const editing = self.mode == .rename_session;
+    if (editing) self.mode = .sessions;
     var live: usize = 0;
     for (self.sessions) |entry| {
         if (std.mem.eql(u8, entry.name, name)) continue;
@@ -161,14 +165,19 @@ pub fn sessionClosed(self: *CommandPalette, name: []const u8) void {
         live += 1;
     }
     self.sessions = self.sessions[0..live];
-    if (self.mode == .rename_session) {
-        if (self.rename_id) |id| if (std.mem.eql(u8, id, name)) {
-            self.mode = .sessions;
-            self.filter.clearRetainingCapacity();
-            self.error_text = "Session ended.";
-        };
-    }
     self.refilter();
+    if (editing) {
+        if (self.rename_id) |id| {
+            for (self.matches.items, 0..) |index, position| {
+                if (!std.mem.eql(u8, self.sessions[index].name, id)) continue;
+                self.moveSelection(@intCast(position));
+                self.mode = .rename_session;
+                return;
+            }
+        }
+        self.cancelRename();
+        self.error_text = "Session ended.";
+    }
 }
 
 fn refreshSessions(self: *CommandPalette) void {
@@ -190,28 +199,40 @@ fn refreshSessions(self: *CommandPalette) void {
 }
 
 pub fn renameSession(self: *CommandPalette, id: []const u8) void {
+    if (self.mode != .sessions) return;
+    const position = for (self.matches.items, 0..) |index, position| {
+        if (std.mem.eql(u8, self.sessions[index].name, id)) break position;
+    } else return;
     const alloc = self.window.app.core_app.alloc;
     const copy = alloc.dupe(u8, id) catch return;
     if (self.rename_id) |old| alloc.free(old);
     self.rename_id = copy;
+    self.moveSelection(@as(i32, @intCast(position)) - @as(i32, @intCast(self.selected)));
+    const entry = self.sessions[self.matches.items[position]];
+    const wide = std.unicode.utf8ToUtf16LeAlloc(alloc, if (entry.label.len > 0) entry.label else entry.name) catch return;
+    defer alloc.free(wide);
+    self.rename_text.clearRetainingCapacity();
+    self.rename_text.appendSlice(alloc, wide) catch return;
     self.mode = .rename_session;
     self.error_text = null;
-    self.filter.clearRetainingCapacity();
-    for (self.sessions) |entry| {
-        if (!std.mem.eql(u8, entry.name, copy)) continue;
-        const label = if (entry.label.len > 0) entry.label else entry.name;
-        const wide = std.unicode.utf8ToUtf16LeAlloc(alloc, label) catch break;
-        defer alloc.free(wide);
-        self.filter.appendSlice(alloc, wide) catch {};
-        break;
-    }
     self.rename_fresh = true;
-    self.refilter();
+    _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+}
+
+fn cancelRename(self: *CommandPalette) void {
+    self.mode = .sessions;
+    self.error_text = null;
+    self.rename_text.clearRetainingCapacity();
+    _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+}
+
+fn editText(self: *CommandPalette) *std.ArrayList(u16) {
+    return if (self.mode == .rename_session) &self.rename_text else &self.filter;
 }
 
 fn saveSessionName(self: *CommandPalette) void {
     var buffer: [512]u8 = undefined;
-    const n = std.unicode.utf16LeToUtf8(&buffer, self.filter.items) catch 0;
+    const n = std.unicode.utf16LeToUtf8(&buffer, self.rename_text.items) catch 0;
     const name = std.mem.trim(u8, buffer[0..n], " \t\r\n");
     if (!@import("../../mux/protocol.zig").validLabel(name)) {
         self.error_text = "Use 1–128 UTF-8 bytes without control characters.";
@@ -224,12 +245,8 @@ fn saveSessionName(self: *CommandPalette) void {
         _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
         return;
     };
-    self.showSessions();
-    if (self.rename_id) |id| for (self.matches.items, 0..) |index, position| {
-        if (!std.mem.eql(u8, self.sessions[index].name, id)) continue;
-        self.moveSelection(@intCast(position));
-        break;
-    };
+    self.cancelRename();
+    self.refreshSessions();
     for (self.window.app.windows.items) |window| window.refreshSessionBar(true);
 }
 
@@ -316,8 +333,7 @@ const EntryRef = struct {
 };
 
 fn entryCount(self: *const CommandPalette) usize {
-    if (self.mode == .rename_session) return 0;
-    if (self.mode == .sessions) return self.sessions.len;
+    if (self.mode != .commands) return self.sessions.len;
     return self.commands().len +
         self.window.app.ensureProfiles().items.len;
 }
@@ -328,7 +344,7 @@ fn entryAt(
     title_buf: []u8,
     label_buf: []u8,
 ) EntryRef {
-    if (self.mode == .sessions) {
+    if (self.mode != .commands) {
         const entry = self.sessions[i];
         return .{
             .title = if (entry.label.len > 0) entry.label else entry.name,
@@ -375,17 +391,18 @@ fn keybindLabel(
 /// of the title or description) and fit the popup to them.
 /// Paste clipboard text into the filter at the cap, then re-filter.
 fn paste(self: *CommandPalette) void {
+    const edit = self.editText();
     const alloc = self.window.app.core_app.alloc;
     if (self.mode == .rename_session and self.rename_fresh) {
-        self.filter.clearRetainingCapacity();
+        edit.clearRetainingCapacity();
         self.rename_fresh = false;
     }
     var buf: [filter_max_units]u16 = undefined;
-    const room = filter_max_units -| self.filter.items.len;
+    const room = filter_max_units -| edit.items.len;
     if (room == 0) return;
     const n = winapi.clipboardTextUtf16(self.hwnd, buf[0..@min(room, buf.len)]);
     if (n == 0) return;
-    self.filter.appendSlice(alloc, buf[0..n]) catch return;
+    edit.appendSlice(alloc, buf[0..n]) catch return;
     self.refilter();
 }
 
@@ -441,6 +458,10 @@ pub fn profilesChanged(self: *CommandPalette) void {
 }
 
 fn refilter(self: *CommandPalette) void {
+    if (self.mode == .rename_session) {
+        _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+        return;
+    }
     const alloc = self.window.app.core_app.alloc;
     self.matches.clearRetainingCapacity();
 
@@ -479,17 +500,17 @@ fn refilter(self: *CommandPalette) void {
 }
 
 fn rowHeight(self: *const CommandPalette) i32 {
-    return self.window.scale(if (self.mode == .sessions) @as(i32, 24) else row_height_logical);
+    return self.window.scale(if (self.mode != .commands) @as(i32, 24) else row_height_logical);
 }
 
 fn listWidth(self: *const CommandPalette, width: i32) i32 {
-    return if (self.embedded and self.mode == .sessions and width >= self.window.scale(600)) @divTrunc(width * 2, 5) else width;
+    return if (self.embedded and self.mode != .commands and width >= self.window.scale(600)) @divTrunc(width * 2, 5) else width;
 }
 
 fn selectPreview(self: *CommandPalette) void {
     _ = winapi.KillTimer(self.hwnd, 1);
     const preview = self.preview orelse return;
-    const id = if (self.mode == .sessions and self.selected < self.matches.items.len)
+    const id = if (self.mode != .commands and self.selected < self.matches.items.len)
         self.sessions[self.matches.items[self.selected]].name
     else
         "";
@@ -545,6 +566,7 @@ pub fn layout(self: *CommandPalette) void {
 
 /// Move the highlight, keeping it visible.
 fn moveSelection(self: *CommandPalette, delta: i32) void {
+    if (self.mode == .rename_session) return;
     const count = self.matches.items.len;
     if (count == 0) return;
     const max: i32 = @intCast(count - 1);
@@ -632,13 +654,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             .bottom = input_h,
         };
         if (self.filter.items.len > 0) {
-            if (self.mode == .rename_session and self.rename_fresh) {
-                if (winapi.CreateSolidBrush(select_bg)) |brush| {
-                    defer _ = winapi.DeleteObject(brush);
-                    _ = winapi.FillRect(hdc, &text_rect, brush);
-                }
-            }
-            _ = winapi.SetTextColor(hdc, if (self.embedded and self.mode == .rename_session and self.rename_fresh) bg else fg);
+            _ = winapi.SetTextColor(hdc, fg);
             var buf: [512:0]u16 = undefined;
             const n = @min(self.filter.items.len, buf.len - 1);
             @memcpy(buf[0..n], self.filter.items[0..n]);
@@ -653,7 +669,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
 
             // Caret after the text.
             var extent: winapi.SIZE = undefined;
-            if (winapi.GetTextExtentPoint32W(hdc, &buf, @intCast(n), &extent) != 0) {
+            if (self.mode != .rename_session and winapi.GetTextExtentPoint32W(hdc, &buf, @intCast(n), &extent) != 0) {
                 var caret: winapi.RECT = .{
                     .left = margin + extent.cx + window.scale(1),
                     .top = @divTrunc(input_h - extent.cy, 2),
@@ -669,8 +685,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             _ = winapi.SetTextColor(hdc, fg_dim);
             const placeholder = switch (self.mode) {
                 .commands => std.unicode.utf8ToUtf16LeStringLiteral("Type a command\u{2026}"),
-                .sessions => std.unicode.utf8ToUtf16LeStringLiteral("Search sessions\u{2026}"),
-                .rename_session => std.unicode.utf8ToUtf16LeStringLiteral("Session name\u{2026}"),
+                .sessions, .rename_session => std.unicode.utf8ToUtf16LeStringLiteral("Search sessions\u{2026}"),
             };
             _ = winapi.DrawTextW(
                 hdc,
@@ -722,7 +737,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             }
         }
 
-        if (self.mode == .sessions) {
+        if (self.mode != .commands) {
             const old = if (title_font) |f| winapi.SelectObject(hdc, f) else null;
             defer if (old) |f| {
                 _ = winapi.SelectObject(hdc, f);
@@ -732,7 +747,31 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             const n = std.unicode.utf8ToUtf16Le(&wide, Window.utf8Capped(cmd.title, wide.len - 1)) catch 0;
             var rect: winapi.RECT = .{ .left = margin, .top = top, .right = list_width - margin - window.scale(100), .bottom = top + row_h };
             wide[n] = 0;
-            _ = winapi.DrawTextW(hdc, wide[0..n :0], @intCast(n), &rect, winapi.DT_LEFT | winapi.DT_VCENTER | winapi.DT_SINGLELINE | winapi.DT_END_ELLIPSIS | winapi.DT_NOPREFIX);
+            if (self.mode == .rename_session and row == self.selected) {
+                const count = @min(self.rename_text.items.len, wide.len - 1);
+                @memcpy(wide[0..count], self.rename_text.items[0..count]);
+                wide[count] = 0;
+                const edit_bg = if (self.rename_fresh) fg else bg;
+                const edit_fg = if (self.rename_fresh) bg else fg;
+                if (winapi.CreateSolidBrush(edit_bg)) |brush| {
+                    defer _ = winapi.DeleteObject(brush);
+                    _ = winapi.FillRect(hdc, &rect, brush);
+                }
+                _ = winapi.SetTextColor(hdc, edit_fg);
+                _ = winapi.DrawTextW(hdc, wide[0..count :0], @intCast(count), &rect, winapi.DT_LEFT | winapi.DT_VCENTER | winapi.DT_SINGLELINE | winapi.DT_NOPREFIX);
+                var extent: winapi.SIZE = .{ .cx = 0, .cy = window.scale(13) };
+                _ = winapi.GetTextExtentPoint32W(hdc, &wide, @intCast(count), &extent);
+                const caret_x = @min(rect.right - window.scale(2), rect.left + extent.cx);
+                var caret: winapi.RECT = .{ .left = caret_x, .right = caret_x + window.scale(2), .top = top + window.scale(4), .bottom = top + row_h - window.scale(4) };
+                if (winapi.CreateSolidBrush(edit_fg)) |brush| {
+                    defer _ = winapi.DeleteObject(brush);
+                    _ = winapi.FrameRect(hdc, &rect, brush);
+                    if (!self.rename_fresh) _ = winapi.FillRect(hdc, &caret, brush);
+                }
+                _ = winapi.SetTextColor(hdc, row_fg);
+            } else {
+                _ = winapi.DrawTextW(hdc, wide[0..n :0], @intCast(n), &rect, winapi.DT_LEFT | winapi.DT_VCENTER | winapi.DT_SINGLELINE | winapi.DT_END_ELLIPSIS | winapi.DT_NOPREFIX);
+            }
             var pid_buf: [32]u8 = undefined;
             const pid = std.fmt.bufPrint(&pid_buf, "PID {d}", .{self.sessions[cmd_idx].shell_pid}) catch "";
             const pn = std.unicode.utf8ToUtf16Le(&wide, pid) catch 0;
@@ -934,7 +973,7 @@ pub fn wndProc(
 
         winapi.WM_KEYDOWN => {
             switch (@as(u8, @truncate(wparam))) {
-                winapi.VK_ESCAPE => if (self.mode == .rename_session) self.showSessions() else self.dismiss(),
+                winapi.VK_ESCAPE => if (self.mode == .rename_session) self.cancelRename() else self.dismiss(),
                 winapi.VK_RETURN => self.execute(),
                 winapi.VK_UP => self.moveSelection(-1),
                 winapi.VK_DOWN => self.moveSelection(1),
@@ -963,16 +1002,17 @@ pub fn wndProc(
         },
 
         winapi.WM_CHAR => {
+            const edit = self.editText();
             const alloc = self.window.app.core_app.alloc;
             const ch: u16 = @truncate(wparam);
             if ((ch == 0x08 or (ch >= 0x20 and ch != 0x7f)) and self.mode == .rename_session and self.rename_fresh) {
-                self.filter.clearRetainingCapacity();
+                edit.clearRetainingCapacity();
                 self.rename_fresh = false;
             }
             if (ch == 0x08) {
                 // Backspace: drop one codepoint (both surrogate halves).
-                if (self.filter.pop()) |unit| {
-                    if (unit >= 0xDC00 and unit <= 0xDFFF) _ = self.filter.pop();
+                if (edit.pop()) |unit| {
+                    if (unit >= 0xDC00 and unit <= 0xDFFF) _ = edit.pop();
                     self.refilter();
                 }
             } else if (ch >= 0x20 and ch != 0x7F) {
@@ -982,15 +1022,16 @@ pub fn wndProc(
                 const lead = ch >= 0xD800 and ch <= 0xDBFF;
                 const trail = ch >= 0xDC00 and ch <= 0xDFFF;
                 const need: usize = if (lead) 2 else 1;
-                if (!trail and self.filter.items.len + need > filter_max_units)
+                if (!trail and edit.items.len + need > filter_max_units)
                     return 0;
-                self.filter.append(alloc, ch) catch return 0;
+                edit.append(alloc, ch) catch return 0;
                 self.refilter();
             }
             return 0;
         },
 
         winapi.WM_MOUSEMOVE => {
+            if (self.mode == .rename_session) return 0;
             if (self.rowAt(@as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lparam)))))), lparamY(lparam))) |row| {
                 if (row != self.selected) {
                     self.selected = row;
@@ -1002,6 +1043,7 @@ pub fn wndProc(
         },
 
         winapi.WM_LBUTTONDOWN => {
+            if (self.mode == .rename_session) return 0;
             if (self.rowAt(@as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lparam)))))), lparamY(lparam))) |row| {
                 self.selected = row;
                 self.execute();
@@ -1010,6 +1052,7 @@ pub fn wndProc(
         },
 
         winapi.WM_MOUSEWHEEL => {
+            if (self.mode == .rename_session) return 0;
             const delta: i16 = @bitCast(@as(u16, @truncate(wparam >> 16)));
             const rows: i32 = if (delta > 0) -3 else 3;
             const count = self.matches.items.len;

@@ -143,6 +143,13 @@ try{
  Wait-For {[SessionNative]::Title($window).Contains("SESSION_PID=$($first.shell_pid)")} 'Search did not focus existing pane'
  Assert (@(Mux @('list')|ConvertFrom-Json).Count -eq 2) 'Switching created a duplicate shell'
  Key $window 0x72;$picker=Palette;SendText $picker 'Backend';Key $picker 0x71 # F2
+ SendText $picker 'Discarded name';Screenshot $picker 'inline-rename';Key $picker 0x1B
+ Assert ([TabNative]::IsWindow($picker)) 'Cancelling inline rename dismissed the session list'
+ Key $picker 0x28;Key $picker 0x0D # Search and selection survive cancellation.
+ Wait-For {[SessionNative]::Title($window).Contains("SESSION_PID=$($first.shell_pid)")} 'Cancelling rename lost the filtered selection'
+ Assert ((@(Mux @('list')|ConvertFrom-Json)|Where-Object name -eq $first.name).label -eq 'Backend 日本語') 'Cancelled rename changed session name'
+ Key $window 0x72;$picker=Palette;Key $picker 0x71
+ Key $picker 0x28 # Navigation must not retarget an active inline edit.
  [void][TabNative]::PostMessage($picker,0x102,8,0);Key $picker 0x0D
  Assert ((@(Mux @('list')|ConvertFrom-Json)|Where-Object name -eq $first.name).label -eq 'Backend 日本語') 'Empty rename changed session name'
  SendText $picker 'API 日本語';Key $picker 0x0D
