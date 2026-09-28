@@ -7185,6 +7185,27 @@ pub const Keybinds = struct {
 
         // Windows persistent-session picker.
         if (comptime builtin.os.tag == .windows) {
+            // Optional one-shot multiplexer table. No root prefix is installed:
+            // users opt in by binding session:leader to their preferred key.
+            const mux_table = try self.tables.getOrPut(alloc, "yuurei_mux");
+            mux_table.key_ptr.* = try alloc.dupe(u8, "yuurei_mux");
+            mux_table.value_ptr.* = .{};
+            inline for (.{
+                "yuurei_mux/c=new_tab",                "yuurei_mux/d=new_split:right",
+                "yuurei_mux/e=new_split:down",         "yuurei_mux/h=goto_split:left",
+                "yuurei_mux/j=goto_split:down",        "yuurei_mux/k=goto_split:up",
+                "yuurei_mux/l=goto_split:right",       "yuurei_mux/z=toggle_split_zoom",
+                "yuurei_mux/s=session:list",           "yuurei_mux/w=session:workspaces",
+                "yuurei_mux/n=session:workspace_next", "yuurei_mux/p=session:workspace_previous",
+                "yuurei_mux/b=session:workspace_last", "yuurei_mux/r=session:rename",
+                "yuurei_mux/x=session:terminate",      "yuurei_mux/m=session:workspace_move",
+                "yuurei_mux/o=session:workspace_new",  "yuurei_mux/ctrl+b=text:\\x02",
+                "yuurei_mux/escape=ignore",            "yuurei_mux/catch_all=ignore",
+            }) |binding| mux_table.value_ptr.parseAndPut(alloc, binding["yuurei_mux/".len..]) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => unreachable, // All bindings above are compile-time defaults.
+            };
+            self.chain_target = .root;
             try self.set.put(alloc, .{ .key = .{ .unicode = 's' }, .mods = .{ .ctrl = true, .shift = true } }, .{ .session = .list });
             try self.set.put(alloc, .{ .key = .{ .unicode = 'n' }, .mods = .{ .ctrl = true, .alt = true, .shift = true } }, .{ .session = .workspace_new });
             try self.set.put(alloc, .{ .key = .{ .unicode = 'm' }, .mods = .{ .ctrl = true, .alt = true, .shift = true } }, .{ .session = .workspace_move });

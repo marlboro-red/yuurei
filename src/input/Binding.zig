@@ -815,7 +815,7 @@ pub const Action = union(enum) {
     /// Windows persistent sessions: open the picker, rename the focused
     /// session, detach its pane, or end it with confirmation. These actions
     /// can be used in key sequences.
-    session: enum { list, rename, detach, terminate, workspaces, workspace_new, workspace_next, workspace_previous, workspace_last, workspace_move },
+    session: enum { list, rename, detach, terminate, workspaces, workspace_new, workspace_next, workspace_previous, workspace_last, workspace_move, leader },
 
     /// Toggle the quick terminal.
     ///

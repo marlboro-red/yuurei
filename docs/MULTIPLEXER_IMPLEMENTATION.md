@@ -177,6 +177,40 @@ failures.
 busy ownership, cancellation, refresh mode, split/title/zoom restoration,
 multi-window targets, last-tab closure, shell identity, and keyboard isolation.
 
+### Optional multiplexer leader
+
+Bind **Multiplexer Leader** (`session:leader`) in Keyboard shortcuts settings,
+or add `keybind = ctrl+b=session:leader` to the config. No prefix is bound by
+default, so normal shell shortcuts remain available until you opt in. The
+prefix activates the `yuurei_mux` key table for one command, with a bottom-bar
+hint drawn from that table. Escape, an unknown command, focus loss, or five
+seconds without a command dismisses it without forwarding the prefix.
+
+| Command after the leader | Action |
+| --- | --- |
+| c | New tab |
+| d / e | Split right / down |
+| h / j / k / l | Focus left / down / up / right pane |
+| z | Toggle pane zoom |
+| s / r / x | Session list / rename / inline end confirmation |
+| w | Workspace list |
+| n / p / b | Next / previous / last workspace |
+| o / m | Create workspace from tab / move tab to workspace |
+| Ctrl+B | Send a literal Ctrl+B to the shell |
+
+Commands are ordinary named-table bindings and can be edited in Settings or
+config, for example `keybind = yuurei_mux/c=new_window`. The default
+`yuurei_mux/catch_all=ignore` prevents unknown commands falling through to shell
+input; keep it when customizing the table. If choosing a different prefix,
+configure a corresponding explicit pass-through binding as needed. Ordinary
+Ghostty key sequences and other named tables retain their existing behavior.
+
+`test/windows/mux-leader.ps1` checks input isolation, pass-through, timeout,
+focus loss, autorepeat, pane commands, inline confirmation, and config reload
+on an isolated desktop. It also records GUI-plus-broker memory, thread, handle,
+and CPU samples across 1,000 activation/dismissal cycles; this is a short stress
+test, not an overnight stability result.
+
 ### Persistent panes
 
 Enable **Settings → Windows & tabs → Persistent sessions (experimental)** and

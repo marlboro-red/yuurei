@@ -216,7 +216,7 @@ const shortcut_actions = [_][]const u8{
     "toggle_split_zoom",     "equalize_splits",        "goto_tab:next",              "goto_tab:previous",      "toggle_fullscreen",      "increase_font_size:1",
     "decrease_font_size:1",  "reset_font_size",        "clear_screen",               "toggle_command_palette", "open_config",            "reload_config",
     "session:list",          "session:rename",         "session:detach",             "session:terminate",      "session:workspaces",     "ignore",
-    "session:workspace_new", "session:workspace_next", "session:workspace_previous", "session:workspace_last", "session:workspace_move",
+    "session:workspace_new", "session:workspace_next", "session:workspace_previous", "session:workspace_last", "session:workspace_move", "session:leader",
 };
 
 fn layoutShortcuts(self: *SettingsWindow) void {

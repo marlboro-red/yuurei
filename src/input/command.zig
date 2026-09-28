@@ -741,6 +741,7 @@ fn actionCommands(action: Action.Key) []const Command {
         // palette context.
         .session => if (@import("builtin").os.tag == .windows) &.{
             .{ .action = .{ .session = .list }, .title = "Switch Session", .description = "Search and attach persistent sessions" },
+            .{ .action = .{ .session = .leader }, .title = "Multiplexer Leader", .description = "Activate the multiplexer command keys for five seconds" },
             .{ .action = .{ .session = .workspaces }, .title = "Switch Workspace", .description = "Switch saved tabs and panes while preserving shells" },
             .{ .action = .{ .session = .workspace_new }, .title = "Create Workspace from Tab", .description = "Move the current tab and its panes to a named workspace" },
             .{ .action = .{ .session = .workspace_move }, .title = "Move Tab to Workspace", .description = "Send the current tab and its panes to an existing workspace" },

@@ -169,6 +169,8 @@ profile_menu_closed_ms: i64 = 0,
 /// The search bar while a search is active.
 search: ?*SearchBar = null,
 session_bar: SessionBar = .{},
+leader_active: bool = false,
+leader_captured: [256]bool = @splat(false),
 session_font: ?*anyopaque = null,
 session_font_dpi: u32 = 0,
 
@@ -255,6 +257,7 @@ const default_window_width_logical: i32 = 800;
 const default_window_height_logical: i32 = 600;
 const modal_tick_timer_id: usize = 1;
 const resize_repaint_timer_id: usize = 2;
+const leader_timer_id: usize = 3;
 /// How many deferred repaint ticks fire after a resize. ConPTY reflows
 /// asynchronously, so the prompt the shell repaints lands a few frames
 /// after our grid resize; a single immediate render would miss it.
@@ -429,6 +432,7 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
 /// Destroy the window and any remaining tabs. Must not be called from
 /// inside the window procedure.
 pub fn destroy(self: *Window) void {
+    self.cancelLeader();
     const alloc = self.app.core_app.alloc;
     if (self.session_font) |font| _ = winapi.DeleteObject(font);
     if (self.tab_drag != null) self.updateTabDrop(null);
@@ -553,6 +557,7 @@ pub fn discardWorkspaceTabs(self: *Window, first: usize) void {
 
 /// Clear view-specific UI before freeing or moving any old terminal pages.
 pub fn clearWorkspaceUi(self: *Window, retained: ?*const Tree) void {
+    self.cancelLeader();
     if (self.palette) |palette| palette.destroy();
     if (self.profile_menu) |menu| menu.destroy();
     if (self.search) |search| {
@@ -914,8 +919,12 @@ pub fn togglePalette(self: *Window) !void {
     _ = winapi.SetFocus(palette.hwnd);
 }
 
-pub fn performSessionAction(self: *Window, action: @FieldType(input.Binding.Action, "session")) !bool {
+pub fn performSessionAction(self: *Window, action: @FieldType(input.Binding.Action, "session")) anyerror!bool {
     const surface = self.activeSurface() orelse return false;
+    if (action == .leader) {
+        if (self.app.workspace_job != null or self.session_bar.pending != null or self.session_bar.failed) return true;
+        return surface.core_surface.performBindingAction(.{ .activate_key_table_once = "yuurei_mux" });
+    }
     switch (action) {
         .workspace_next, .workspace_previous, .workspace_last => {
             if (self.app.workspace_job != null) return true;
@@ -959,6 +968,7 @@ pub fn performSessionAction(self: *Window, action: @FieldType(input.Binding.Acti
 /// split; an empty tab is removed. When the last tab goes, the window
 /// flags itself for close; the App run loop destroys it.
 pub fn removeSurface(self: *Window, surface: *Surface) void {
+    self.cancelLeader();
     const alloc = self.app.core_app.alloc;
     const tab_idx = self.tabOf(surface) orelse return;
     const ended = surface.core_surface.io.backend == .mux and surface.core_surface.io.backend.mux.ended.load(.acquire);
@@ -1514,6 +1524,7 @@ fn handleOf(tree: *const Tree, surface: *const Surface) ?Tree.Node.Handle {
 
 /// Make the given tab visible and focused.
 pub fn activateTab(self: *Window, idx: usize) void {
+    self.cancelLeader();
     if (self.tabs.items.len == 0) return;
     const new_idx = @min(idx, self.tabs.items.len - 1);
 
@@ -1567,6 +1578,7 @@ pub fn activeSurface(self: *Window) ?*Surface {
 
 /// Move focus within the active tab to the given surface.
 pub fn focusSurface(self: *Window, surface: *Surface) void {
+    self.cancelLeader();
     defer session.changed(self.app);
     const tab = self.activeTab() orelse return;
     if (tab.focused == surface) return;
@@ -1969,6 +1981,81 @@ pub fn refreshSessionBar(self: *Window, force: bool) void {
     self.invalidateSessionBar();
 }
 
+pub fn keyTableChanged(self: *Window, surface: *Surface, value: apprt.action.KeyTable) void {
+    if (self.activeSurface() != surface) return;
+    const old_height = self.sessionBarHeight();
+    const active = switch (value) {
+        .activate => |name| std.mem.eql(u8, name, "yuurei_mux"),
+        else => false,
+    };
+    self.leader_active = active;
+    _ = winapi.KillTimer(self.hwnd, leader_timer_id);
+    if (active and winapi.SetTimer(self.hwnd, leader_timer_id, 5000, null) == 0) self.cancelLeader();
+    if (old_height != self.sessionBarHeight()) self.layoutActiveTab();
+    self.invalidateSessionBar();
+}
+
+fn cancelLeader(self: *Window) void {
+    if (!self.leader_active) return;
+    const old_height = self.sessionBarHeight();
+    self.leader_active = false;
+    _ = winapi.KillTimer(self.hwnd, leader_timer_id);
+    if (self.activeSurface()) |surface| {
+        _ = surface.core_surface.performBindingAction(.deactivate_key_table) catch {};
+    }
+    if (old_height != self.sessionBarHeight()) self.layoutActiveTab();
+    self.invalidateSessionBar();
+}
+
+fn leaderHint(self: *Window, buffer: []u8) []const u8 {
+    const surface = self.activeSurface() orelse return "Multiplexer leader";
+    const table = surface.core_surface.config.keybind.tables.getPtr("yuurei_mux") orelse return "Multiplexer leader";
+    var used: usize = 0;
+    const prefix = "Leader | ";
+    @memcpy(buffer[0..prefix.len], prefix);
+    used = prefix.len;
+    var entries = table.bindings.iterator();
+    while (entries.next()) |entry| {
+        if (entry.key_ptr.key == .catch_all) continue;
+        const action: input.Binding.Action = switch (entry.value_ptr.*) {
+            .leaf => |leaf| leaf.action,
+            .leaf_chained => |leaf| leaf.actions.items[0],
+            .leader => continue,
+        };
+        if (action == .ignore) continue;
+        const text = std.fmt.bufPrint(buffer[used..], "{s}{f}: {s}", .{ if (used == prefix.len) "" else " · ", entry.key_ptr.*, leaderLabel(action) }) catch break;
+        used += text.len;
+    }
+    return buffer[0..used];
+}
+
+fn leaderLabel(action: input.Binding.Action) []const u8 {
+    return switch (action) {
+        .new_tab => "tab",
+        .new_split => |direction| switch (direction) {
+            .right => "split right",
+            .down => "split down",
+            else => "split",
+        },
+        .goto_split => "focus pane",
+        .toggle_split_zoom => "zoom",
+        .session => |value| switch (value) {
+            .list => "sessions",
+            .workspaces => "workspaces",
+            .rename => "rename",
+            .terminate => "end session",
+            .workspace_next => "next workspace",
+            .workspace_previous => "previous workspace",
+            .workspace_last => "last workspace",
+            .workspace_new => "new workspace",
+            .workspace_move => "move tab",
+            else => "session",
+        },
+        .text => "send text",
+        else => @tagName(action),
+    };
+}
+
 fn workspaceSwitchPending(self: *Window) bool {
     const job = self.app.workspace_job orelse return false;
     return job.hwnd == self.hwnd;
@@ -1983,7 +2070,7 @@ pub fn workspaceFailed(self: *Window, err: anyerror) void {
 }
 
 pub fn sessionBarHeight(self: *Window) i32 {
-    if (self.session_bar.pending != null or self.session_bar.failed or self.workspaceSwitchPending()) return self.scale(26);
+    if (self.leader_active or self.session_bar.pending != null or self.session_bar.failed or self.workspaceSwitchPending()) return self.scale(26);
     const tab = self.activeTab() orelse return 0;
     var iterator = tab.tree.iterator();
     while (iterator.next()) |entry| if (entry.view.core_surface.io.backend == .mux) return self.scale(26);
@@ -2043,6 +2130,8 @@ fn paintSessionBar(self: *Window, hdc: winapi.HDC) void {
         self.session_bar.failure_text orelse "Unable to end session. Refresh the session list and retry."
     else if (self.workspaceSwitchPending())
         "Switching workspace…"
+    else if (self.leader_active)
+        self.leaderHint(&text_buffer)
     else normal: {
         const surface = self.activeSurface() orelse break :normal "";
         if (surface.core_surface.io.backend != .mux) break :normal "Local pane";
@@ -2050,7 +2139,7 @@ fn paintSessionBar(self: *Window, hdc: winapi.HDC) void {
         const state: []const u8 = if (mux.ended.load(.acquire)) " | exited" else if (mux.disconnected.load(.acquire)) " | disconnected" else "";
         break :normal std.fmt.bufPrint(&text_buffer, " {s} | {s}{s} | PID {d}", .{ self.app.workspace_name orelse "default", self.session_bar.current.title(), state, self.session_bar.shell_pid }) catch "Session";
     };
-    const hint: []const u8 = if (self.session_bar.pending != null) "Y: end  Esc: cancel" else if (self.session_bar.failed) "Esc: dismiss" else if (self.workspaceSwitchPending()) "Esc: cancel" else "Ctrl+Shift+S: sessions";
+    const hint: []const u8 = if (self.session_bar.pending != null) "Y: end  Esc: cancel" else if (self.session_bar.failed) "Esc: dismiss" else if (self.workspaceSwitchPending() or self.leader_active) "Esc: cancel" else "Ctrl+Shift+S: sessions";
     const hint_width = @min(self.scale(186), @divTrunc(rect.right, 2));
     var left = rect;
     left.left += self.scale(8);
@@ -3744,6 +3833,7 @@ pub fn wndProc(
         },
 
         winapi.WM_SETFOCUS, winapi.WM_KILLFOCUS => {
+            if (msg == winapi.WM_KILLFOCUS) self.cancelLeader();
             if (msg == winapi.WM_SETFOCUS) {
                 if (self.palette) |palette| if (palette.embedded) {
                     _ = winapi.SetFocus(palette.hwnd);
@@ -3848,6 +3938,10 @@ pub fn wndProc(
         },
 
         winapi.WM_TIMER => {
+            if (wparam == leader_timer_id) {
+                self.cancelLeader();
+                return 0;
+            }
             if (wparam == modal_tick_timer_id) {
                 self.app.core_app.tick(self.app) catch |err| {
                     log.err("error ticking app from modal loop err={}", .{err});
@@ -3911,6 +4005,24 @@ pub fn wndProc(
         => {
             const vk: u8 = @truncate(wparam);
             const released = msg == winapi.WM_KEYUP or msg == winapi.WM_SYSKEYUP;
+            if (!released and (lparam & (1 << 30)) == 0) self.leader_captured[vk] = false;
+            // A one-shot table ends on keydown. Its repeats and release still
+            // belong to the command, even if it changed the focused pane.
+            if (self.leader_captured[vk] or (self.leader_active and !released and (lparam & (1 << 30)) != 0)) {
+                self.leader_captured[vk] = !released;
+                if (!released) {
+                    const text = key_text.take(self.app.core_app.alloc, hwnd) catch null;
+                    if (text) |value| self.app.core_app.alloc.free(value);
+                    _ = key_text.takeDead(hwnd);
+                }
+                return 0;
+            }
+            if (self.leader_active and !released) {
+                self.leader_captured[vk] = true;
+                // Modifier presses must not hit the table's catch-all and end
+                // the mode before the modified command key arrives.
+                if (vk == winapi.VK_CONTROL or vk == winapi.VK_SHIFT or vk == winapi.VK_MENU or vk == 0x5B or vk == 0x5C) return 0;
+            }
             if (self.session_bar.pending != null or self.session_bar.failed or self.workspaceSwitchPending() or self.session_bar.captured[vk]) {
                 if (msg == winapi.WM_SYSKEYDOWN or msg == winapi.WM_SYSKEYUP)
                     return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
@@ -3964,6 +4076,10 @@ pub fn wndProc(
         },
 
         winapi.WM_CHAR => {
+            if (self.leader_active) {
+                self.cancelLeader();
+                return 0;
+            }
             if (self.session_bar.pending != null or self.session_bar.failed or self.workspaceSwitchPending()) return 0;
             if (self.renameChar(@truncate(wparam))) return 0;
             self.charEvent(@truncate(wparam));
@@ -4521,7 +4637,7 @@ fn keyEvent(
                 return;
             };
             if (effect == .closed) return;
-            if (effect == .ignored)
+            if (effect == .ignored and !self.leader_captured[vk])
                 self.deliverKeyWithText(tab, key_event, text);
             return;
         }

@@ -1080,6 +1080,10 @@ pub fn performAction(
     value: apprt.Action.Value(action),
 ) !bool {
     switch (action) {
+        .key_table => switch (target) {
+            .app => {},
+            .surface => |surface| surface.rt_surface.window.keyTableChanged(surface.rt_surface, value),
+        },
         .quit => {
             if (!self.confirmQuit()) return true;
             self.quit = true;
