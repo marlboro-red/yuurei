@@ -274,6 +274,15 @@ const Session = struct {
                 self.sequence = self.journal.end;
                 _ = SetEvent(self.output_event);
             },
+            .preview => {
+                if (payload.len != 0) return error.InvalidPayload;
+                // Visible screen only; never subscribe, resize or advance the
+                // attached viewer's journal cursor. Bound work and response size.
+                const formatter = terminal.formatter.PageListFormatter.init(&self.term.screens.active.pages, .{ .emit = .plain });
+                formatter.format(out) catch {};
+                // A full fixed writer can end inside a UTF-8 codepoint.
+                while (!std.unicode.utf8ValidateSlice(out.buffered()) and out.end > 0) out.end -= 1;
+            },
             .snapshot => {
                 if (payload.len != 0) return error.InvalidPayload;
                 if (request.sequence == self.sequence) return;
@@ -433,13 +442,15 @@ fn connection(session: *Session, pipe: H, io: *transport.Io, identity: transport
         if (ready and !control) try io.requestHeader(pipe, &header_bytes) else try io.transfer(pipe, &header_bytes, false);
         const header = try protocol.Header.decode(&header_bytes, protocol.max_request);
         if (!ready and header.op != .hello) return error.HandshakeRequired;
-        if (control and header.op != .hello and header.op != .status and header.op != .stop and header.op != .rename) return error.InvalidOperation;
+        if (control and header.op != .hello and header.op != .status and header.op != .stop and header.op != .rename and header.op != .preview) return error.InvalidOperation;
         const payload = request_buf[0..header.length];
         try io.transfer(pipe, payload, false);
         // Snapshots need a larger temporary buffer, not a permanent allocation
         // in every idle broker. Page allocation returns the commit on release.
         const snapshot_buffer = if (header.op == .snapshot)
             try std.heap.page_allocator.alloc(u8, protocol.max_response)
+        else if (header.op == .preview)
+            try std.heap.page_allocator.alloc(u8, 64 * 1024)
         else
             null;
         defer if (snapshot_buffer) |bytes| std.heap.page_allocator.free(bytes);
@@ -485,7 +496,7 @@ pub fn run(operation: []const u8, name: []const u8, args: anytype) !void {
         try out.interface.flush();
         return;
     }
-    var client = if (std.mem.eql(u8, operation, "status") or std.mem.eql(u8, operation, "stop") or std.mem.eql(u8, operation, "rename"))
+    var client = if (std.mem.eql(u8, operation, "status") or std.mem.eql(u8, operation, "stop") or std.mem.eql(u8, operation, "rename") or std.mem.eql(u8, operation, "preview"))
         try Client.initControl(name, null)
     else
         try Client.init(name, null);

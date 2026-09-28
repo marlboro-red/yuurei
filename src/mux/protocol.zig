@@ -5,7 +5,7 @@ pub const header_size = 24;
 pub const max_request = 64 * 1024;
 pub const max_response = 16 * 1024 * 1024;
 pub const Status = struct { shell_pid: u32, broker_pid: u32, exited: bool, failed: bool, output_closed: bool = false, exit_code: u32 = 0 };
-pub const Op = enum(u16) { status = 1, snapshot = 2, input = 3, resize = 4, stop = 5, hello = 6, events = 7, resync = 8, subscribe = 9, retry = 10, rename = 11 };
+pub const Op = enum(u16) { status = 1, snapshot = 2, input = 3, resize = 4, stop = 5, hello = 6, events = 7, resync = 8, subscribe = 9, retry = 10, rename = 11, preview = 12 };
 
 pub fn validLabel(label: []const u8) bool {
     if (label.len == 0 or label.len > 128 or !std.unicode.utf8ValidateSlice(label)) return false;

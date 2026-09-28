@@ -100,7 +100,7 @@ pipe authentication/version checks remain authoritative.
 
 **Ctrl+Shift+S** opens the session picker inside the terminal area, above the
 session bar. It follows window resizing and uses the terminal colors and
-monospace text; it is not a separate popup. Type to fuzzy-search names, IDs, or
+monospace text, with compact single-line session rows. Type to fuzzy-search names, IDs, or
 PIDs; use **Up/Down**, **Ctrl+P/Ctrl+N**, or **Page Up/Page Down** to navigate.
 **Enter** focuses an existing local pane or attaches a detached session.
 **Delete** ends the selected session, including a detached session,
@@ -119,11 +119,22 @@ detaches it.
 or **Escape** to cancel. **F5** refreshes discovery without clearing the search.
 **Escape** closes the picker. No discovery polling runs while it is closed.
 
+At widths of at least 600 logical pixels, a side panel previews the selected
+session's visible screen as plain text. Selection changes are debounced by
+120 ms; **F5** requests a fresh snapshot. This is not a live terminal view and
+does not reproduce terminal colors or images. Long lines are clipped without
+reflowing or resizing the shell. The authenticated control request works with
+both attached and detached sessions and never advances the viewer journal.
+Responses are bounded to 64 KiB. A cancellable worker exists only while the
+picker is open, so broker I/O cannot block keyboard navigation. Results from
+old selections are discarded. Narrow windows retain the full-width list.
+
 Session names support Unicode and spaces, up to 128 UTF-8 bytes. They are
 independent of tab titles and stable session IDs. The broker retains the name
 across detach and GUI crash/restart. Shell exit or explicit termination ends
 the session and its name; this does not add persistence across machine restart.
-Duplicate display names are allowed; the picker also shows the session ID/PID.
+Duplicate display names are allowed; each row shows its shell PID, and session
+IDs and PIDs remain searchable.
 
 The regular **Ctrl+Shift+P** command palette includes **Switch Session**,
 **Rename Session**, and **Detach Session**. Detach closes only the focused

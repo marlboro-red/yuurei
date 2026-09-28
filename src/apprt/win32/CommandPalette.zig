@@ -12,6 +12,7 @@ const input = @import("../../input.zig");
 const App = @import("App.zig");
 const Window = @import("Window.zig");
 const winapi = @import("winapi.zig");
+const SessionPreview = @import("SessionPreview.zig");
 const Registry = @import("../../mux/Registry.zig");
 
 const log = std.log.scoped(.win32);
@@ -44,6 +45,7 @@ sessions: []Registry.Entry = &.{},
 rename_id: ?[]const u8 = null,
 rename_fresh: bool = false,
 error_text: ?[]const u8 = null,
+preview: ?*SessionPreview = null,
 
 /// Cached fonts, recreated on DPI change. The palette repaints on every
 /// keystroke; re-creating fonts each paint is measurable GDI churn.
@@ -97,6 +99,7 @@ fn createView(alloc: Allocator, window: *Window, embedded: bool) !*CommandPalett
         @bitCast(@intFromPtr(self)),
     );
 
+    if (embedded) self.preview = SessionPreview.create(hwnd) catch null;
     self.refilter();
     _ = winapi.ShowWindow(hwnd, winapi.SW_SHOW);
     // No SetFocus here: the caller assigns window.palette first, then
@@ -109,6 +112,8 @@ fn createView(alloc: Allocator, window: *Window, embedded: bool) !*CommandPalett
 pub fn destroy(self: *CommandPalette) void {
     const alloc = self.window.app.core_app.alloc;
     self.window.palette = null;
+    _ = winapi.KillTimer(self.hwnd, 1);
+    if (self.preview) |preview| preview.destroy();
     if (self.font_title) |f| _ = winapi.DeleteObject(f);
     if (self.font_desc) |f| _ = winapi.DeleteObject(f);
     _ = winapi.SetWindowLongPtrW(self.hwnd, winapi.GWLP_USERDATA, 0);
@@ -167,12 +172,21 @@ pub fn sessionClosed(self: *CommandPalette, name: []const u8) void {
 }
 
 fn refreshSessions(self: *CommandPalette) void {
+    var selected_id: [128]u8 = undefined;
+    const id = if (self.selected < self.matches.items.len) self.sessions[self.matches.items[self.selected]].name else "";
+    const id_len = @min(id.len, selected_id.len);
+    @memcpy(selected_id[0..id_len], id[0..id_len]);
     var previous: [filter_max_units]u16 = undefined;
     const len = self.filter.items.len;
     @memcpy(previous[0..len], self.filter.items);
     self.showSessions();
     self.filter.appendSlice(self.window.app.core_app.alloc, previous[0..len]) catch {};
     self.refilter();
+    for (self.matches.items, 0..) |entry, i| {
+        if (!std.mem.eql(u8, self.sessions[entry].name, selected_id[0..id_len])) continue;
+        self.moveSelection(@intCast(i));
+        break;
+    }
 }
 
 pub fn renameSession(self: *CommandPalette, id: []const u8) void {
@@ -318,7 +332,7 @@ fn entryAt(
         const entry = self.sessions[i];
         return .{
             .title = if (entry.label.len > 0) entry.label else entry.name,
-            .description = std.fmt.bufPrint(title_buf, "{s} · PID {d} · {s}{s}", .{ if (entry.exited) "Exited" else "Running", entry.shell_pid, entry.name, if (std.mem.eql(u8, entry.version, @import("../../build_config.zig").version_string)) "" else " · Different build" }) catch entry.name,
+            .description = std.fmt.bufPrint(title_buf, "PID {d} · {s}{s}", .{ entry.shell_pid, entry.name, if (std.mem.eql(u8, entry.version, @import("../../build_config.zig").version_string)) "" else " · Different build" }) catch entry.name,
             .action = null,
             .label = null,
         };
@@ -460,7 +474,27 @@ fn refilter(self: *CommandPalette) void {
     self.selected = 0;
     self.scroll = 0;
     self.layout();
+    self.selectPreview();
     _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+}
+
+fn rowHeight(self: *const CommandPalette) i32 {
+    return self.window.scale(if (self.mode == .sessions) @as(i32, 24) else row_height_logical);
+}
+
+fn listWidth(self: *const CommandPalette, width: i32) i32 {
+    return if (self.embedded and self.mode == .sessions and width >= self.window.scale(600)) @divTrunc(width * 2, 5) else width;
+}
+
+fn selectPreview(self: *CommandPalette) void {
+    _ = winapi.KillTimer(self.hwnd, 1);
+    const preview = self.preview orelse return;
+    const id = if (self.mode == .sessions and self.selected < self.matches.items.len)
+        self.sessions[self.matches.items[self.selected]].name
+    else
+        "";
+    preview.select(id);
+    if (id.len > 0) _ = winapi.SetTimer(self.hwnd, 1, 120, null);
 }
 
 fn visibleRows(self: *const CommandPalette) usize {
@@ -468,7 +502,7 @@ fn visibleRows(self: *const CommandPalette) usize {
         var client: winapi.RECT = undefined;
         _ = winapi.GetClientRect(self.window.hwnd, &client);
         const room = client.bottom - self.window.titlebarHeight() - self.window.sessionBarHeight() - self.window.scale(input_height_logical + 30);
-        const rows: usize = @intCast(@max(1, @divTrunc(room, self.window.scale(row_height_logical))));
+        const rows: usize = @intCast(@max(1, @divTrunc(room, self.rowHeight())));
         return @min(self.matches.items.len, rows);
     }
     return @min(self.matches.items.len, max_visible_rows);
@@ -496,7 +530,7 @@ pub fn layout(self: *CommandPalette) void {
     const client_w = client.right - client.left;
     const w = @min(window.scale(width_logical), client_w - window.scale(40));
     const h = window.scale(input_height_logical) + (if (self.mode == .commands) @as(i32, 0) else window.scale(30)) +
-        @as(i32, @intCast(self.visibleRows())) * window.scale(row_height_logical);
+        @as(i32, @intCast(self.visibleRows())) * self.rowHeight();
 
     _ = winapi.SetWindowPos(
         self.hwnd,
@@ -523,16 +557,20 @@ fn moveSelection(self: *CommandPalette, delta: i32) void {
     const visible = self.visibleRows();
     if (self.selected >= self.scroll + visible)
         self.scroll = self.selected - visible + 1;
+    self.selectPreview();
     _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
 }
 
 /// The match row at a client y, if any.
-fn rowAt(self: *const CommandPalette, y: i32) ?usize {
+fn rowAt(self: *const CommandPalette, x: i32, y: i32) ?usize {
+    var client: winapi.RECT = undefined;
+    _ = winapi.GetClientRect(self.hwnd, &client);
+    if (x < 0 or x >= self.listWidth(client.right)) return null;
     const top = self.window.scale(input_height_logical);
     if (y < top) return null;
-    if (y >= top + @as(i32, @intCast(self.visibleRows())) * self.window.scale(row_height_logical)) return null;
+    if (y >= top + @as(i32, @intCast(self.visibleRows())) * self.rowHeight()) return null;
     const row = self.scroll +
-        @as(usize, @intCast(@divTrunc(y - top, self.window.scale(row_height_logical))));
+        @as(usize, @intCast(@divTrunc(y - top, self.rowHeight())));
     if (row >= self.matches.items.len) return null;
     return row;
 }
@@ -578,7 +616,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
 
     const margin = window.scale(12);
     const input_h = window.scale(input_height_logical);
-    const row_h = window.scale(row_height_logical);
+    const row_h = self.rowHeight();
 
     // Filter row: typed text (with a caret block) or a placeholder.
     if (title_font) |f| {
@@ -659,7 +697,8 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
         }
     }
 
-    // Match rows: title with the description below it, dim.
+    const list_width = self.listWidth(client.right);
+    // Match rows: commands retain descriptions; sessions use a single line.
     const end = @min(self.scroll + self.visibleRows(), self.matches.items.len);
     for (self.matches.items[self.scroll..end], self.scroll..) |cmd_idx, row| {
         const row_fg = if (self.embedded and row == self.selected) bg else fg;
@@ -673,7 +712,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             var row_rect: winapi.RECT = .{
                 .left = 0,
                 .top = top,
-                .right = client.right,
+                .right = list_width,
                 .bottom = top + row_h,
             };
             const brush = winapi.CreateSolidBrush(select_bg);
@@ -681,6 +720,27 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
                 defer _ = winapi.DeleteObject(b);
                 _ = winapi.FillRect(hdc, &row_rect, b);
             }
+        }
+
+        if (self.mode == .sessions) {
+            const old = if (title_font) |f| winapi.SelectObject(hdc, f) else null;
+            defer if (old) |f| {
+                _ = winapi.SelectObject(hdc, f);
+            };
+            _ = winapi.SetTextColor(hdc, row_fg);
+            var wide: [512]u16 = undefined;
+            const n = std.unicode.utf8ToUtf16Le(&wide, Window.utf8Capped(cmd.title, wide.len - 1)) catch 0;
+            var rect: winapi.RECT = .{ .left = margin, .top = top, .right = list_width - margin - window.scale(100), .bottom = top + row_h };
+            wide[n] = 0;
+            _ = winapi.DrawTextW(hdc, wide[0..n :0], @intCast(n), &rect, winapi.DT_LEFT | winapi.DT_VCENTER | winapi.DT_SINGLELINE | winapi.DT_END_ELLIPSIS | winapi.DT_NOPREFIX);
+            var pid_buf: [32]u8 = undefined;
+            const pid = std.fmt.bufPrint(&pid_buf, "PID {d}", .{self.sessions[cmd_idx].shell_pid}) catch "";
+            const pn = std.unicode.utf8ToUtf16Le(&wide, pid) catch 0;
+            wide[pn] = 0;
+            rect.left = @max(margin, rect.right);
+            rect.right = list_width - margin;
+            _ = winapi.DrawTextW(hdc, wide[0..pn :0], @intCast(pn), &rect, winapi.DT_RIGHT | winapi.DT_VCENTER | winapi.DT_SINGLELINE | winapi.DT_NOPREFIX);
+            continue;
         }
 
         // The keybinding accelerator (right-aligned on the title line);
@@ -777,6 +837,39 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
         }
     }
 
+    if (list_width < client.right and self.matches.items.len > 0) {
+        var sep: winapi.RECT = .{ .left = list_width, .top = input_h, .right = list_width + 1, .bottom = client.bottom - window.scale(30) };
+        if (winapi.CreateSolidBrush(border)) |brush| {
+            defer _ = winapi.DeleteObject(brush);
+            _ = winapi.FillRect(hdc, &sep, brush);
+        }
+        const old = if (title_font) |f| winapi.SelectObject(hdc, f) else null;
+        defer if (old) |f| {
+            _ = winapi.SelectObject(hdc, f);
+        };
+        _ = winapi.SetTextColor(hdc, fg);
+        var heading: winapi.RECT = .{ .left = list_width + margin, .top = input_h, .right = client.right - margin, .bottom = input_h + row_h };
+        const title = std.unicode.utf8ToUtf16LeStringLiteral("Preview · F5 refresh");
+        _ = winapi.DrawTextW(hdc, title, title.len, &heading, winapi.DT_SINGLELINE | winapi.DT_VCENTER | winapi.DT_NOPREFIX);
+        var wide: [SessionPreview.capacity]u16 = undefined;
+        const content = if (self.preview) |preview| preview.copy(wide[0 .. wide.len - 1]) else std.unicode.utf8ToUtf16LeStringLiteral("Preview unavailable.");
+        // Draw physical lines independently: clip horizontally, never reflow
+        // terminal output to the preview width or interpret '&' as a mnemonic.
+        var lines = std.mem.splitScalar(u16, content, '\n');
+        var y = heading.bottom + window.scale(8);
+        const line_h = window.scale(16);
+        const bottom = client.bottom - window.scale(30);
+        while (lines.next()) |line| {
+            if (y + line_h > bottom) break;
+            var rect: winapi.RECT = .{ .left = heading.left, .top = y, .right = heading.right, .bottom = y + line_h };
+            var line_buffer: [SessionPreview.capacity:0]u16 = undefined;
+            @memcpy(line_buffer[0..line.len], line);
+            line_buffer[line.len] = 0;
+            _ = winapi.DrawTextW(hdc, line_buffer[0..line.len :0], @intCast(line.len), &rect, winapi.DT_SINGLELINE | winapi.DT_NOPREFIX);
+            y += line_h;
+        }
+    }
+
     if (self.mode != .commands) {
         const hint = self.error_text orelse if (self.mode == .rename_session)
             "Rename session · Enter save · Esc cancel"
@@ -817,6 +910,17 @@ pub fn wndProc(
     const self: *CommandPalette = @ptrFromInt(@as(usize, @bitCast(ptr)));
 
     switch (msg) {
+        winapi.WM_TIMER => {
+            if (wparam == 1) {
+                _ = winapi.KillTimer(hwnd, 1);
+                if (self.preview) |preview| preview.request();
+            }
+            return 0;
+        },
+        SessionPreview.ready_message => {
+            _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+            return 0;
+        },
         winapi.WM_ERASEBKGND => return 1,
 
         winapi.WM_PAINT => {
@@ -887,9 +991,10 @@ pub fn wndProc(
         },
 
         winapi.WM_MOUSEMOVE => {
-            if (self.rowAt(lparamY(lparam))) |row| {
+            if (self.rowAt(@as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lparam)))))), lparamY(lparam))) |row| {
                 if (row != self.selected) {
                     self.selected = row;
+                    self.selectPreview();
                     _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
                 }
             }
@@ -897,7 +1002,7 @@ pub fn wndProc(
         },
 
         winapi.WM_LBUTTONDOWN => {
-            if (self.rowAt(lparamY(lparam))) |row| {
+            if (self.rowAt(@as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lparam)))))), lparamY(lparam))) |row| {
                 self.selected = row;
                 self.execute();
             }
@@ -921,6 +1026,7 @@ pub fn wndProc(
                     self.scroll,
                     self.scroll + visible - 1,
                 );
+                self.selectPreview();
                 _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
             }
             return 0;

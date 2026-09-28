@@ -40,7 +40,9 @@ public static class SessionNative {
 }
 '@
 @'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 [Console]::Write("`e]2;SESSION_PID=$PID`a")
+[Console]::WriteLine("PREVIEW_PID=$PID 日本語 & literal")
 while($true){$key=[Console]::ReadKey($true);Set-Content "$PSScriptRoot/$PID.input" "$($key.KeyChar)"}
 '@ | Set-Content "$dir/worker.ps1"
 @"
@@ -95,6 +97,7 @@ try{
  Wait-For {[TabNative]::Windows($gui.Id).Count -eq 1 -and @(Mux @('list')|ConvertFrom-Json).Count -eq 1} 'Initial session missing'
  $window=[TabNative]::Windows($gui.Id)[0];[void][TabNative]::ShowWindow($window,5);[void][TabNative]::SetForegroundWindow($window)
  $first=@(Mux @('list')|ConvertFrom-Json)[0]
+ Wait-For {$previewText=Mux @('preview',$first.name);$previewText | Set-Content "$dir/attached-preview.txt";$previewText.Contains("PREVIEW_PID=$($first.shell_pid) 日本語 & literal")} 'Attached read-only preview missing Unicode content'
  Key $window 0x75 # F6 rename current
  $picker=Palette
  Assert-EmbeddedPicker $picker $window
@@ -121,14 +124,19 @@ try{
  [void][TabNative]::SetForegroundWindow($window)
  Start-Sleep -Milliseconds 200
  if($PostedKeys){Key $window 0x72}else{[SessionNative]::OpenDefaultPicker($window)} # Actual default Ctrl+Shift+S in interactive mode
- $picker=Palette;Assert-EmbeddedPicker $picker $window;Screenshot $picker 'sessions'
+ $picker=Palette;Assert-EmbeddedPicker $picker $window;Start-Sleep -Milliseconds 400;Screenshot $picker 'sessions'
+ # Clicking the preview must never attach the corresponding list row.
+ $previewRect=New-Object SessionNative+Rect;[void][SessionNative]::GetClientRect($picker,[ref]$previewRect)
+ $previewX=[int]($previewRect.right*0.75);$previewY=[int](52*[TabNative]::GetDpiForWindow($picker)/96)
+ [void][SessionNative]::PostMessageW($picker,0x201,1,($previewX -bor ($previewY -shl 16)));Start-Sleep -Milliseconds 100
+ Assert ([TabNative]::IsWindow($picker)) 'Clicking the preview activated a list row'
  $original=New-Object TabNative+Rect;[void][TabNative]::GetWindowRect($window,[ref]$original)
  [void][TabNative]::SetWindowPos($window,0,0,0,1000,700,0x16);Start-Sleep -Milliseconds 150
  Assert-EmbeddedPicker $picker $window;Screenshot $picker 'sessions-resized'
  [void][TabNative]::SetWindowPos($window,0,0,0,($original.right-$original.left),($original.bottom-$original.top),0x16);Start-Sleep -Milliseconds 150
  Assert-EmbeddedPicker $picker $window
  Key $window 0x70;Assert-EmbeddedPicker $picker $window;Screenshot $picker 'sessions-fullscreen';Key $window 0x70
- Key $picker 0x28;Key $picker 0x0D # Down, Enter -> Frontend
+ Key $picker 0x28;Key $picker 0x74;Key $picker 0x0D # Down, refresh preserves selection, Enter -> Frontend
  Wait-For {[SessionNative]::Title($window).Contains("SESSION_PID=$($second.shell_pid)")} 'Arrow navigation selected wrong session'
  Key $window 0x7A;Key $window 0x7B # Remapped prefix F11, F12
  $picker=Palette;SendText $picker 'Backend';Key $picker 0x74;Key $picker 0x0D
@@ -142,6 +150,7 @@ try{
  Screenshot $picker 'renamed';Key $picker 0x1B
  Key $window 0x76 # F7 detach current
  Assert (!(Mux @('status',$first.name)|ConvertFrom-Json).exited) 'Detach terminated shell'
+ Assert ((Mux @('preview',$first.name)).Contains("PREVIEW_PID=$($first.shell_pid)")) 'Detached preview missing screen contents'
  Key $window 0x72;$picker=Palette;SendText $picker 'API';Key $picker 0x0D
  Wait-For {[SessionNative]::Title($window).Contains("SESSION_PID=$($first.shell_pid)")} 'Detached session did not reattach'
  Key $window 0x79 # F10 input
@@ -178,7 +187,7 @@ try{
  Wait-For {@(Mux @('list')|ConvertFrom-Json).Count -eq 0} 'Remapped terminate action left its broker registered'
  Wait-For {!(Get-Process -Id $first.shell_pid -ErrorAction SilentlyContinue)} 'Active shell survived termination'
  Wait-For {$gui.HasExited} 'Ending the last session did not close its pane'
- Write-Output "PASS: session picker, Unicode rename, detach/reattach, GUI restart, inline cancellation and termination, split isolation, fullscreen bar geometry, and confirmation input isolation. Artifacts: $dir"
+ Write-Output "PASS: attached/detached Unicode previews, preview click isolation, session picker, Unicode rename, detach/reattach, GUI restart, inline cancellation and termination, split isolation, fullscreen bar geometry, and confirmation input isolation. Artifacts: $dir"
 }finally{
  if($gui){if(!$gui.HasExited){$gui.Kill();$gui.WaitForExit()};$gui.Dispose()}
  foreach($entry in @(Mux @('list')|ConvertFrom-Json)){try{Mux @('stop',$entry.name)|Out-Null}catch{}}
