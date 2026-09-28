@@ -742,6 +742,10 @@ fn actionCommands(action: Action.Key) []const Command {
         .session => if (@import("builtin").os.tag == .windows) &.{
             .{ .action = .{ .session = .list }, .title = "Switch Session", .description = "Search and attach persistent sessions" },
             .{ .action = .{ .session = .workspaces }, .title = "Switch Workspace", .description = "Switch saved tabs and panes while preserving shells" },
+            .{ .action = .{ .session = .workspace_new }, .title = "Create Workspace from Tab", .description = "Move the current tab and its panes to a named workspace" },
+            .{ .action = .{ .session = .workspace_next }, .title = "Next Workspace", .description = "Switch to the next saved workspace by name" },
+            .{ .action = .{ .session = .workspace_previous }, .title = "Previous Workspace", .description = "Switch to the previous saved workspace by name" },
+            .{ .action = .{ .session = .workspace_last }, .title = "Last Workspace", .description = "Return to the last active workspace" },
             .{ .action = .{ .session = .rename }, .title = "Rename Session", .description = "Name the focused persistent session" },
             .{ .action = .{ .session = .detach }, .title = "Detach Session", .description = "Close the focused pane and keep its shell running" },
             .{ .action = .{ .session = .terminate }, .title = "End Session...", .description = "Stop the current session and its running programs" },

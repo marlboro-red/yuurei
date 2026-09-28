@@ -901,7 +901,25 @@ pub fn togglePalette(self: *Window) !void {
 
 pub fn performSessionAction(self: *Window, action: @FieldType(input.Binding.Action, "session")) !bool {
     const surface = self.activeSurface() orelse return false;
-    if (action != .list and action != .workspaces and surface.core_surface.io.backend != .mux) return false;
+    switch (action) {
+        .workspace_next, .workspace_previous, .workspace_last => {
+            if (self.app.workspace_job != null) return true;
+            if (self.palette) |palette| palette.destroy();
+            self.session_bar.cancel();
+            if (action == .workspace_last) {
+                const name = self.app.last_workspace_name orelse {
+                    self.workspaceFailed(error.NoLastWorkspace);
+                    return true;
+                };
+                session.beginSwitch(self.app, self.hwnd, name) catch |err| self.workspaceFailed(err);
+            } else {
+                session.beginNavigation(self.app, self.hwnd, if (action == .workspace_next) .next else .previous) catch |err| self.workspaceFailed(err);
+            }
+            return true;
+        },
+        else => {},
+    }
+    if (action != .list and action != .workspaces and action != .workspace_new and surface.core_surface.io.backend != .mux) return false;
     if (action == .terminate) {
         self.terminateSession(surface);
         return true;
@@ -914,7 +932,8 @@ pub fn performSessionAction(self: *Window, action: @FieldType(input.Binding.Acti
     if (self.palette) |palette| palette.destroy();
     const palette = try CommandPalette.createSessions(self.app.core_app.alloc, self);
     self.palette = palette;
-    if (action == .workspaces) palette.showWorkspaces() else palette.showSessions();
+    if (action == .workspaces or action == .workspace_new) palette.showWorkspaces() else palette.showSessions();
+    if (action == .workspace_new) palette.newWorkspace();
     if (action == .rename) palette.renameSession(surface.core_surface.io.backend.mux.name);
     _ = winapi.SetFocus(palette.hwnd);
     return true;
@@ -1934,8 +1953,21 @@ pub fn refreshSessionBar(self: *Window, force: bool) void {
     self.invalidateSessionBar();
 }
 
+fn workspaceSwitchPending(self: *Window) bool {
+    const job = self.app.workspace_job orelse return false;
+    return job.hwnd == self.hwnd;
+}
+
+pub fn workspaceFailed(self: *Window, err: anyerror) void {
+    self.session_bar.cancel();
+    self.session_bar.failed = true;
+    self.session_bar.failure_text = CommandPalette.workspaceError(err);
+    self.layoutActiveTab();
+    self.invalidateSessionBar();
+}
+
 pub fn sessionBarHeight(self: *Window) i32 {
-    if (self.session_bar.pending != null or self.session_bar.failed) return self.scale(26);
+    if (self.session_bar.pending != null or self.session_bar.failed or self.workspaceSwitchPending()) return self.scale(26);
     const tab = self.activeTab() orelse return 0;
     var iterator = tab.tree.iterator();
     while (iterator.next()) |entry| if (entry.view.core_surface.io.backend == .mux) return self.scale(26);
@@ -1988,19 +2020,21 @@ fn paintSessionBar(self: *Window, hdc: winapi.HDC) void {
     };
     _ = winapi.SetBkMode(hdc, winapi.TRANSPARENT_BK);
     _ = winapi.SetTextColor(hdc, color);
-    var text_buffer: [512]u8 = undefined;
+    var text_buffer: [4608]u8 = undefined;
     const content = if (self.session_bar.pending) |target|
         std.fmt.bufPrint(&text_buffer, "End session \"{s}\" and its programs?", .{target.title()}) catch "End session?"
     else if (self.session_bar.failed)
-        "Unable to end session. Refresh the session list and retry."
+        self.session_bar.failure_text orelse "Unable to end session. Refresh the session list and retry."
+    else if (self.workspaceSwitchPending())
+        "Switching workspace…"
     else normal: {
         const surface = self.activeSurface() orelse break :normal "";
         if (surface.core_surface.io.backend != .mux) break :normal "Local pane";
         const mux = surface.core_surface.io.backend.mux;
         const state: []const u8 = if (mux.ended.load(.acquire)) " | exited" else if (mux.disconnected.load(.acquire)) " | disconnected" else "";
-        break :normal std.fmt.bufPrint(&text_buffer, " {s}{s} | PID {d}", .{ self.session_bar.current.title(), state, self.session_bar.shell_pid }) catch "Session";
+        break :normal std.fmt.bufPrint(&text_buffer, " {s} | {s}{s} | PID {d}", .{ self.app.workspace_name orelse "default", self.session_bar.current.title(), state, self.session_bar.shell_pid }) catch "Session";
     };
-    const hint: []const u8 = if (self.session_bar.pending != null) "Y: end  Esc: cancel" else if (self.session_bar.failed) "Esc: dismiss" else "Ctrl+Shift+S: sessions";
+    const hint: []const u8 = if (self.session_bar.pending != null) "Y: end  Esc: cancel" else if (self.session_bar.failed) "Esc: dismiss" else if (self.workspaceSwitchPending()) "Esc: cancel" else "Ctrl+Shift+S: sessions";
     const hint_width = @min(self.scale(186), @divTrunc(rect.right, 2));
     var left = rect;
     left.left += self.scale(8);
@@ -2008,7 +2042,7 @@ fn paintSessionBar(self: *Window, hdc: winapi.HDC) void {
     var right = rect;
     right.left = left.right + self.scale(8);
     right.right -= self.scale(8);
-    var wide: [513]u16 = undefined;
+    var wide: [4609]u16 = undefined;
     const flags = winapi.DT_SINGLELINE | winapi.DT_VCENTER | winapi.DT_END_ELLIPSIS | winapi.DT_NOPREFIX;
     const n = std.unicode.utf8ToUtf16Le(&wide, content) catch 0;
     wide[n] = 0;
@@ -3861,7 +3895,7 @@ pub fn wndProc(
         => {
             const vk: u8 = @truncate(wparam);
             const released = msg == winapi.WM_KEYUP or msg == winapi.WM_SYSKEYUP;
-            if (self.session_bar.pending != null or self.session_bar.failed or self.session_bar.captured[vk]) {
+            if (self.session_bar.pending != null or self.session_bar.failed or self.workspaceSwitchPending() or self.session_bar.captured[vk]) {
                 if (msg == winapi.WM_SYSKEYDOWN or msg == winapi.WM_SYSKEYUP)
                     return winapi.DefWindowProcW(hwnd, msg, wparam, lparam);
                 if (released) {
@@ -3878,6 +3912,7 @@ pub fn wndProc(
                 self.session_bar.captured[vk] = true;
                 if (!repeated and winapi.GetKeyState(winapi.VK_CONTROL) >= 0 and winapi.GetKeyState(winapi.VK_MENU) >= 0) {
                     if (vk == 'Y' and self.session_bar.pending != null) self.confirmEndSession() else if (vk == winapi.VK_ESCAPE or vk == 'N') {
+                        if (self.workspaceSwitchPending()) session.cancelSwitch(self.app);
                         self.session_bar.cancel();
                         self.layoutActiveTab();
                     }
@@ -3913,7 +3948,7 @@ pub fn wndProc(
         },
 
         winapi.WM_CHAR => {
-            if (self.session_bar.pending != null or self.session_bar.failed) return 0;
+            if (self.session_bar.pending != null or self.session_bar.failed or self.workspaceSwitchPending()) return 0;
             if (self.renameChar(@truncate(wparam))) return 0;
             self.charEvent(@truncate(wparam));
             return 0;

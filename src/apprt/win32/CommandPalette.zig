@@ -198,7 +198,7 @@ fn isEditing(self: *const CommandPalette) bool {
     return self.mode == .rename_session or self.mode == .create_workspace;
 }
 
-fn newWorkspace(self: *CommandPalette) void {
+pub fn newWorkspace(self: *CommandPalette) void {
     if (self.window.app.workspace_job != null) return;
     self.mode = .create_workspace;
     self.rename_text.clearRetainingCapacity();
@@ -227,7 +227,14 @@ fn createWorkspace(self: *CommandPalette) void {
 }
 
 pub fn workspaceFailed(self: *CommandPalette, err: anyerror) void {
-    self.error_text = switch (err) {
+    self.error_text = workspaceError(err);
+    _ = winapi.InvalidateRect(self.hwnd, null, 0);
+}
+
+pub fn workspaceError(err: anyerror) []const u8 {
+    return switch (err) {
+        error.NoOtherWorkspace => "No other saved workspace with panes.",
+        error.NoLastWorkspace => "No previous workspace in this window.",
         error.InvalidWorkspaceName => "Enter a workspace name without control characters.",
         error.WorkspaceAlreadyExists => "A saved workspace already uses this name.",
         error.WorkspacePersistenceDisabled => "Enable persistent sessions and session restore in Settings first.",
@@ -237,14 +244,13 @@ pub fn workspaceFailed(self: *CommandPalette, err: anyerror) void {
         error.WorkspaceUnavailable => "Workspace is open elsewhere or unavailable.",
         error.NonPersistentWorkspace => "Switching requires persistent sessions in both workspaces.",
         error.WorkspaceSessionOverlap => "These workspaces contain the same shell. Switch cancelled.",
-        error.WorkspaceChanged => "Current layout changed. Press Enter to retry.",
+        error.WorkspaceChanged => "Current layout changed. Retry the workspace switch.",
         error.SessionBusy => "A target session is attached elsewhere. Switch cancelled.",
         error.SessionNotFound, error.SessionEnded => "A target session has ended. Switch cancelled.",
         error.IncompatibleBuild => "Target sessions use a different build. Switch cancelled.",
         error.EmptyWorkspace => "This workspace has no saved panes.",
-        else => "Workspace unavailable. Press F5 to refresh.",
+        else => "Workspace unavailable. Refresh the workspace list and retry.",
     };
-    _ = winapi.InvalidateRect(self.hwnd, null, 0);
 }
 
 pub fn sessionClosed(self: *CommandPalette, name: []const u8) void {

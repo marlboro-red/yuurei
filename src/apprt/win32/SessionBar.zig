@@ -32,6 +32,7 @@ current: Target = .{},
 shell_pid: u32 = 0,
 pending: ?Target = null,
 failed: bool = false,
+failure_text: ?[]const u8 = null,
 /// Suppress releases/repeats for keys captured by the confirmation even
 /// after Y or Esc closes it, so they cannot leak into the shell.
 captured: [256]bool = @splat(false),
@@ -53,6 +54,7 @@ pub fn refresh(self: *SessionBar, alloc: std.mem.Allocator, name: []const u8, fo
 }
 
 pub fn begin(self: *SessionBar, name: []const u8, label: []const u8) void {
+    self.failure_text = null;
     self.pending = Target.init(name, label);
     self.failed = self.pending == null;
 }
@@ -60,6 +62,7 @@ pub fn begin(self: *SessionBar, name: []const u8, label: []const u8) void {
 pub fn cancel(self: *SessionBar) void {
     self.pending = null;
     self.failed = false;
+    self.failure_text = null;
 }
 
 test "session bar confirmation owns the selected session independently of focus" {

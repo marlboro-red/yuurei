@@ -22,6 +22,7 @@ active: ?*Mux = null,
 failure: ?anyerror = null,
 entries: ?[]session.catalog.Entry = null,
 target: ?[]const u8 = null,
+direction: ?session.catalog.Direction = null,
 create_new: bool = false,
 source_window: usize = 0,
 source_tab: usize = 0,
@@ -87,6 +88,11 @@ fn rollbackTransfer(self: *Self) !void {
     });
 }
 fn work(self: *Self) !void {
+    if (self.direction) |direction| {
+        const entries = try session.listSaved(alloc);
+        defer session.catalog.deinit(alloc, entries);
+        self.target = try alloc.dupe(u8, try session.catalog.adjacent(entries, self.source_name.?, direction));
+    }
     const target = self.target orelse {
         self.entries = try session.listSaved(alloc);
         return;

@@ -121,6 +121,7 @@ quit: bool = false,
 /// new_window during the linger would re-open the entire session.
 session_restored: bool = false,
 workspace_name: ?[]const u8 = null,
+last_workspace_name: ?[]const u8 = null,
 workspace_generation: u64 = 0,
 workspace_job: ?*@import("WorkspaceJob.zig") = null,
 session_restoring: bool = false,
@@ -551,6 +552,7 @@ pub fn terminate(self: *App) void {
     if (self.session_timer != 0) _ = winapi.KillTimer(null, self.session_timer);
     if (self.session_lock) |handle| _ = winapi.CloseHandle(handle);
     if (self.workspace_name) |name| self.core_app.alloc.free(name);
+    if (self.last_workspace_name) |name| self.core_app.alloc.free(name);
     self.updater.deinit(self.core_app.alloc, self.config.@"windows-auto-update");
     if (self.wsl_thread) |t| t.join();
     if (self.wsl_result) |*l| l.deinit();

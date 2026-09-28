@@ -10,6 +10,43 @@ pub const Entry = struct {
     panes: usize,
 };
 
+pub const Direction = enum { next, previous };
+
+/// Borrow the next nonempty name in the catalog's bytewise name order.
+/// The active workspace need not already have a saved catalog entry.
+pub fn adjacent(entries: []const Entry, current: []const u8, direction: Direction) ![]const u8 {
+    var wrap: ?[]const u8 = null;
+    var before: ?[]const u8 = null;
+    for (entries) |entry| {
+        if (entry.panes == 0 or std.mem.eql(u8, entry.name, current)) continue;
+        if (direction == .next) {
+            if (wrap == null) wrap = entry.name;
+            if (std.mem.order(u8, entry.name, current) == .gt) return entry.name;
+        } else {
+            wrap = entry.name;
+            if (std.mem.order(u8, entry.name, current) == .lt) before = entry.name;
+        }
+    }
+    return before orelse wrap orelse error.NoOtherWorkspace;
+}
+
+test "mux workspace navigation wraps and skips empty layouts and current workspace" {
+    const entries = [_]Entry{
+        .{ .name = "alpha", .windows = 1, .tabs = 1, .panes = 1 },
+        .{ .name = "empty", .windows = 0, .tabs = 0, .panes = 0 },
+        .{ .name = "omega", .windows = 1, .tabs = 1, .panes = 2 },
+    };
+    const t = std.testing;
+    try t.expectEqualStrings("omega", try adjacent(&entries, "alpha", .next));
+    try t.expectEqualStrings("omega", try adjacent(&entries, "alpha", .previous));
+    try t.expectEqualStrings("alpha", try adjacent(&entries, "omega", .next));
+    try t.expectEqualStrings("alpha", try adjacent(&entries, "omega", .previous));
+    try t.expectEqualStrings("omega", try adjacent(&entries, "missing", .next));
+    try t.expectEqualStrings("alpha", try adjacent(&entries, "missing", .previous));
+    try t.expectError(error.NoOtherWorkspace, adjacent(entries[0..2], "alpha", .next));
+    try t.expectError(error.NoOtherWorkspace, adjacent(&.{}, "alpha", .previous));
+}
+
 pub fn validName(name: []const u8) bool {
     if (name.len == 0 or name.len > 4096 or !std.unicode.utf8ValidateSlice(name)) return false;
     for (name) |byte| if (byte < 0x20 or byte == 0x7f) return false;

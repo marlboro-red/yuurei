@@ -86,6 +86,24 @@ workspaces. **Enter** switches the selected workspace, **F5** refreshes, and
 session list. The command palette also exposes **Switch Workspace**, and
 `session:workspaces` can be assigned in Keyboard shortcuts settings.
 
+Direct workspace actions are available in the command palette and Keyboard
+shortcuts settings:
+
+| Default shortcut | Action | Behavior |
+| --- | --- | --- |
+| Ctrl+Alt+Shift+N | `session:workspace_new` | Open name entry for a workspace from the current tab |
+| Ctrl+Alt+PageDown | `session:workspace_next` | Switch to the next saved workspace by name |
+| Ctrl+Alt+PageUp | `session:workspace_previous` | Switch to the previous saved workspace by name |
+| Ctrl+Alt+Backspace | `session:workspace_last` | Return to the last active workspace |
+
+Next/previous wrap around the catalog's name order and skip empty layouts.
+They do not open the picker. Busy or unavailable targets leave the current
+workspace intact and show an inline error in the bottom bar; Escape dismisses
+it. Escape also cancels a pending direct switch. Last-workspace history belongs
+to the running GUI and changes only after a successful switch or creation, so
+repeating the shortcut toggles between the two most recent workspaces. The
+bottom bar shows the current workspace name before the focused session label.
+
 In the workspace list, **F2** creates a workspace from the current tab. Type
 its name in the inline input and press **Enter**, or **Escape** to cancel and
 keep the current filter and selection. Persistent sessions and session restore

@@ -229,26 +229,32 @@ pub fn writeSaved(alloc: std.mem.Allocator, path: []const u8, name: []const u8, 
 }
 
 pub fn beginSwitch(app: *App, hwnd: w.HWND, name: []const u8) !void {
-    return beginWorkspace(app, hwnd, name, false);
+    return beginWorkspace(app, hwnd, name, false, null);
+}
+
+pub fn beginNavigation(app: *App, hwnd: w.HWND, direction: catalog.Direction) !void {
+    return beginWorkspace(app, hwnd, null, false, direction);
 }
 
 pub fn beginCreate(app: *App, hwnd: w.HWND, name: []const u8) !void {
     if (!app.config.@"windows-persistent-sessions" or !app.config.@"windows-restore-session") return error.WorkspacePersistenceDisabled;
-    return beginWorkspace(app, hwnd, name, true);
+    return beginWorkspace(app, hwnd, name, true, null);
 }
 
-fn beginWorkspace(app: *App, hwnd: w.HWND, name: []const u8, create: bool) !void {
-    if (!catalog.validName(name)) return error.InvalidWorkspaceName;
+fn beginWorkspace(app: *App, hwnd: w.HWND, name: ?[]const u8, create: bool, direction: ?catalog.Direction) !void {
+    if (name) |value| if (!catalog.validName(value)) return error.InvalidWorkspaceName;
     if (app.workspace_job != null) return error.WorkspaceSwitchInProgress;
-    if (std.mem.eql(u8, app.workspace_name orelse "default", name)) return error.WorkspaceAlreadyActive;
+    if (name) |value| if (std.mem.eql(u8, app.workspace_name orelse "default", value)) return error.WorkspaceAlreadyActive;
     if (!ownWorkspace(app)) return error.WorkspaceUnavailable;
     const Job = @import("WorkspaceJob.zig");
     const job = try Job.create(hwnd);
     errdefer job.destroy();
     job.create_new = create;
+    job.direction = direction;
     var saved_index: usize = 0;
     const owner = for (app.windows.items) |window| {
         if (window.quick or window.tabs.items.len == 0) continue;
+        if (window.hwnd == hwnd) break window;
         if (window.palette) |palette| if (palette.hwnd == hwnd) break window;
         saved_index += 1;
     } else return error.WorkspaceChanged;
@@ -256,19 +262,21 @@ fn beginWorkspace(app: *App, hwnd: w.HWND, name: []const u8, create: bool) !void
     job.source_tab = owner.active_tab;
     job.owner = owner.hwnd;
     job.backend_alloc = app.core_app.alloc;
-    job.target = try Job.alloc.dupe(u8, name);
+    if (name) |value| job.target = try Job.alloc.dupe(u8, value);
     job.source_name = try Job.alloc.dupe(u8, app.workspace_name orelse "default");
     job.source_path = sessionPath(app, Job.alloc) orelse return error.WorkspaceUnavailable;
     job.source_data = try captureLayout(app, Job.alloc);
     job.generation = app.workspace_generation;
     try job.start();
     app.workspace_job = job;
+    owner.refreshSessionBar(false);
 }
 
 pub fn cancelSwitch(app: *App) void {
     const job = app.workspace_job orelse return;
     app.workspace_job = null;
     job.destroy();
+    for (app.windows.items) |window| window.refreshSessionBar(false);
     changed(app);
 }
 
@@ -295,9 +303,7 @@ pub fn pollSwitch(app: *App) void {
     if (stale) {
         const owner = job.hwnd;
         cancelSwitch(app);
-        for (app.windows.items) |window| if (window.palette) |palette| {
-            if (palette.hwnd == owner) palette.workspaceFailed(error.WorkspaceChanged);
-        };
+        reportFailure(app, owner, error.WorkspaceChanged);
         return;
     }
     if (!job.done.load(.acquire)) return;
@@ -308,10 +314,15 @@ pub fn pollSwitch(app: *App) void {
         return;
     };
     log.warn("workspace switch failed: {}", .{failure});
-    for (app.windows.items) |window| if (window.palette) |palette| {
-        if (palette.hwnd == job.hwnd) palette.workspaceFailed(failure);
-    };
+    reportFailure(app, job.hwnd, failure);
     changed(app);
+}
+
+fn reportFailure(app: *App, hwnd: w.HWND, failure: anyerror) void {
+    for (app.windows.items) |window| {
+        if (window.hwnd == hwnd) window.workspaceFailed(failure);
+        if (window.palette) |palette| if (palette.hwnd == hwnd) palette.workspaceFailed(failure);
+    }
 }
 
 fn commitSwitch(app: *App, job: *@import("WorkspaceJob.zig")) !void {
@@ -359,13 +370,11 @@ fn commitSwitch(app: *App, job: *@import("WorkspaceJob.zig")) !void {
     var old_counts: [16]usize = undefined;
     var target_count: usize = 0;
     for (app.windows.items[0..previous_count]) |window| {
-        if (!window.quick) if (window.palette) |palette| {
-            if (palette.hwnd == job.hwnd) {
-                targets[target_count] = window;
-                target_count += 1;
-                break;
-            }
-        };
+        if (!window.quick and window.hwnd == job.owner) {
+            targets[target_count] = window;
+            target_count += 1;
+            break;
+        }
     }
     for (app.windows.items[0..previous_count]) |window| {
         if (target_count >= prepared.layout.value.windows.len) break;
@@ -417,7 +426,8 @@ fn adoptWorkspace(app: *App, prepared: *PreparedWorkspace, name: []const u8) voi
     app.session_lock = prepared.lock;
     prepared.lock = null;
     app.session_lock_initialized = true;
-    if (app.workspace_name) |old| app.core_app.alloc.free(old);
+    if (app.last_workspace_name) |old| app.core_app.alloc.free(old);
+    app.last_workspace_name = app.workspace_name;
     app.workspace_name = name;
 }
 

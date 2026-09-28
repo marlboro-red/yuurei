@@ -44,6 +44,10 @@ keybind = f10=new_window
 keybind = f11=start_search
 keybind = chain=search:WORKSPACE
 keybind = f12=session:workspaces
+keybind = f13=session:workspace_new
+keybind = f14=session:workspace_next
+keybind = f15=session:workspace_previous
+keybind = f16=session:workspace_last
 "@ | Set-Content "$dir/ghostty/config" -Encoding utf8
 function Mux([string[]]$Arguments){
  $psi=[Diagnostics.ProcessStartInfo]::new("$Bin/yuurei-mux.exe")
@@ -85,6 +89,18 @@ try {
  $ids=@(@(Mux @('list')|ConvertFrom-Json).shell_pid|Sort-Object)
  $catalog=@(Mux @('workspaces')|ConvertFrom-Json)
  Assert ($catalog.Count -eq 2 -and ($catalog|Where-Object name -eq 'alpha').panes -eq 3) 'Workspace catalog incorrect'
+ # No history yet: show an inline error, dismiss it without sending Esc to a shell.
+ Key $window 0x7F;Key $window 0x1B
+ Assert ([WorkspacePicker]::Find($window) -eq 0) 'Last workspace opened a picker'
+ Assert (@(Get-ChildItem "$dir/*.input").Count -eq 0) 'Workspace error dismissal leaked input'
+ $beforeCancel=@([TabNative]::Hosts($window,$false)) -join ','
+ [void][WorkspacePicker]::Post($window,0x100,0x7D,0)
+ [void][WorkspacePicker]::Post($window,0x101,0x7D,0)
+ [void][WorkspacePicker]::Post($window,0x100,0x1B,0)
+ [void][WorkspacePicker]::Post($window,0x101,0x1B,0)
+ Start-Sleep -Milliseconds 500
+ Assert ((@([TabNative]::Hosts($window,$false)) -join ',') -eq $beforeCancel) 'Direct cancellation replaced pane views'
+ Assert (@(Get-ChildItem "$dir/*.input").Count -eq 0) 'Direct cancellation leaked input'
  [void][TabNative]::ShowWindow($window,3)
  Assert ([WorkspacePicker]::IsZoomed($window)) 'Test window did not maximize'
  SelectWorkspace $window 'alpha'
@@ -101,6 +117,17 @@ try {
  $window=[TabNative]::Windows($gui.Id)[0]
  Assert ([WorkspacePicker]::IsZoomed($window)) 'Round trip lost maximized state'
  [void][TabNative]::ShowWindow($window,9)
+ # Direct bindings bypass the picker and preserve the invoking HWND.
+ Key $window 0x7D
+ Wait-For {@([TabNative]::Hosts($window,$false)).Count -eq 3} 'Next workspace failed to wrap'
+ Assert ([WorkspacePicker]::Find($window) -eq 0) 'Next workspace opened a picker'
+ Key $window 0x7E
+ Wait-For {@([TabNative]::Hosts($window,$false)).Count -eq 1} 'Previous workspace failed to wrap'
+ Key $window 0x7F
+ Wait-For {@([TabNative]::Hosts($window,$false)).Count -eq 3} 'Last workspace did not return to alpha'
+ Key $window 0x7F
+ Wait-For {@([TabNative]::Hosts($window,$false)).Count -eq 1} 'Last workspace did not toggle back to beta'
+ Assert ([TabNative]::Windows($gui.Id)[0] -eq $window) 'Direct navigation replaced the window'
  $saved=Get-Content $alphaPath -Raw|ConvertFrom-Json
  Assert (($saved.windows[0].tabs|ConvertTo-Json -Depth 12 -Compress) -eq ($alpha.windows[0].tabs|ConvertTo-Json -Depth 12 -Compress)) 'Switch lost alpha tab layout'
  # Create from the embedded list. Empty/duplicate names must not change views.
@@ -133,7 +160,10 @@ try {
  Assert ([TabNative]::Windows($gui.Id)[0] -eq $window) 'Cancelled creation replaced current views'
  Assert (!(Test-Path (LayoutPath 'cancelled'))) 'Cancelled creation published a workspace'
  Assert (@(Mux @('list')|ConvertFrom-Json).Count -eq 4) 'Cancelled creation started a shell'
- Key $picker 0x71
+ Key $picker 0x1B
+ Key $window 0x7C
+ Wait-For {[WorkspacePicker]::Find($window) -ne 0} 'Direct create did not open name entry'
+ $picker=[WorkspacePicker]::Find($window)
  foreach($ch in 'gamma 日本'.ToCharArray()){[void][WorkspacePicker]::Post($picker,0x102,[int]$ch,0)}
  Key $picker 0x0D
  Wait-For {[WorkspacePicker]::Find($window) -eq 0 -and [TabNative]::Windows($gui.Id).Count -eq 1 -and [TabNative]::Windows($gui.Id)[0] -eq $window} 'New workspace did not open'
@@ -169,6 +199,11 @@ try {
  # Another GUI owns alpha: beta must remain intact and its picker must stay open.
  $peer=Launch 'alpha'
  Wait-For {[TabNative]::Windows($peer.Id).Count -eq 1} 'Peer window missing'
+ $busyHosts=@([TabNative]::Hosts($window,$false)) -join ','
+ Key $window 0x7F;Start-Sleep -Milliseconds 700
+ Assert ([WorkspacePicker]::Find($window) -eq 0 -and (@([TabNative]::Hosts($window,$false)) -join ',') -eq $busyHosts) 'Busy direct switch changed views or opened picker'
+ Key $window 0x1B
+ foreach($inputFile in Get-ChildItem "$dir/*.input"){Assert ((Get-Content $inputFile.FullName -Raw) -match '^x\r?\nx\r?\n$') 'Direct switch failure leaked keyboard input'}
  Key $window 0x7B
  Wait-For {[WorkspacePicker]::Find($window) -ne 0} 'Picker missing before busy create'
  $picker=[WorkspacePicker]::Find($window);Start-Sleep -Milliseconds 500;Key $picker 0x71
@@ -180,6 +215,11 @@ try {
  Assert ([TabNative]::Windows($gui.Id)[0] -eq $window -and [WorkspacePicker]::Find($window) -ne 0) 'Busy workspace discarded current views'
  Key ([WorkspacePicker]::Find($window)) 0x1B
  $peer.Kill();$peer.WaitForExit();$peer.Dispose();$peer=$null
+ Key $window 0x7F
+ Wait-For {(@([TabNative]::Hosts($window,$false)) -join ',') -ne $busyHosts} 'Failed switch changed last-workspace history'
+ $lastHosts=@([TabNative]::Hosts($window,$false)) -join ','
+ Key $window 0x7F
+ Wait-For {(@([TabNative]::Hosts($window,$false)) -join ',') -ne $lastHosts} 'Last workspace did not return after busy target was released'
  # Escape cancels a pending switch without closing the original terminal.
  Key $window 0x7B
  Wait-For {[WorkspacePicker]::Find($window) -ne 0} 'Workspace picker missing before cancellation'
@@ -258,7 +298,7 @@ try {
  Assert ([TabNative]::Windows($gui.Id)[0] -eq $window -and [WorkspacePicker]::Find($window) -ne 0) 'Missing session discarded current views'
  Assert (@(Mux @('list')|ConvertFrom-Json).Count -eq 4) 'Missing shell was resurrected'
  Key ([WorkspacePicker]::Find($window)) 0x1B
- Write-Output "PASS: multi-window in-place switching, last-tab extraction, retained search, tab extraction with original pane HWNDs, journal recovery, workspace creation, empty/duplicate rejection, cancelled name entry preserves filter/selection, discovery, keyboard switching, original PIDs, input, split/title/zoom preservation, cancellation, close during preparation, F6 navigation, busy target and partial-attachment rollback. Artifacts: $dir"
+ Write-Output "PASS: direct create/next/previous/last bindings, wraparound, direct cancellation, failed-switch history, inline error input isolation, multi-window in-place switching, last-tab extraction, retained search, original pane HWNDs and shell PIDs, journal recovery, workspace creation, empty/duplicate rejection, picker cancellation, split/title/zoom preservation, close during preparation, F6 navigation, busy target and partial-attachment rollback. Artifacts: $dir"
 } finally {
  foreach($p in @($peer,$gui)){if($p){if(!$p.HasExited){$p.Kill();$p.WaitForExit()};$p.Dispose()}}
  foreach($entry in @(Mux @('list')|ConvertFrom-Json)){try{Mux @('stop',$entry.name)|Out-Null}catch{}}
