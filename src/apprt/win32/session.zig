@@ -112,7 +112,6 @@ fn saveLayout(app: *App) !void {
             geometry = .{ .x = rect.left, .y = rect.top, .width = @intCast(rect.right - rect.left), .height = @intCast(rect.bottom - rect.top) };
         try windows.append(alloc, .{ .tabs = tabs.items, .active = window.active_tab, .geometry = geometry });
     }
-    if (windows.items.len == 0) return;
     const state: workspace.State = .{ .windows = windows.items };
     try workspace.validate(state);
     const data = try std.json.Stringify.valueAlloc(alloc, state, .{});

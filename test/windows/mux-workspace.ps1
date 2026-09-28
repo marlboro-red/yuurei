@@ -6,6 +6,7 @@ $dir=Join-Path $env:TEMP ('yuurei-mux-workspace-'+[guid]::NewGuid().ToString('N'
 New-Item -ItemType Directory "$dir/ghostty" -Force | Out-Null
 $harness=Get-Content "$PSScriptRoot/tab-transfer-smoke.ps1" -Raw
 Invoke-Expression $harness.Substring($harness.IndexOf('Add-Type -AssemblyName'),$harness.IndexOf('$isolation = Join-Path $Artifacts')-$harness.IndexOf('Add-Type -AssemblyName'))
+Add-Type 'using System; using System.Runtime.InteropServices; public static class WorkspaceCapture { [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h,IntPtr dc,uint flags); }'
 @'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 Set-Content "$PSScriptRoot/$PID.started" $PID
@@ -80,7 +81,7 @@ try{
  Start-Sleep -Milliseconds 250
  $r=New-Object TabNative+Rect;[void][TabNative]::GetWindowRect($window,[ref]$r)
  $bitmap=[Drawing.Bitmap]::new($r.right-$r.left,$r.bottom-$r.top);$graphics=[Drawing.Graphics]::FromImage($bitmap)
- try{$graphics.CopyFromScreen($r.left,$r.top,0,0,$bitmap.Size);$bitmap.Save("$dir/restored.png")}finally{$graphics.Dispose();$bitmap.Dispose()}
+ try{$dc=$graphics.GetHdc();try{[void][WorkspaceCapture]::PrintWindow($window,$dc,2)}finally{$graphics.ReleaseHdc($dc)};$bitmap.Save("$dir/restored.png")}finally{$graphics.Dispose();$bitmap.Dispose()}
  # A forced second process must not overwrite the active workspace.
  $hash=(Get-FileHash $layout).Hash
  $other=Launch 'contender'

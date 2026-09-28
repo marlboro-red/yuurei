@@ -847,6 +847,8 @@ pub fn performSessionAction(self: *Window, action: @FieldType(input.Binding.Acti
 pub fn removeSurface(self: *Window, surface: *Surface) void {
     const alloc = self.app.core_app.alloc;
     const tab_idx = self.tabOf(surface) orelse return;
+    const ended = surface.core_surface.io.backend == .mux and surface.core_surface.io.backend.mux.ended.load(.acquire);
+    defer if (ended) session.save(self.app);
     const tab = &self.tabs.items[tab_idx];
 
     // The tree (and possibly the tab list) is about to be rebuilt; an
@@ -1051,15 +1053,11 @@ pub fn attachSession(self: *Window, name: []const u8) !void {
             var iterator = tab.tree.iterator();
             while (iterator.next()) |entry| {
                 if (entry.view.core_surface.io.backend == .mux and std.mem.eql(u8, entry.view.core_surface.io.backend.mux.name, name)) {
-                    if (entry.view.core_surface.io.backend.mux.disconnected.load(.acquire)) {
-                        try window.reconnectSurface(entry.view);
-                        window.activateTab(index);
-                        _ = winapi.ShowWindow(window.hwnd, winapi.SW_SHOW);
-                        _ = winapi.SetForegroundWindow(window.hwnd);
-                        return;
-                    }
                     window.activateTab(index);
+                    if (tab.tree.zoomed != null) tab.tree.zoom(handleOf(&tab.tree, entry.view));
                     window.focusSurface(entry.view);
+                    if (entry.view.core_surface.io.backend.mux.disconnected.load(.acquire)) try window.reconnectSurface(entry.view);
+                    window.activateTab(index);
                     _ = winapi.ShowWindow(window.hwnd, winapi.SW_SHOW);
                     _ = winapi.SetForegroundWindow(window.hwnd);
                     return;
@@ -1142,7 +1140,10 @@ fn confirmEndSession(self: *Window) void {
         var iterator = tab.tree.iterator();
         while (iterator.next()) |entry| {
             const surface = entry.view;
-            if (surface.core_surface.io.backend == .mux and std.mem.eql(u8, surface.core_surface.io.backend.mux.name, target.name())) surface.should_close = true;
+            if (surface.core_surface.io.backend == .mux and std.mem.eql(u8, surface.core_surface.io.backend.mux.name, target.name())) {
+                surface.core_surface.io.backend.mux.ended.store(true, .release);
+                surface.should_close = true;
+            }
         }
     };
     self.layoutActiveTab();
@@ -3548,8 +3549,11 @@ pub fn wndProc(
 
                 drop: {
                     if (text.items.len > 0) text.append(alloc, ' ') catch break :drop;
-                    const args = surface.core_surface.io.backend.exec.subprocess.args;
-                    @import("drop.zig").appendPath(alloc, &text, args[0], path) catch return 0;
+                    const shell = switch (surface.core_surface.io.backend) {
+                        .exec => |exec| exec.subprocess.args[0],
+                        .mux => |mux| mux.shell orelse break :drop,
+                    };
+                    @import("drop.zig").appendPath(alloc, &text, shell, path) catch return 0;
                 }
             }
 
