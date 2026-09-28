@@ -8,6 +8,7 @@ const Window = @import("Window.zig");
 const winapi = @import("winapi.zig");
 const ui = @import("settings_controls.zig");
 const model = @import("settings_model.zig");
+const hotkeys = @import("settings_hotkeys.zig");
 const configpkg = @import("../../config.zig");
 const L = std.unicode.utf8ToUtf16LeStringLiteral;
 const log = std.log.scoped(.win32);
@@ -60,6 +61,12 @@ const Palette = struct {
     }
 };
 
+hotkey_state: ?hotkeys.State = null,
+hotkey_controls: [12]?winapi.HWND = @splat(null),
+hotkey_visible: std.ArrayList(usize) = .empty,
+hotkey_selected: ?usize = null,
+hotkey_editor_dirty: bool = false,
+hotkey_capture: bool = false,
 app: *App,
 window: *Window,
 hwnd: winapi.HWND,
@@ -111,6 +118,8 @@ pub fn create(alloc: Allocator, window: *Window) !*SettingsWindow {
     const self = try alloc.create(SettingsWindow);
     self.* = .{ .app = window.app, .window = window, .hwnd = undefined, .arena = .init(alloc), .snapshot = .init(alloc) };
     errdefer {
+        if (self.hotkey_state) |*state| state.deinit();
+        self.hotkey_visible.deinit(alloc);
         self.snapshot.deinit();
         self.arena.deinit();
         alloc.destroy(self);
@@ -138,6 +147,22 @@ pub fn create(alloc: Allocator, window: *Window) !*SettingsWindow {
     self.prev_button = try self.button("Previous", id_prev);
     self.next_button = try self.button("Next", id_next);
     self.update_button = try self.button("Check for updates", id_update);
+    self.hotkey_controls[0] = try self.child(L("LISTBOX"), "", 0x00800101 | winapi.WS_VSCROLL | @as(u32, 0x00100000), 500);
+    self.hotkey_controls[1] = try self.child(L("EDIT"), "", 0x0080, 501);
+    self.hotkey_controls[2] = try self.child(L("EDIT"), "", 0x0004 | 0x0040 | 0x1000 | winapi.WS_VSCROLL, 502);
+    const hotkey_buttons = [_][]const u8{ "Record keys", "Apply shortcut", "New", "Disable", "Reset", "Reset all" };
+    for (hotkey_buttons, 3..) |label, i| self.hotkey_controls[i] = try self.button(label, 500 + i);
+    self.hotkey_controls[9] = try self.child(L("COMBOBOX"), "", 0x0003 | winapi.CBS_HASSTRINGS | winapi.WS_VSCROLL, 509);
+    for (shortcut_actions) |action| {
+        const wide = try std.unicode.utf8ToUtf16LeAllocZ(self.arena.allocator(), action);
+        _ = winapi.SendMessageW(self.hotkey_controls[9].?, 0x0143, 0, @bitCast(@intFromPtr(wide.ptr)));
+    }
+    self.hotkey_controls[10] = try self.child(L("STATIC"), "Shortcut (use > between sequence keys)", 0, 520);
+    self.hotkey_controls[11] = try self.child(L("STATIC"), "Actions (one per line)", 0, 521);
+    _ = winapi.SendMessageW(self.hotkey_controls[0].?, 0x0194, @intCast(self.s(1800)), 0); // LB_SETHORIZONTALEXTENT
+    _ = winapi.SendMessageW(self.hotkey_controls[1].?, 0x00C5, 1024, 0);
+    _ = winapi.SendMessageW(self.hotkey_controls[2].?, 0x00C5, 8192, 0);
+
     for (model.fields, 0..) |field, i| {
         // Real labels precede controls for native accessibility.
         self.labels[i] = try self.child(L("STATIC"), field.title, 0, 300 + i);
@@ -185,6 +210,177 @@ pub fn create(alloc: Allocator, window: *Window) !*SettingsWindow {
     return self;
 }
 
+const shortcut_actions = [_][]const u8{
+    "new_tab",              "new_window",      "close_surface",   "close_tab",              "copy_to_clipboard", "paste_from_clipboard",
+    "new_split:right",      "new_split:down",  "goto_split:left", "goto_split:right",       "goto_split:up",     "goto_split:down",
+    "toggle_split_zoom",    "equalize_splits", "goto_tab:next",   "goto_tab:previous",      "toggle_fullscreen", "increase_font_size:1",
+    "decrease_font_size:1", "reset_font_size", "clear_screen",    "toggle_command_palette", "open_config",       "reload_config",
+    "session:list",         "session:rename",  "session:detach",  "session:terminate",      "ignore",
+};
+
+fn layoutShortcuts(self: *SettingsWindow) void {
+    const x = self.s(246);
+    const w = self.width - x - self.s(28);
+    const list_h = @max(self.s(84), self.height - self.s(490));
+    self.move(self.hotkey_controls[0], x, self.s(156), w, list_h, true);
+    const y = self.s(156) + list_h + self.s(8);
+    self.move(self.hotkey_controls[5], x, y, self.s(66), self.s(30), true);
+    self.move(self.hotkey_controls[6], x + self.s(74), y, self.s(76), self.s(30), true);
+    self.move(self.hotkey_controls[7], x + self.s(158), y, self.s(66), self.s(30), true);
+    self.move(self.hotkey_controls[8], x + w - self.s(100), y, self.s(100), self.s(30), true);
+    self.move(self.hotkey_controls[10], x, y + self.s(40), w, self.s(22), true);
+    self.move(self.hotkey_controls[1], x, y + self.s(64), w - self.s(134), self.s(28), true);
+    self.move(self.hotkey_controls[3], x + w - self.s(126), y + self.s(62), self.s(126), self.s(30), true);
+    self.move(self.hotkey_controls[11], x, y + self.s(100), w, self.s(22), true);
+    self.move(self.hotkey_controls[9], x + @divTrunc(w, 2), y + self.s(97), @divTrunc(w, 2), self.s(260), true);
+    self.move(self.hotkey_controls[2], x, y + self.s(126), w - self.s(134), self.s(56), true);
+    self.move(self.hotkey_controls[4], x + w - self.s(126), y + self.s(126), self.s(126), self.s(32), true);
+    self.refreshShortcuts();
+    for (self.hotkey_controls) |h| self.tabOrder(h);
+    self.tabOrder(self.revert_button);
+    self.tabOrder(self.save_button);
+}
+fn refreshShortcuts(self: *SettingsWindow) void {
+    const state = if (self.hotkey_state) |*v| v else return;
+    const a = self.app.core_app.alloc;
+    self.hotkey_visible.clearRetainingCapacity();
+    const list = self.hotkey_controls[0].?;
+    _ = winapi.SendMessageW(list, 0x000B, 0, 0);
+    defer {
+        _ = winapi.SendMessageW(list, 0x000B, 1, 0);
+        _ = winapi.InvalidateRect(list, null, 1);
+    }
+    _ = winapi.SendMessageW(list, 0x0184, 0, 0); // LB_RESETCONTENT
+    for (state.rows.items, 0..) |row, i| {
+        if (!hotkeys.matches(row, self.query[0..self.query_len])) continue;
+        self.hotkey_visible.append(a, i) catch return;
+        const action = if (std.mem.indexOfScalar(u8, row.actions, '\n')) |end| row.actions[0..end] else row.actions;
+        const label = std.fmt.allocPrint(a, "{s}  —  {s}{s}{s}", .{ row.trigger, action, if (action.len < row.actions.len) " (+ actions)" else "", if (row.disabled) " [disabled]" else "" }) catch return;
+        defer a.free(label);
+        const wide = std.unicode.utf8ToUtf16LeAllocZ(a, label) catch return;
+        defer a.free(wide);
+        _ = winapi.SendMessageW(list, 0x0180, 0, @bitCast(@intFromPtr(wide.ptr)));
+        if (self.hotkey_selected == i) _ = winapi.SendMessageW(list, 0x0186, self.hotkey_visible.items.len - 1, 0);
+    }
+    _ = ui.EnableWindow(self.hotkey_controls[6].?, if (self.hotkey_selected != null) 1 else 0);
+    _ = ui.EnableWindow(self.hotkey_controls[7].?, if (self.hotkey_selected != null) 1 else 0);
+}
+fn selectShortcut(self: *SettingsWindow, index: ?usize) void {
+    self.hotkey_selected = index;
+    self.hotkey_editor_dirty = false;
+    self.hotkey_capture = false;
+    self.loading = true;
+    defer self.loading = false;
+    self.setText(self.hotkey_controls[3].?, "Record keys");
+    self.setText(self.hotkey_controls[1].?, if (index) |i| self.hotkey_state.?.rows.items[i].trigger else "");
+    self.setText(self.hotkey_controls[2].?, if (index) |i| self.hotkey_state.?.rows.items[i].actions else "");
+    self.refreshShortcuts();
+    self.updateButtons();
+}
+fn applyShortcut(self: *SettingsWindow) bool {
+    const a = self.app.core_app.alloc;
+    const trigger = getText(a, self.hotkey_controls[1].?) catch return false;
+    defer a.free(trigger);
+    const actions = getText(a, self.hotkey_controls[2].?) catch return false;
+    defer a.free(actions);
+    self.hotkey_state.?.put(self.hotkey_selected, std.mem.trim(u8, trigger, " \t"), actions) catch |err| {
+        self.message(if (err == error.ShortcutConflict) "Shortcut conflicts with an existing binding or sequence. Disable it first." else "Invalid shortcut or action. Check the key combination and action parameters.", true);
+        return false;
+    };
+    self.selectShortcut(null);
+    self.message("Shortcut staged. Save changes to apply it.", false);
+    return true;
+}
+fn shortcutCommand(self: *SettingsWindow, id: usize, notification: usize) void {
+    if ((id == 1 or id == 2) and notification == 0x0300) {
+        self.hotkey_editor_dirty = true;
+        self.updateButtons();
+        return;
+    }
+    if (id == 0 and notification == 1) {
+        if (self.hotkey_editor_dirty) {
+            self.message("Apply the shortcut or use New to discard this edit.", true);
+            self.refreshShortcuts();
+            return;
+        }
+        const selected = winapi.SendMessageW(self.hotkey_controls[0].?, 0x0188, 0, 0);
+        if (selected >= 0 and @as(usize, @intCast(selected)) < self.hotkey_visible.items.len) self.selectShortcut(self.hotkey_visible.items[@intCast(selected)]);
+        return;
+    }
+    if (id == 9 and notification == 1) {
+        const selected = winapi.SendMessageW(self.hotkey_controls[9].?, 0x0147, 0, 0);
+        if (selected >= 0 and @as(usize, @intCast(selected)) < shortcut_actions.len) self.setText(self.hotkey_controls[2].?, shortcut_actions[@intCast(selected)]);
+        return;
+    }
+    if (notification != 0) return;
+    switch (id) {
+        3 => {
+            self.hotkey_capture = !self.hotkey_capture;
+            self.setText(self.hotkey_controls[3].?, if (self.hotkey_capture) "Cancel recording" else "Record keys");
+            if (self.hotkey_capture) {
+                _ = winapi.SetFocus(self.hotkey_controls[1].?);
+                self.message("Press a key combination. Escape cancels. Type sequences manually using >.", false);
+            }
+        },
+        4 => {
+            _ = self.applyShortcut();
+        },
+        5 => {
+            self.selectShortcut(null);
+            _ = winapi.SetFocus(self.hotkey_controls[1].?);
+        },
+        6, 7 => if (self.hotkey_selected) |i| {
+            if (id == 6) self.hotkey_state.?.rows.items[i].disabled = true else self.hotkey_state.?.reset(i);
+            self.selectShortcut(i);
+        },
+        8 => {
+            self.hotkey_state.?.resetAll() catch {
+                self.message("Could not reset shortcuts.", true);
+                return;
+            };
+            self.selectShortcut(null);
+            self.message("Default shortcuts staged. Save changes to apply, or Revert to cancel.", false);
+        },
+        else => {},
+    }
+}
+fn captureShortcut(self: *SettingsWindow, msg: *winapi.MSG) bool {
+    switch (msg.message) {
+        winapi.WM_KEYUP, winapi.WM_SYSKEYUP, winapi.WM_CHAR, winapi.WM_SYSCHAR => return true,
+        winapi.WM_KEYDOWN, winapi.WM_SYSKEYDOWN => {},
+        else => return false,
+    }
+    const vk: u8 = @truncate(msg.wParam);
+    if (vk == winapi.VK_ESCAPE) {
+        self.hotkey_capture = false;
+        self.setText(self.hotkey_controls[3].?, "Record keys");
+        self.message("Recording cancelled.", false);
+        return true;
+    }
+    if (vk == winapi.VK_SHIFT or vk == winapi.VK_CONTROL or vk == winapi.VK_MENU or vk == winapi.VK_LWIN or vk == winapi.VK_RWIN) return true;
+    const key = Window.vkToKey(vk, msg.lParam);
+    if (key == .unidentified) {
+        self.message("This key cannot be recorded. Enter the shortcut manually.", true);
+        return true;
+    }
+    const trigger: @import("../../input/Binding.zig").Trigger = .{
+        .key = if (vk >= 'A' and vk <= 'Z') .{ .unicode = vk + 32 } else if (vk >= '0' and vk <= '9') .{ .unicode = vk } else .{ .physical = key },
+        .mods = .{ .ctrl = winapi.GetKeyState(winapi.VK_CONTROL) < 0, .alt = winapi.GetKeyState(winapi.VK_MENU) < 0, .shift = winapi.GetKeyState(winapi.VK_SHIFT) < 0, .super = winapi.GetKeyState(winapi.VK_LWIN) < 0 or winapi.GetKeyState(winapi.VK_RWIN) < 0 },
+    };
+    var buf: [128]u8 = undefined;
+    const value = std.fmt.bufPrint(&buf, "{f}", .{trigger}) catch return true;
+    const a = self.app.core_app.alloc;
+    const previous = getText(a, self.hotkey_controls[1].?) catch return true;
+    defer a.free(previous);
+    const scoped = std.fmt.allocPrint(a, "{s}{s}", .{ hotkeys.scopePrefix(previous), value }) catch return true;
+    defer a.free(scoped);
+    self.setText(self.hotkey_controls[1].?, scoped);
+    self.hotkey_capture = false;
+    self.setText(self.hotkey_controls[3].?, "Record keys");
+    self.message("Shortcut recorded. Choose an action and apply it.", false);
+    return true;
+}
+
 fn s(self: *const SettingsWindow, v: i32) i32 {
     return @intCast(@divTrunc(@as(i64, v) * winapi.GetDpiForWindow(self.hwnd), 96));
 }
@@ -199,7 +395,7 @@ pub fn refreshUpdates(self: *SettingsWindow) void {
 }
 fn child(self: *SettingsWindow, class: [*:0]const u16, title: []const u8, style: u32, id: usize) !winapi.HWND {
     const wide = try std.unicode.utf8ToUtf16LeAllocZ(self.arena.allocator(), title);
-    const hwnd = winapi.CreateWindowExW(0, class, wide.ptr, winapi.WS_CHILD | (if (id >= 300) @as(u32, 0) else winapi.WS_TABSTOP) | style, 0, 0, 1, 1, self.hwnd, @ptrFromInt(id), self.app.hinstance, null) orelse return error.CreateControlFailed;
+    const hwnd = winapi.CreateWindowExW(0, class, wide.ptr, winapi.WS_CHILD | (if ((id >= 300 and id < 500) or id >= 520) @as(u32, 0) else winapi.WS_TABSTOP) | style, 0, 0, 1, 1, self.hwnd, @ptrFromInt(id), self.app.hinstance, null) orelse return error.CreateControlFailed;
     _ = winapi.SendMessageW(hwnd, winapi.WM_SETFONT, @intFromPtr(self.font), 0);
     return hwnd;
 }
@@ -221,7 +417,7 @@ fn refreshStyle(self: *SettingsWindow) void {
     self.font = winapi.CreateFontW(-self.s(14), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, L("Segoe UI"));
     self.small_font = winapi.CreateFontW(-self.s(12), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, L("Segoe UI"));
     self.heading_font = winapi.CreateFontW(-self.s(28), 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, L("Segoe UI"));
-    for (self.controls ++ self.labels ++ self.resets ++ self.nav ++ [_]?winapi.HWND{ self.search, self.search_label, self.save_button, self.revert_button, self.open_button, self.prev_button, self.next_button }) |maybe| {
+    for (self.hotkey_controls ++ self.controls ++ self.labels ++ self.resets ++ self.nav ++ [_]?winapi.HWND{ self.search, self.search_label, self.save_button, self.revert_button, self.open_button, self.prev_button, self.next_button }) |maybe| {
         if (maybe) |h| _ = winapi.SendMessageW(h, winapi.WM_SETFONT, @intFromPtr(self.font), 1);
     }
     const dark: winapi.BOOL = if (self.window.isLight()) 0 else 1;
@@ -235,6 +431,8 @@ fn cleanup(self: *SettingsWindow) void {
     self.app.settings = null;
     _ = winapi.SetWindowLongPtrW(self.hwnd, winapi.GWLP_USERDATA, 0);
     self.deleteResources();
+    if (self.hotkey_state) |*state| state.deinit();
+    self.hotkey_visible.deinit(alloc);
     self.snapshot.deinit();
     self.arena.deinit();
     alloc.destroy(self);
@@ -283,8 +481,16 @@ fn load(self: *SettingsWindow) !void {
         original[i] = if (model.value(baseline, field.key)) |v| try a.dupe(u8, v) else try model.effective(a, &current, i);
         default_values[i] = try model.effective(a, &defaults, i);
     }
+    const shortcut_state = try hotkeys.State.init(self.app.core_app.alloc, &current, &defaults);
     self.loading = true;
     defer self.loading = false;
+    if (self.hotkey_state) |*state| state.deinit();
+    self.hotkey_state = shortcut_state;
+    self.hotkey_selected = null;
+    self.hotkey_editor_dirty = false;
+    self.hotkey_capture = false;
+    self.setText(self.hotkey_controls[1].?, "");
+    self.setText(self.hotkey_controls[2].?, "");
     self.snapshot.deinit();
     self.snapshot = snapshot;
     self.baseline = baseline;
@@ -296,7 +502,7 @@ fn load(self: *SettingsWindow) !void {
     self.updateButtons();
 }
 fn anyDirty(self: *const SettingsWindow) bool {
-    return std.mem.indexOfScalar(bool, &self.dirty, true) != null;
+    return self.hotkey_editor_dirty or (if (self.hotkey_state) |*state| state.dirty() else false) or std.mem.indexOfScalar(bool, &self.dirty, true) != null;
 }
 fn updateButtons(self: *SettingsWindow) void {
     if (self.save_button) |h| _ = ui.EnableWindow(h, if (self.anyDirty()) 1 else 0);
@@ -319,6 +525,11 @@ fn changed(self: *SettingsWindow, i: usize) void {
     self.updateButtons();
 }
 fn save(self: *SettingsWindow) void {
+    if (self.hotkey_capture) {
+        self.message("Finish or cancel key recording before saving.", true);
+        return;
+    }
+    if (self.hotkey_editor_dirty and !self.applyShortcut()) return;
     if (!self.anyDirty()) return;
     var arena: std.heap.ArenaAllocator = .init(self.app.core_app.alloc);
     defer arena.deinit();
@@ -364,7 +575,11 @@ fn save(self: *SettingsWindow) void {
         sessions_changed = sessions_changed or std.mem.eql(u8, field.key, "windows-persistent-sessions");
         workspace_changed = workspace_changed or std.mem.eql(u8, field.key, "windows-workspace");
     }
-    model.save(a, self.path, self.baseline, changes.items) catch |err| {
+    const shortcut_suffix = self.hotkey_state.?.suffix(a) catch {
+        self.message("Could not prepare shortcuts.", true);
+        return;
+    };
+    model.saveWithShortcuts(a, self.path, self.baseline, changes.items, shortcut_suffix) catch |err| {
         self.message(if (err == error.ConfigChanged) "Config changed externally. Revert to reload it before editing." else "Could not save the config file. Changes remain unsaved.", true);
         return;
     };
@@ -435,6 +650,19 @@ fn layout(self: *SettingsWindow) void {
             matching[n] = i;
             n += 1;
         }
+    }
+    const shortcuts_page = self.category == @intFromEnum(model.Category.shortcuts);
+    for (self.hotkey_controls) |h| self.move(h, 0, 0, 1, 1, false);
+    if (shortcuts_page) {
+        self.move(self.prev_button, 0, 0, 1, 1, false);
+        self.move(self.next_button, 0, 0, 1, 1, false);
+        self.matched_count = 1;
+        self.layoutShortcuts();
+        if (focused) |h| {
+            if (ui.IsChild(self.hwnd, h) != 0) _ = winapi.SetFocus(if (winapi.IsWindowVisible(h) != 0) h else self.search.?);
+        }
+        _ = winapi.InvalidateRect(self.hwnd, null, 1);
+        return;
     }
     const capacity: usize = @intCast(@max(1, @divTrunc(self.height - self.s(280), self.s(100))));
     self.offset = @min(self.offset, n -| capacity);
@@ -530,8 +758,8 @@ fn paint(self: *SettingsWindow, hdc: winapi.HDC) void {
     self.text(hdc, "yuurei", self.rect(28, 26, 162, 38), p.text, self.heading_font, 0);
     self.text(hdc, "SETTINGS", self.rect(29, 72, 162, 20), p.muted, self.small_font, 0);
     box(hdc, .{ .left = self.s(246), .top = self.s(33), .right = self.width - self.s(28), .bottom = self.s(71) }, p.bg, p.border);
-    self.text(hdc, if (self.query_len > 0) "Search results" else model.categories[self.category], .{ .left = self.s(246), .top = self.s(79), .right = self.width - self.s(28), .bottom = self.s(119) }, p.text, self.heading_font, 0);
-    self.text(hdc, if (self.query_len > 0) "Matching settings across every category." else model.descriptions[self.category], .{ .left = self.s(247), .top = self.s(125), .right = self.width - self.s(28), .bottom = self.s(146) }, p.muted, self.font, 0);
+    self.text(hdc, if (self.query_len > 0 and self.category != @intFromEnum(model.Category.shortcuts)) "Search results" else model.categories[self.category], .{ .left = self.s(246), .top = self.s(79), .right = self.width - self.s(28), .bottom = self.s(119) }, p.text, self.heading_font, 0);
+    self.text(hdc, if (self.query_len > 0 and self.category != @intFromEnum(model.Category.shortcuts)) "Matching settings across every category." else model.descriptions[self.category], .{ .left = self.s(247), .top = self.s(125), .right = self.width - self.s(28), .bottom = self.s(146) }, p.muted, self.font, 0);
     for (self.rows, 0..) |maybe, i| {
         const row = maybe orelse continue;
         const focused = if (ui.GetFocus()) |h| h == self.controls[i] or ui.IsChild(self.controls[i].?, h) != 0 else false;
@@ -557,14 +785,14 @@ fn paint(self: *SettingsWindow, hdc: winapi.HDC) void {
         self.text(hdc, version, self.rect(262, 282, 450, 24), p.text, self.font, 0);
         self.text(hdc, self.app.updater.message(), .{ .left = self.s(262), .top = self.s(316), .right = self.width - self.s(44), .bottom = self.s(362) }, p.muted, self.font, 0x10);
     }
-    self.text(hdc, "BASE CONFIGURATION", self.rect(28, 362, 168, 24), p.accent, self.small_font, 0);
-    self.text(hdc, "Applies across yuurei.\nProfiles keep their own overrides.", self.rect(28, 390, 162, 74), p.muted, self.font, 0x10);
-    if (self.height >= self.s(700)) {
+    self.text(hdc, "BASE CONFIGURATION", self.rect(28, 414, 168, 24), p.accent, self.small_font, 0);
+    self.text(hdc, "Applies across yuurei.\nProfiles keep their own overrides.", self.rect(28, 442, 162, 74), p.muted, self.font, 0x10);
+    if (self.height >= self.s(800)) {
         self.preview(hdc);
-        self.text(hdc, "Ctrl+F  Search    Ctrl+S  Save", self.rect(28, 617, 170, 30), p.muted, self.small_font, 0);
-    } else self.text(hdc, "Ctrl+F  Search\nCtrl+S  Save\nTab       Next control", self.rect(28, 474, 162, 76), p.muted, self.small_font, 0x10);
+        self.text(hdc, "Ctrl+F  Search    Ctrl+S  Save", self.rect(28, 669, 170, 30), p.muted, self.small_font, 0);
+    } else if (self.height >= self.s(720)) self.text(hdc, "Ctrl+F  Search\nCtrl+S Save\nTab       Next control", self.rect(28, 526, 162, 76), p.muted, self.small_font, 0x10);
     var buf: [80]u8 = undefined;
-    const range = std.fmt.bufPrint(&buf, "{d}-{d} of {d} settings", .{ if (self.matched_count == 0) @as(usize, 0) else self.offset + 1, self.offset + self.visible_count, self.matched_count }) catch "";
+    const range = if (self.category == @intFromEnum(model.Category.shortcuts)) "Select a shortcut to edit, disable, or reset." else std.fmt.bufPrint(&buf, "{d}-{d} of {d} settings", .{ if (self.matched_count == 0) @as(usize, 0) else self.offset + 1, self.offset + self.visible_count, self.matched_count }) catch "";
     self.text(hdc, range, .{ .left = self.s(430), .top = self.height - self.s(105), .right = self.width - self.s(28), .bottom = self.height - self.s(78) }, p.muted, self.small_font, winapi.DT_VCENTER | winapi.DT_SINGLELINE);
     const status = if (self.status_len > 0) self.status[0..self.status_len] else if (self.anyDirty()) "Unsaved changes" else "All changes saved";
     self.text(hdc, status, .{ .left = self.s(246), .top = self.height - self.s(60), .right = self.width - self.s(278), .bottom = self.height - self.s(14) }, if (self.status_len > 0 and self.status_error) p.error_color else p.muted, self.small_font, 0x10);
@@ -583,7 +811,7 @@ fn drawButton(self: *SettingsWindow, item: *const ui.DrawItem) void {
     var r = item.rect;
     r.left += self.s(if (item.id >= id_reset) @as(i32, 4) else 12);
     r.right -= self.s(if (item.id >= id_reset) @as(i32, 4) else 8);
-    self.text(item.hdc, if (item.id >= id_reset) "Reset" else title, r, if (disabled) p.muted else if (primary) p.bg else p.text, self.font, winapi.DT_VCENTER | winapi.DT_SINGLELINE | (if (item.id >= id_category and item.id < id_category + 4) @as(u32, 0) else winapi.DT_CENTER));
+    self.text(item.hdc, if (item.id >= id_reset and item.id < id_reset + count) "Reset" else title, r, if (disabled) p.muted else if (primary) p.bg else p.text, self.font, winapi.DT_VCENTER | winapi.DT_SINGLELINE | (if (item.id >= id_category and item.id < id_category + model.categories.len) @as(u32, 0) else winapi.DT_CENTER));
     if (item.state & 0x10 != 0) {
         r = item.rect;
         r.left += 3;
@@ -658,12 +886,12 @@ fn preview(self: *SettingsWindow, hdc: winapi.HDC) void {
     const font = winapi.CreateFontW(-self.s(@intFromFloat(points * 96 / 72)), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, face.ptr) orelse return;
     defer _ = winapi.DeleteObject(font);
     const p = self.palette;
-    self.text(hdc, "FONT & CURSOR SAMPLE", self.rect(28, 463, 170, 22), p.muted, self.small_font, 0);
-    box(hdc, self.rect(24, 493, 170, 100), p.bg, p.border);
-    self.text(hdc, "> yuurei\nAa 012345", self.rect(36, 505, 146, 65), p.text, font, 0);
+    self.text(hdc, "FONT & CURSOR SAMPLE", self.rect(28, 515, 170, 22), p.muted, self.small_font, 0);
+    box(hdc, self.rect(24, 545, 170, 100), p.bg, p.border);
+    self.text(hdc, "> yuurei\nAa 012345", self.rect(36, 557, 146, 65), p.text, font, 0);
     const cursor = self.controlValue(a, 8) catch return;
     defer a.free(cursor);
-    const r = self.rect(36, 568, if (std.mem.eql(u8, cursor, "bar")) @as(i32, 2) else 9, if (std.mem.eql(u8, cursor, "underline")) @as(i32, 2) else 15);
+    const r = self.rect(36, 620, if (std.mem.eql(u8, cursor, "bar")) @as(i32, 2) else 9, if (std.mem.eql(u8, cursor, "underline")) @as(i32, 2) else 15);
     if (std.mem.eql(u8, cursor, "block_hollow")) {
         box(hdc, r, p.bg, p.accent);
     } else fill(hdc, r, p.accent);
@@ -672,6 +900,7 @@ fn preview(self: *SettingsWindow, hdc: winapi.HDC) void {
 pub fn routeMessage(self: *SettingsWindow, msg: *winapi.MSG) bool {
     const hwnd = msg.hwnd orelse return false;
     if (hwnd != self.hwnd and ui.IsChild(self.hwnd, hwnd) == 0) return false;
+    if (self.hotkey_capture and self.captureShortcut(msg)) return true;
     if (msg.message == winapi.WM_KEYDOWN) {
         const ctrl = winapi.GetKeyState(winapi.VK_CONTROL) < 0;
         if (ctrl and msg.wParam == 'F') {
@@ -683,6 +912,7 @@ pub fn routeMessage(self: *SettingsWindow, msg: *winapi.MSG) bool {
             return true;
         }
         if (msg.wParam == winapi.VK_ESCAPE) {
+            if (winapi.SendMessageW(self.hotkey_controls[9].?, 0x0157, 0, 0) != 0) return false;
             for (self.controls, 0..) |h, i| {
                 if (model.fields[i].kind == .text or model.fields[i].kind == .toggle) continue;
                 if (winapi.SendMessageW(h.?, 0x0157, 0, 0) != 0) return false;
@@ -702,6 +932,13 @@ pub fn wndProc(hwnd: winapi.HWND, msg: winapi.UINT, wp: winapi.WPARAM, lp: winap
     if (ptr == 0) return winapi.DefWindowProcW(hwnd, msg, wp, lp);
     const self: *SettingsWindow = @ptrFromInt(@as(usize, @bitCast(ptr)));
     switch (msg) {
+        0x0006 => {
+            if (wp & 0xFFFF == 0 and self.hotkey_capture) {
+                self.hotkey_capture = false;
+                self.setText(self.hotkey_controls[3].?, "Record keys");
+            }
+            return winapi.DefWindowProcW(hwnd, msg, wp, lp);
+        },
         winapi.WM_ERASEBKGND => return 1,
         winapi.WM_PAINT => {
             var ps: winapi.PAINTSTRUCT = undefined;
@@ -734,11 +971,12 @@ pub fn wndProc(hwnd: winapi.HWND, msg: winapi.UINT, wp: winapi.WPARAM, lp: winap
         0x0133, 0x0134, 0x0135, 0x0138 => {
             const hdc: winapi.HDC = @ptrFromInt(wp);
             _ = winapi.SetTextColor(hdc, self.palette.text);
-            const input = msg == 0x0133 or msg == 0x0134 or @as(usize, @bitCast(lp)) == @intFromPtr(self.search_label);
+            const input = msg == 0x0133 or msg == 0x0134 or @as(usize, @bitCast(lp)) == @intFromPtr(self.search_label) or @as(usize, @bitCast(lp)) == @intFromPtr(self.hotkey_controls[10]) or @as(usize, @bitCast(lp)) == @intFromPtr(self.hotkey_controls[11]);
             _ = ui.SetBkColor(hdc, if (input) self.palette.bg else self.palette.card);
             return @bitCast(@intFromPtr(if (input) self.input_brush else self.brush));
         },
         winapi.WM_MOUSEWHEEL => {
+            if (self.category == @intFromEnum(model.Category.shortcuts)) return winapi.DefWindowProcW(hwnd, msg, wp, lp);
             const delta: i16 = @bitCast(@as(u16, @truncate(wp >> 16)));
             self.page(delta < 0);
             return 0;
@@ -748,6 +986,10 @@ pub fn wndProc(hwnd: winapi.HWND, msg: winapi.UINT, wp: winapi.WPARAM, lp: winap
             const id = wp & 0xFFFF;
             const notification = (wp >> 16) & 0xFFFF;
             if (notification == 0x0100 or notification == 0x0200 or notification == 3 or notification == 4) _ = winapi.InvalidateRect(hwnd, null, 0);
+            if (id >= 500 and id <= 509) {
+                self.shortcutCommand(id - 500, notification);
+                return 0;
+            }
             if (id == id_search and notification == 0x0300) {
                 const a = self.app.core_app.alloc;
                 const value = getText(a, self.search.?) catch return 0;
@@ -757,6 +999,8 @@ pub fn wndProc(hwnd: winapi.HWND, msg: winapi.UINT, wp: winapi.WPARAM, lp: winap
                 self.offset = 0;
                 self.layout();
             } else if (id >= id_category and id < id_category + model.categories.len and notification == 0) {
+                self.hotkey_capture = false;
+                self.setText(self.hotkey_controls[3].?, "Record keys");
                 self.category = id - id_category;
                 self.offset = 0;
                 self.setText(self.search.?, "");
@@ -824,6 +1068,7 @@ pub fn wndProc(hwnd: winapi.HWND, msg: winapi.UINT, wp: winapi.WPARAM, lp: winap
 }
 
 test {
+    _ = hotkeys;
     _ = model;
 }
 fn collectThemes(self: *SettingsWindow) void {

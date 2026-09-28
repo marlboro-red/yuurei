@@ -4,14 +4,15 @@ const Config = @import("../../config.zig").Config;
 const global = @import("../../global.zig");
 const Allocator = std.mem.Allocator;
 
-pub const Category = enum { appearance, terminal, windows, input, updates };
-pub const categories = [_][]const u8{ "Appearance", "Terminal", "Windows & tabs", "Input", "Updates" };
+pub const Category = enum { appearance, terminal, windows, input, updates, shortcuts };
+pub const categories = [_][]const u8{ "Appearance", "Terminal", "Windows & tabs", "Input", "Updates", "Keyboard shortcuts" };
 pub const descriptions = [_][]const u8{
     "Themes, fonts, and transparency.",
     "Shell startup, cursor, and closing behavior.",
     "Persistent sessions, workspace restore, and tab behavior.",
     "Mouse, clipboard, and keyboard behavior.",
     "Release updates and installation status.",
+    "Key combinations, sequences, and terminal actions.",
 };
 pub const Kind = enum { text, choice, toggle, theme, font };
 pub const Field = struct {
@@ -192,11 +193,17 @@ pub fn read(alloc: Allocator, path: []const u8) ![]u8 {
 }
 
 pub fn save(alloc: Allocator, path: []const u8, baseline: []const u8, changes: []const Change) !void {
+    return saveWithShortcuts(alloc, path, baseline, changes, "");
+}
+
+pub fn saveWithShortcuts(alloc: Allocator, path: []const u8, baseline: []const u8, changes: []const Change, shortcuts: []const u8) !void {
     const io = global.io();
     const current = try read(alloc, path);
     defer alloc.free(current);
     if (!std.mem.eql(u8, current, baseline)) return error.ConfigChanged;
-    const text = try rewrite(alloc, current, changes);
+    const settings = try rewrite(alloc, current, changes);
+    defer alloc.free(settings);
+    const text = try appendShortcuts(alloc, settings, shortcuts);
     defer alloc.free(text);
     const tmp = try std.fmt.allocPrint(alloc, "{s}.{d}.settings.tmp", .{ path, std.os.windows.GetCurrentThreadId() });
     defer alloc.free(tmp);
@@ -264,6 +271,33 @@ test "windows settings preserve BOM and honor font reset chains" {
     defer a.free(updated);
     try std.testing.expect(std.mem.startsWith(u8, updated, "\xef\xbb\xbffont-size = 14\n"));
     const unchanged = try rewrite(a, original, &.{});
+    defer a.free(unchanged);
+    try std.testing.expectEqualStrings(original, unchanged);
+}
+
+fn appendShortcuts(alloc: Allocator, text: []const u8, shortcuts: []const u8) ![]u8 {
+    if (shortcuts.len == 0) return alloc.dupe(u8, text);
+    const newline: []const u8 = if (std.mem.indexOf(u8, text, "\r\n") != null) "\r\n" else "\n";
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    try out.writer.writeAll(text);
+    if (text.len > 0 and text[text.len - 1] != '\n') try out.writer.writeAll(newline);
+    var lines = std.mem.splitScalar(u8, shortcuts, '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0 and lines.peek() == null) break;
+        try out.writer.writeAll(line);
+        try out.writer.writeAll(newline);
+    }
+    return alloc.dupe(u8, out.written());
+}
+
+test "windows settings shortcut transactions preserve unrelated config and CRLF" {
+    const a = std.testing.allocator;
+    const original = "\xef\xbb\xbf# shortcuts\r\nconfig-file = custom.conf\r\nkeybind = f23=new_tab\r\n";
+    const updated = try appendShortcuts(a, original, "keybind = f23=unbind\nkeybind = f24=new_tab\n");
+    defer a.free(updated);
+    try std.testing.expectEqualStrings(original ++ "keybind = f23=unbind\r\nkeybind = f24=new_tab\r\n", updated);
+    const unchanged = try appendShortcuts(a, original, "");
     defer a.free(unchanged);
     try std.testing.expectEqualStrings(original, unchanged);
 }

@@ -4533,7 +4533,7 @@ fn lparamY(lparam: winapi.LPARAM) i16 {
 /// US-centric VK→Key map; layout-aware matching happens via UTF-8 text
 /// from WM_CHAR. Left/right modifiers discriminate by the extended-key
 /// bit and the right-shift scancode.
-fn vkToKey(vk: u8, lparam: winapi.LPARAM) input.Key {
+pub fn vkToKey(vk: u8, lparam: winapi.LPARAM) input.Key {
     const extended = (lparam & (1 << 24)) != 0;
     const scancode: u8 = @truncate(@as(usize, @bitCast(lparam)) >> 16);
     return switch (vk) {
