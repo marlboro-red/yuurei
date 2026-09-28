@@ -64,6 +64,9 @@ jobs:
       - name: Native caption regression tests
         run: zig build test -Dapp-runtime=win32 "-Dtest-filter=native caption"
 
+      - name: Multiplexer regression tests
+        run: zig build test-mux -Dtest-filter=mux --summary all
+
       - name: Assemble package
         shell: pwsh
         run: |
