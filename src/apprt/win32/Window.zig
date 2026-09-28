@@ -1918,8 +1918,8 @@ fn paintSessionBar(self: *Window, hdc: winapi.HDC) void {
         const surface = self.activeSurface() orelse break :normal "";
         if (surface.core_surface.io.backend != .mux) break :normal "Local pane";
         const mux = surface.core_surface.io.backend.mux;
-        const state: []const u8 = if (mux.ended.load(.acquire)) "exited" else if (mux.disconnected.load(.acquire)) "disconnected" else "running";
-        break :normal std.fmt.bufPrint(&text_buffer, " {s} | {s} | PID {d}", .{ self.session_bar.current.title(), state, self.session_bar.shell_pid }) catch "Session";
+        const state: []const u8 = if (mux.ended.load(.acquire)) " | exited" else if (mux.disconnected.load(.acquire)) " | disconnected" else "";
+        break :normal std.fmt.bufPrint(&text_buffer, " {s}{s} | PID {d}", .{ self.session_bar.current.title(), state, self.session_bar.shell_pid }) catch "Session";
     };
     const hint: []const u8 = if (self.session_bar.pending != null) "Y: end  Esc: cancel" else if (self.session_bar.failed) "Esc: dismiss" else "Ctrl+Shift+S: sessions";
     const hint_width = @min(self.scale(186), @divTrunc(rect.right, 2));
