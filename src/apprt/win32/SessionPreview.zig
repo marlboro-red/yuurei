@@ -31,7 +31,7 @@ pub fn create(hwnd: w.HWND) !*Self {
     const wake = CreateEventW(null, 0, 0, null) orelse return error.CreateEvent;
     errdefer _ = w.CloseHandle(wake);
     self.* = .{ .hwnd = hwnd, .stop = stop, .wake = wake };
-    self.thread = try std.Thread.spawn(.{}, run, .{self});
+    self.thread = try std.Thread.spawn(@import("../../os/windows.zig").worker_thread_config, run, .{self});
     return self;
 }
 
