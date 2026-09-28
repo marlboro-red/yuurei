@@ -26,4 +26,5 @@ test {
     _ = @import("mux/Workspace.zig");
     _ = @import("mux/WorkspaceCatalog.zig");
     _ = @import("mux/WorkspaceSwitch.zig");
+    _ = @import("mux/WorkspaceTransfer.zig");
 }

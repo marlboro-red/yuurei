@@ -14,6 +14,7 @@ const Surface = @import("Surface.zig");
 const workspace = @import("../../mux/Workspace.zig");
 pub const catalog = @import("../../mux/WorkspaceCatalog.zig");
 const w = @import("winapi.zig");
+const Transfer = @import("../../mux/WorkspaceTransfer.zig");
 
 const log = std.log.scoped(.win32);
 
@@ -31,6 +32,7 @@ fn sessionPath(app: *App, alloc: std.mem.Allocator) ?[]const u8 {
 
 /// Saved layouts only. Call from a worker; release results with catalog.deinit.
 pub fn listSaved(alloc: std.mem.Allocator) ![]catalog.Entry {
+    try recoverTransfers(alloc);
     const base = try global.environ().getAlloc(alloc, "LOCALAPPDATA");
     defer alloc.free(base);
     const directory = try std.fs.path.join(alloc, &.{ base, "ghostty" });
@@ -68,6 +70,7 @@ pub fn prepareCreate(alloc: std.mem.Allocator, name: []const u8) !PreparedWorksp
 
 fn prepareTarget(alloc: std.mem.Allocator, name: []const u8, current_ids: []const []const u8, create: bool) !PreparedWorkspace {
     if (!catalog.validName(name)) return error.InvalidWorkspaceName;
+    try recoverTransfers(alloc);
     const base = try global.environ().getAlloc(alloc, "LOCALAPPDATA");
     defer alloc.free(base);
     const filename = try catalog.filename(alloc, name);
@@ -104,6 +107,10 @@ fn ownWorkspace(app: *App) bool {
     if (app.session_lock_initialized) return app.session_lock != null;
     app.session_lock_initialized = true;
     const alloc = app.core_app.alloc;
+    recoverTransfers(alloc) catch |err| {
+        log.warn("workspace recovery failed: {}", .{err});
+        return false;
+    };
     const path = sessionPath(app, alloc) orelse return false;
     defer alloc.free(path);
     if (std.fs.path.dirname(path)) |dir| std.Io.Dir.cwd().createDirPath(global.io(), dir) catch return false;
@@ -239,6 +246,15 @@ fn beginWorkspace(app: *App, hwnd: w.HWND, name: []const u8, create: bool) !void
     const job = try Job.create(hwnd);
     errdefer job.destroy();
     job.create_new = create;
+    var saved_index: usize = 0;
+    const owner = for (app.windows.items) |window| {
+        if (window.quick or window.tabs.items.len == 0) continue;
+        if (window.palette) |palette| if (palette.hwnd == hwnd) break window;
+        saved_index += 1;
+    } else return error.WorkspaceChanged;
+    job.source_window = saved_index;
+    job.source_tab = owner.active_tab;
+    job.owner = owner.hwnd;
     job.backend_alloc = app.core_app.alloc;
     job.target = try Job.alloc.dupe(u8, name);
     job.source_name = try Job.alloc.dupe(u8, app.workspace_name orelse "default");
@@ -310,26 +326,90 @@ fn commitSwitch(app: *App, job: *@import("WorkspaceJob.zig")) !void {
         window.destroy();
     };
     if (job.create_new) {
-        const window = newRestoredWindow(app) orelse return error.CreateWindowFailed;
-        // Use the normal new-tab startup/error handling, but never inherit an
-        // explicit attachment target from this GUI's launch arguments.
-        _ = try window.newTabWithOpts(.{ .fresh_persistent = true });
-    }
-    for (prepared.layout.value.windows) |saved| {
-        const window = newRestoredWindow(app) orelse return error.CreateWindowFailed;
-        if (saved.geometry) |g| {
-            const monitor = w.MonitorFromPoint(.{ .x = g.x, .y = g.y }, w.MONITOR_DEFAULTTONEAREST);
-            var info: w.MONITORINFO = std.mem.zeroes(w.MONITORINFO);
-            info.cbSize = @sizeOf(w.MONITORINFO);
-            if (w.GetMonitorInfoW(monitor, &info) != 0) {
-                const width = @min(@as(i32, @intCast(g.width)), info.rcWork.right - info.rcWork.left);
-                const height = @min(@as(i32, @intCast(g.height)), info.rcWork.bottom - info.rcWork.top);
-                _ = w.SetWindowPos(window.hwnd, null, std.math.clamp(g.x, info.rcWork.left, info.rcWork.right - width), std.math.clamp(g.y, info.rcWork.top, info.rcWork.bottom - height), width, height, w.SWP_NOACTIVATE | w.SWP_NOZORDER);
+        const owner = for (app.windows.items) |window| {
+            if (window.hwnd == job.owner) break window;
+        } else return error.WorkspaceChanged;
+        if (job.source_tab >= owner.tabs.items.len) return error.WorkspaceChanged;
+        owner.clearWorkspaceUi(&owner.tabs.items[job.source_tab].tree);
+        // Move the live tree by value. The pane HWNDs and terminal pins stay put.
+        const tab = owner.tabs.orderedRemove(job.source_tab);
+        owner.discardWorkspaceTabs(0);
+        owner.tabs.appendAssumeCapacity(tab);
+        adoptWorkspace(app, prepared, name);
+        var i: usize = 0;
+        while (i < app.windows.items.len) {
+            const window = app.windows.items[i];
+            if (window == owner or window.quick) {
+                i += 1;
+            } else {
+                _ = app.windows.orderedRemove(i);
+                window.destroy();
             }
         }
-        for (saved.tabs) |tab| try window.restoreTabAttached(tab, job.muxes.items);
-        window.activateTab(saved.active);
+        owner.activateTab(0);
+        owner.refreshSessionBar(true);
+        _ = w.SetFocus(owner.hwnd);
+        app.workspace_generation +%= 1;
+        job.accepted.store(true, .release);
+        return;
     }
+    // Reuse the picker owner's window first, then any other normal windows.
+    // Newly restored hosts remain hidden until every target tab is ready.
+    var targets: [16]*Window = undefined;
+    var old_counts: [16]usize = undefined;
+    var target_count: usize = 0;
+    for (app.windows.items[0..previous_count]) |window| {
+        if (!window.quick) if (window.palette) |palette| {
+            if (palette.hwnd == job.hwnd) {
+                targets[target_count] = window;
+                target_count += 1;
+                break;
+            }
+        };
+    }
+    for (app.windows.items[0..previous_count]) |window| {
+        if (target_count >= prepared.layout.value.windows.len) break;
+        if (window.quick or (target_count > 0 and targets[0] == window)) continue;
+        targets[target_count] = window;
+        target_count += 1;
+    }
+    var staged: usize = 0;
+    errdefer for (targets[0..staged], old_counts[0..staged]) |window, first| window.discardWorkspaceTabs(first);
+    for (prepared.layout.value.windows, 0..) |saved, i| {
+        if (i >= target_count) {
+            targets[i] = newRestoredWindow(app) orelse return error.CreateWindowFailed;
+            target_count += 1;
+            applyGeometry(targets[i], saved.geometry);
+        }
+        const window = targets[i];
+        old_counts[i] = window.tabs.items.len;
+        staged += 1;
+        for (saved.tabs) |tab| try window.stageWorkspaceTab(tab, job.muxes.items);
+    }
+    adoptWorkspace(app, prepared, name);
+    for (prepared.layout.value.windows, 0..) |saved, i| targets[i].installWorkspaceTabs(old_counts[i], saved.active);
+    // Preserve quick terminals and the reused outer windows; retire only extras.
+    var index: usize = 0;
+    while (index < previous_count and index < app.windows.items.len) {
+        const window = app.windows.items[index];
+        const keep = window.quick or for (targets[0..staged]) |target| {
+            if (window == target) break true;
+        } else false;
+        if (keep) {
+            index += 1;
+        } else {
+            _ = app.windows.orderedRemove(index);
+            window.destroy();
+        }
+    }
+    for (targets[0..staged], old_counts[0..staged]) |window, old_count| {
+        if (old_count == 0) window.applyStartupShow();
+    }
+    if (staged > 0) _ = w.SetFocus(targets[0].hwnd);
+    app.workspace_generation +%= 1;
+}
+
+fn adoptWorkspace(app: *App, prepared: *PreparedWorkspace, name: []const u8) void {
     if (app.session_timer != 0) _ = w.KillTimer(null, app.session_timer);
     app.session_timer = 0;
     app.session_deadline_ms = null;
@@ -339,57 +419,80 @@ fn commitSwitch(app: *App, job: *@import("WorkspaceJob.zig")) !void {
     app.session_lock_initialized = true;
     if (app.workspace_name) |old| app.core_app.alloc.free(old);
     app.workspace_name = name;
-    // Preserve quick terminals, which are outside saved workspace layouts.
-    var remaining = previous_count;
-    var index: usize = 0;
-    while (remaining > 0) : (remaining -= 1) {
-        if (app.windows.items[index].quick) {
-            index += 1;
-            continue;
-        }
-        const old = app.windows.orderedRemove(index);
-        old.destroy();
+}
+
+/// Finish a journal left by a crash before anyone restores either layout.
+/// Active transfers hold both locks and are skipped, never overwritten.
+fn recoverTransfers(alloc: std.mem.Allocator) !void {
+    const base = try global.environ().getAlloc(alloc, "LOCALAPPDATA");
+    defer alloc.free(base);
+    const directory = try std.fs.path.join(alloc, &.{ base, "ghostty" });
+    defer alloc.free(directory);
+    var dir = std.Io.Dir.cwd().openDir(global.io(), directory, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer dir.close(global.io());
+    var iterator = dir.iterate();
+    var count: usize = 0;
+    while (try iterator.next(global.io())) |entry| {
+        count += 1;
+        if (count > 1024) break;
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".move")) continue;
+        const data = dir.readFileAlloc(global.io(), entry.name, alloc, .limited(8 * 1024 * 1024)) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        defer alloc.free(data);
+        const parsed = try std.json.parseFromSlice(Transfer.Record, alloc, data, .{});
+        defer parsed.deinit();
+        const record = parsed.value;
+        try Transfer.validate(record);
+        const expected = try Transfer.journalPath(alloc, directory, record.source);
+        defer alloc.free(expected);
+        if (!std.mem.eql(u8, entry.name, std.fs.path.basename(expected))) return error.InvalidWorkspaceTransfer;
+        const source_lock = transferLock(alloc, directory, record.source) catch continue;
+        defer _ = w.CloseHandle(source_lock);
+        const target_lock = transferLock(alloc, directory, record.target) catch continue;
+        defer _ = w.CloseHandle(target_lock);
+        // The file may have changed or vanished while an active writer owned it.
+        const current = dir.readFileAlloc(global.io(), entry.name, alloc, .limited(8 * 1024 * 1024)) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        defer alloc.free(current);
+        if (!std.mem.eql(u8, data, current)) continue;
+        try Transfer.finish(global.io(), alloc, directory, record);
     }
-    for (app.windows.items[index..]) |window| window.applyStartupShow();
-    app.workspace_generation +%= 1;
-    if (job.create_new) {
-        app.session_restoring = false;
-        changed(app);
-    }
+}
+
+fn transferLock(alloc: std.mem.Allocator, directory: []const u8, name: []const u8) !w.HANDLE {
+    const file = try catalog.filename(alloc, name);
+    defer alloc.free(file);
+    const path = try std.fmt.allocPrint(alloc, "{s}{s}{s}.lock", .{ directory, std.fs.path.sep_str, file });
+    defer alloc.free(path);
+    const wide = try std.unicode.utf8ToUtf16LeAllocZ(alloc, path);
+    defer alloc.free(wide);
+    const lock = w.CreateFileW(wide, w.GENERIC_READ | w.GENERIC_WRITE, 0, null, 4, 0x80, null);
+    if (lock == std.os.windows.INVALID_HANDLE_VALUE) return error.WorkspaceUnavailable;
+    return lock;
+}
+
+fn applyGeometry(window: *Window, geometry: ?workspace.Geometry) void {
+    const g = geometry orelse return;
+    const monitor = w.MonitorFromPoint(.{ .x = g.x, .y = g.y }, w.MONITOR_DEFAULTTONEAREST);
+    var info: w.MONITORINFO = std.mem.zeroes(w.MONITORINFO);
+    info.cbSize = @sizeOf(w.MONITORINFO);
+    if (w.GetMonitorInfoW(monitor, &info) == 0) return;
+    const width = @min(@as(i32, @intCast(g.width)), info.rcWork.right - info.rcWork.left);
+    const height = @min(@as(i32, @intCast(g.height)), info.rcWork.bottom - info.rcWork.top);
+    _ = w.SetWindowPos(window.hwnd, null, std.math.clamp(g.x, info.rcWork.left, info.rcWork.right - width), std.math.clamp(g.y, info.rcWork.top, info.rcWork.bottom - height), width, height, w.SWP_NOACTIVATE | w.SWP_NOZORDER);
 }
 
 /// Replace the session file atomically: write a sibling temp and rename
 /// it over the target. A crash or power loss mid-write then leaves the
 /// previous good file intact rather than a truncated/empty one.
-fn writeAtomic(io: std.Io, alloc: std.mem.Allocator, path: []const u8, data: []const u8) !void {
-    // The parent (%LOCALAPPDATA%\ghostty) may not exist yet. createDirPath
-    // is idempotent (mkdir -p), so an already-present dir is fine.
-    if (std.fs.path.dirname(path)) |dir| try std.Io.Dir.cwd().createDirPath(io, dir);
-
-    // Unique per-process temp name: isolated/config-specific instances can
-    // save concurrently. A shared
-    // deterministic ".tmp" would let two writers interleave truncate/
-    // write/rename and corrupt or cross-replace each other's snapshot;
-    // per-PID names keep every writer isolated until its atomic rename.
-    const tmp = try std.fmt.allocPrint(alloc, "{s}.{d}.tmp", .{
-        path,
-        std.os.windows.GetCurrentProcessId(),
-    });
-    defer alloc.free(tmp);
-    // Close the writer before replacement and remove only our temporary file on
-    // failure. The previous layout must remain usable if a switch is aborted.
-    errdefer std.Io.Dir.deleteFileAbsolute(io, tmp) catch {};
-    {
-        const file = try std.Io.Dir.createFileAbsolute(io, tmp, .{ .truncate = true });
-        defer file.close(io);
-        var wbuf: [4096]u8 = undefined;
-        var fw = file.writer(io, &wbuf);
-        try fw.interface.writeAll(data);
-        try fw.interface.flush();
-        try file.sync(io);
-    }
-    try std.Io.Dir.renameAbsolute(tmp, path, io);
-}
+const writeAtomic = @import("../../mux/WorkspaceTransfer.zig").writeAtomic;
 
 test "session atomic save replaces a layout and reports replacement failure" {
     const t = std.testing;

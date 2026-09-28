@@ -2,6 +2,59 @@
 const std = @import("std");
 const workspace = @import("Workspace.zig");
 
+/// Partition one tab without copying terminal state or duplicating shell IDs.
+/// The returned arrays belong to alloc; nested tab data borrows from source.
+pub fn extract(alloc: std.mem.Allocator, source: workspace.State, window_index: usize, tab_index: usize) !struct { remaining: workspace.State, selected: workspace.State } {
+    try validate(source, &.{});
+    if (window_index >= source.windows.len or tab_index >= source.windows[window_index].tabs.len) return error.WorkspaceChanged;
+    const selected_window = source.windows[window_index];
+    const selected_tabs = try alloc.dupe(workspace.Tab, selected_window.tabs[tab_index .. tab_index + 1]);
+    errdefer alloc.free(selected_tabs);
+    const selected = try alloc.dupe(workspace.Window, &.{.{ .tabs = selected_tabs, .active = 0, .geometry = selected_window.geometry }});
+    errdefer alloc.free(selected);
+    var remaining: std.ArrayList(workspace.Window) = .empty;
+    errdefer remaining.deinit(alloc);
+    const tabs = try alloc.alloc(workspace.Tab, selected_window.tabs.len - 1);
+    errdefer alloc.free(tabs);
+    @memcpy(tabs[0..tab_index], selected_window.tabs[0..tab_index]);
+    @memcpy(tabs[tab_index..], selected_window.tabs[tab_index + 1 ..]);
+    for (source.windows, 0..) |window, i| {
+        if (i != window_index) {
+            try remaining.append(alloc, window);
+        } else if (tabs.len > 0) {
+            const active = window.active - @as(usize, if (window.active > tab_index) 1 else 0);
+            try remaining.append(alloc, .{ .tabs = tabs, .active = @min(active, tabs.len - 1), .geometry = window.geometry });
+        }
+    }
+    return .{ .remaining = .{ .windows = try remaining.toOwnedSlice(alloc) }, .selected = .{ .windows = selected } };
+}
+
+test "mux workspace extraction keeps all selected panes and removes their source tab" {
+    const t = std.testing;
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const nodes = [_]workspace.Node{
+        .{ .split = .{ .layout = .horizontal, .ratio = 0.4, .left = 1, .right = 2 } },
+        .{ .leaf = .{ .session = "one" } },
+        .{ .leaf = .{ .session = "two" } },
+    };
+    const other = [_]workspace.Node{.{ .leaf = .{ .session = "other" } }};
+    const tabs = [_]workspace.Tab{
+        .{ .nodes = &nodes, .focused = 2, .zoomed = 2, .title = "Project" },
+        .{ .nodes = &other, .focused = 0 },
+    };
+    const windows = [_]workspace.Window{.{ .tabs = &tabs, .active = 1 }};
+    const result = try extract(arena.allocator(), .{ .windows = &windows }, 0, 0);
+    try validate(result.selected, &.{"other"});
+    try validate(result.remaining, &.{ "one", "two" });
+    try t.expectEqual(@as(usize, 1), result.remaining.windows[0].tabs.len);
+    try t.expectEqual(@as(usize, 0), result.remaining.windows[0].active);
+    try t.expectEqualStrings("Project", result.selected.windows[0].tabs[0].title);
+    try t.expectEqual(@as(?u16, 2), result.selected.windows[0].tabs[0].zoomed);
+    const last = try extract(arena.allocator(), result.remaining, 0, 0);
+    try t.expectEqual(@as(usize, 0), last.remaining.windows.len);
+}
+
 /// Current IDs are borrowed from the active view layout. Broker availability
 /// still needs checking during attachment; this is deliberately not a liveness
 /// check. The target's exclusive workspace lock must be held through commit.

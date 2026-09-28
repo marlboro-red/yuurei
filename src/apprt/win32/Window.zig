@@ -461,8 +461,6 @@ fn closeAllTabs(self: *Window) void {
 /// How to spawn a surface: under a profile, in a specific working
 /// directory (session restore), or plainly (all defaults).
 pub const SpawnOpts = struct {
-    /// Start a new workspace shell, ignoring an initial attachment argument.
-    fresh_persistent: bool = false,
     mux_session: ?[]const u8 = null,
     mux_restore: bool = false,
     prepared_mux: ?*@import("../../termio/Mux.zig") = null,
@@ -530,16 +528,65 @@ pub fn newTabWithOpts(self: *Window, opts: SpawnOpts) !*Surface {
 }
 
 pub fn restoreTab(self: *Window, saved: @import("../../mux/Workspace.zig").Tab) !void {
-    return self.restoreTabMode(saved, null);
+    return self.restoreTabMode(saved, null, true);
 }
 
 /// Transactional workspace attachment must report missing/busy brokers instead
 /// of accepting an error pane or launching a replacement shell.
 pub fn restoreTabAttached(self: *Window, saved: @import("../../mux/Workspace.zig").Tab, prepared: []?*@import("../../termio/Mux.zig")) !void {
-    return self.restoreTabMode(saved, prepared);
+    return self.restoreTabMode(saved, prepared, true);
 }
 
-fn restoreTabMode(self: *Window, saved: @import("../../mux/Workspace.zig").Tab, prepared: ?[]?*@import("../../termio/Mux.zig")) !void {
+/// Append hidden target tabs without disturbing the visible workspace.
+pub fn stageWorkspaceTab(self: *Window, saved: @import("../../mux/Workspace.zig").Tab, prepared: []?*@import("../../termio/Mux.zig")) !void {
+    return self.restoreTabMode(saved, prepared, false);
+}
+
+/// Release a staged suffix on failure. Existing tabs and their UI stay intact.
+pub fn discardWorkspaceTabs(self: *Window, first: usize) void {
+    while (self.tabs.items.len > first) {
+        var tab = self.tabs.pop().?;
+        if (tab.custom_title) |title| self.app.core_app.alloc.free(title);
+        tab.tree.deinit();
+    }
+}
+
+/// Clear view-specific UI before freeing or moving any old terminal pages.
+pub fn clearWorkspaceUi(self: *Window, retained: ?*const Tree) void {
+    if (self.palette) |palette| palette.destroy();
+    if (self.profile_menu) |menu| menu.destroy();
+    if (self.search) |search| {
+        const keep = if (retained) |tree| handleOf(tree, search.surface) != null else false;
+        if (!keep) search.destroy();
+    }
+    self.rename_active = false;
+    self.rename_buf.clearRetainingCapacity();
+    if (self.tab_drag != null) self.updateTabDrop(null);
+    self.tab_drag = null;
+    self.tab_drag_engaged = false;
+    self.tab_drop_index = null;
+    if (self.divider_drag != null) _ = winapi.ReleaseCapture();
+    self.divider_drag = null;
+    self.session_bar.cancel();
+    self.tab_scroll = 0;
+    self.hover = .none;
+}
+
+/// Commit a prepared suffix in the same HWND. No allocation or reparenting.
+pub fn installWorkspaceTabs(self: *Window, first: usize, active: usize) void {
+    self.clearWorkspaceUi(null);
+    for (self.tabs.items[0..first]) |*tab| {
+        if (tab.custom_title) |title| self.app.core_app.alloc.free(title);
+        tab.tree.deinit();
+    }
+    const count = self.tabs.items.len - first;
+    std.mem.copyForwards(Tab, self.tabs.items[0..count], self.tabs.items[first..]);
+    self.tabs.items.len = count;
+    self.activateTab(active);
+    self.refreshSessionBar(true);
+}
+
+fn restoreTabMode(self: *Window, saved: @import("../../mux/Workspace.zig").Tab, prepared: ?[]?*@import("../../termio/Mux.zig"), activate: bool) !void {
     const attach_only = prepared != null;
     const alloc = self.app.core_app.alloc;
     _ = self.app.ensureProfiles();
@@ -599,7 +646,7 @@ fn restoreTabMode(self: *Window, saved: @import("../../mux/Workspace.zig").Tab, 
         .focused = nodes[saved.focused].leaf,
         .custom_title = title,
     });
-    self.activateTab(self.tabs.items.len - 1);
+    if (activate) self.activateTab(self.tabs.items.len - 1);
 }
 
 /// Inform the active tab's surfaces about full-window occlusion

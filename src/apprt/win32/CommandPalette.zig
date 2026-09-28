@@ -231,6 +231,7 @@ pub fn workspaceFailed(self: *CommandPalette, err: anyerror) void {
         error.InvalidWorkspaceName => "Enter a workspace name without control characters.",
         error.WorkspaceAlreadyExists => "A saved workspace already uses this name.",
         error.WorkspacePersistenceDisabled => "Enable persistent sessions and session restore in Settings first.",
+        error.WorkspaceRecoveryRequired => "A saved update needs recovery. Close and reopen this window.",
         error.WorkspaceAlreadyActive => "This workspace is already active.",
         error.WorkspaceSwitchInProgress => "Preparing workspace. Escape cancels.",
         error.WorkspaceUnavailable => "Workspace is open elsewhere or unavailable.",
@@ -1022,9 +1023,9 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
 
     if (self.mode != .commands) {
         const hint = self.error_text orelse if (self.mode == .create_workspace)
-            "New workspace · Enter create · Esc cancel"
+            "Move current tab to workspace · Enter save · Esc cancel"
         else if (self.mode == .workspaces)
-            "Enter switch · F2 new · F5 refresh · F6 sessions · Esc close"
+            "Enter switch · F2 workspace from tab · F5 refresh · F6 sessions · Esc close"
         else if (self.mode == .rename_session)
             "Rename session · Enter save · Esc cancel"
         else if (self.matches.items.len == 0)

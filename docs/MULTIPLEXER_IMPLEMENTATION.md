@@ -86,20 +86,24 @@ workspaces. **Enter** switches the selected workspace, **F5** refreshes, and
 session list. The command palette also exposes **Switch Workspace**, and
 `session:workspaces` can be assigned in Keyboard shortcuts settings.
 
-In the workspace list, **F2** starts a new workspace. Type its name in the
-inline input and press **Enter** to create it, or **Escape** to cancel and keep
-the current filter and selection. Persistent sessions and session restore must
-be enabled. The source layout is saved and its shells remain alive; the new
-workspace starts one fresh persistent shell using the base configuration.
-An existing saved name or a name owned by another GUI is rejected. As with a
-normal new tab, shell startup failures appear in the new pane.
+In the workspace list, **F2** creates a workspace from the current tab. Type
+its name in the inline input and press **Enter**, or **Escape** to cancel and
+keep the current filter and selection. Persistent sessions and session restore
+must be enabled. The selected tab keeps its live panes, shell PIDs, split ratios,
+title, focus, zoom, selection, and search. It becomes the new workspace's first
+tab. Other tabs and windows remain saved in the original workspace with their
+shells detached and still running. No new shell is launched. Moving the last
+tab leaves an empty source layout. An existing saved name or a name owned by
+another GUI is rejected.
 
 Named workspaces use the existing `windows-workspace` setting, or the launch
 argument `--windows-workspace=project-name`. Enable persistent sessions and
 workspace restoration when creating them. All normal windows, tabs, split
 ratios, tab titles, focus, zoom, and geometry form one workspace; quick terminals
-remain outside it. Workspace switching currently opens the target's saved
-windows rather than reusing the original window handle.
+remain outside it. Switching reuses the invoking window and other existing
+normal windows, keeping their placement, maximized/fullscreen state, and HWNDs.
+Additional windows open only when the saved target needs more; surplus normal
+windows close. Quick-terminal windows remain unchanged.
 
 Switching requires persistent panes in both layouts and live, compatible target
 brokers. A workspace already owned by another GUI cannot be switched into.
@@ -110,9 +114,10 @@ shells for missing target sessions.
 
 Discovery and broker preparation run on workers with the Windows port's bounded
 stack configuration. Preparation holds the target workspace lock and acquires
-connections and terminal snapshots. The UI then creates the target views from
-those prepared backends before detaching the old views. It rejects stale results
-by workspace generation. Escape cancels pipe operations and joins the worker
+connections and terminal snapshots. The UI stages hidden tabs in the retained
+windows from those prepared backends before replacing the old tabs. A staging
+failure destroys only those new tabs. It rejects stale results by workspace
+generation. Escape cancels pipe operations and joins the worker
 before releasing its state.
 
 The existing v2 layout JSON is unchanged. A `.name` companion records each named
@@ -120,9 +125,18 @@ workspace's display name; older named layouts become discoverable after their
 next save. `yuurei-mux workspaces` returns saved names and window/tab/pane counts
 as JSON. These are layout counts, not a claim that their shells are running.
 
+Moving a tab updates two saved layouts under both workspace locks. A small
+`.move` journal records the intended pair before either file is replaced.
+Startup/discovery completes interrupted updates under the same locks; cancelling
+preparation writes the inverse update on the worker. A stale result cannot move
+views. The current tab's live views are retained on successful creation, so no
+snapshot replacement or shell input replay occurs.
+
 Regression coverage: `test/windows/mux-workspace-switch.ps1` on an isolated
 Win32 desktop. It checks round-trip switching, unchanged PIDs, restored input,
-tab/split/zoom state, target ownership conflicts, and missing-session failures.
+tab/split/zoom state, retained search and pane HWNDs, multi-window reuse, last-tab
+extraction, journal recovery, target ownership conflicts, and missing-session
+failures.
 
 ### Persistent panes
 
