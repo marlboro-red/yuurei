@@ -8270,8 +8270,17 @@ pub const Keybinds = struct {
         // Reset to defaults (empty value)
         try keybinds.parseCLI(alloc, "");
 
-        // Tables should be cleared, root set has defaults
-        try testing.expectEqual(0, keybinds.tables.count());
+        // Custom tables are removed; platform default tables are restored.
+        var defaults: Keybinds = .{};
+        try defaults.init(alloc);
+        try testing.expectEqual(defaults.tables.count(), keybinds.tables.count());
+        try testing.expect(!keybinds.tables.contains("foo"));
+        try testing.expect(!keybinds.tables.contains("bar"));
+        var tables = defaults.tables.iterator();
+        while (tables.next()) |entry| {
+            const restored = keybinds.tables.get(entry.key_ptr.*) orelse return error.TestExpectedEqual;
+            try testing.expectEqual(entry.value_ptr.bindings.count(), restored.bindings.count());
+        }
         try testing.expect(keybinds.set.bindings.count() > 0);
     }
 };
