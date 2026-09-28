@@ -190,7 +190,7 @@ pub fn init(
             0,
         host_class_name,
         std.unicode.utf8ToUtf16LeStringLiteral(""),
-        winapi.WS_CHILD | winapi.WS_DISABLED,
+        winapi.WS_CHILD | winapi.WS_DISABLED | winapi.WS_CLIPSIBLINGS,
         0,
         strip,
         @max(0, client.right - client.left - 2 - sbw),

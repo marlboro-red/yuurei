@@ -30,10 +30,12 @@ public static class SessionNative {
  [DllImport("user32.dll",EntryPoint="PostMessageW",ExactSpelling=true)] public static extern bool PostMessageW(IntPtr h,uint m,IntPtr w,IntPtr l);
  delegate bool Callback(IntPtr h,IntPtr p);
  [DllImport("user32.dll")] static extern bool EnumWindows(Callback cb,IntPtr p);
+ [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr parent,Callback cb,IntPtr p);
+ [DllImport("user32.dll")] public static extern bool IsChild(IntPtr parent,IntPtr child);
  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h,StringBuilder b,int n);
  [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h,StringBuilder b,int n);
- public static IntPtr Palette(uint pid){return Find(pid,"ghostty-palette");} public static IntPtr Dialog(uint pid){return Find(pid,"#32770");} static IntPtr Find(uint pid,string windowClass){IntPtr found=IntPtr.Zero;EnumWindows((h,p)=>{uint owner;GetWindowThreadProcessId(h,out owner);var b=new StringBuilder(128);GetClassName(h,b,128);if(owner==pid&&b.ToString()==windowClass)found=h;return true;},IntPtr.Zero);return found;}
+ public static IntPtr Palette(uint pid){return Find(pid,"ghostty-palette");} public static IntPtr Dialog(uint pid){return Find(pid,"#32770");} static IntPtr Find(uint pid,string windowClass){IntPtr found=IntPtr.Zero;Callback inspect=(h,p)=>{var b=new StringBuilder(128);GetClassName(h,b,128);if(b.ToString()==windowClass)found=h;return true;};EnumWindows((h,p)=>{uint owner;GetWindowThreadProcessId(h,out owner);if(owner==pid){inspect(h,p);EnumChildWindows(h,inspect,IntPtr.Zero);}return true;},IntPtr.Zero);return found;}
  public static string Title(IntPtr h){var b=new StringBuilder(512);GetWindowText(h,b,512);return b.ToString();}
 }
 '@
@@ -77,6 +79,15 @@ function Assert-BarSpace($H){
   Assert ($point.y -le $client.bottom-$height) 'Terminal overlaps the session bar'
  }
 }
+function Assert-EmbeddedPicker($Picker,$Window){
+ Assert ([SessionNative]::IsChild($Window,$Picker)) 'Session picker is a separate popup'
+ $client=New-Object SessionNative+Rect;[void][SessionNative]::GetClientRect($Window,[ref]$client)
+ $rect=New-Object TabNative+Rect;[void][TabNative]::GetWindowRect($Picker,[ref]$rect)
+ $origin=New-Object TabNative+Point;$origin.x=$rect.left;$origin.y=$rect.top;[void][TabNative]::ScreenToClient($Window,[ref]$origin)
+ $bar=[int](26*[TabNative]::GetDpiForWindow($Window)/96)
+ Assert ($origin.x -eq 0 -and $rect.right-$rect.left -eq $client.right) 'Picker does not fill the terminal width'
+ Assert ($origin.y -ge 0 -and $origin.y+$rect.bottom-$rect.top -eq $client.bottom-$bar) 'Picker overlaps tabs or session bar'
+}
 function Screenshot($H,[string]$Name){$r=New-Object TabNative+Rect;[void][TabNative]::GetWindowRect($H,[ref]$r);$bitmap=[Drawing.Bitmap]::new($r.right-$r.left,$r.bottom-$r.top);$g=[Drawing.Graphics]::FromImage($bitmap);try{if($PostedKeys){$dc=$g.GetHdc();try{[void][SessionNative]::PrintWindow($H,$dc,2)}finally{$g.ReleaseHdc($dc)}}else{$g.CopyFromScreen($r.left,$r.top,0,0,$bitmap.Size)};$bitmap.Save("$dir/$Name.png")}finally{$g.Dispose();$bitmap.Dispose()}}
 $gui=$null
 try{
@@ -86,6 +97,7 @@ try{
  $first=@(Mux @('list')|ConvertFrom-Json)[0]
  Key $window 0x75 # F6 rename current
  $picker=Palette
+ Assert-EmbeddedPicker $picker $window
  SendText $picker 'Backend 日本語';Screenshot $picker 'rename-edit';Key $picker 0x0D
  Mux @('list') | Set-Content "$dir/after-rename.json"
  if([TabNative]::IsWindow($picker)){Screenshot $picker 'rename-result'}
@@ -109,7 +121,13 @@ try{
  [void][TabNative]::SetForegroundWindow($window)
  Start-Sleep -Milliseconds 200
  if($PostedKeys){Key $window 0x72}else{[SessionNative]::OpenDefaultPicker($window)} # Actual default Ctrl+Shift+S in interactive mode
- $picker=Palette;Screenshot $picker 'sessions'
+ $picker=Palette;Assert-EmbeddedPicker $picker $window;Screenshot $picker 'sessions'
+ $original=New-Object TabNative+Rect;[void][TabNative]::GetWindowRect($window,[ref]$original)
+ [void][TabNative]::SetWindowPos($window,0,0,0,1000,700,0x16);Start-Sleep -Milliseconds 150
+ Assert-EmbeddedPicker $picker $window;Screenshot $picker 'sessions-resized'
+ [void][TabNative]::SetWindowPos($window,0,0,0,($original.right-$original.left),($original.bottom-$original.top),0x16);Start-Sleep -Milliseconds 150
+ Assert-EmbeddedPicker $picker $window
+ Key $window 0x70;Assert-EmbeddedPicker $picker $window;Screenshot $picker 'sessions-fullscreen';Key $window 0x70
  Key $picker 0x28;Key $picker 0x0D # Down, Enter -> Frontend
  Wait-For {[SessionNative]::Title($window).Contains("SESSION_PID=$($second.shell_pid)")} 'Arrow navigation selected wrong session'
  Key $window 0x7A;Key $window 0x7B # Remapped prefix F11, F12

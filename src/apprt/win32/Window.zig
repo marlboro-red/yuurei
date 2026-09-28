@@ -833,7 +833,7 @@ pub fn performSessionAction(self: *Window, action: @FieldType(input.Binding.Acti
         return true;
     }
     if (self.palette) |palette| palette.destroy();
-    const palette = try CommandPalette.create(self.app.core_app.alloc, self);
+    const palette = try CommandPalette.createSessions(self.app.core_app.alloc, self);
     self.palette = palette;
     palette.showSessions();
     if (action == .rename) palette.renameSession(surface.core_surface.io.backend.mux.name);
@@ -1469,6 +1469,9 @@ pub fn focusSurface(self: *Window, surface: *Surface) void {
 /// Position every GL host of the active tab according to the split
 /// tree's spatial layout within the terminal area (below the strip).
 pub fn layoutActiveTab(self: *Window) void {
+    defer if (self.palette) |palette| {
+        if (palette.embedded) palette.layout();
+    };
     session.changed(self.app);
     const tab = self.activeTab() orelse return;
     self.refreshSessionBar(false);
@@ -1538,7 +1541,7 @@ pub fn layoutActiveTab(self: *Window) void {
 /// Queue a render on every surface of the active tab. Used after a
 /// resize: an idle (unfocused, output-less) surface presents no frame
 /// on its own, so newly exposed regions would keep stale pixels.
-fn refreshActiveTab(self: *Window) void {
+pub fn refreshActiveTab(self: *Window) void {
     const tab = self.activeTab() orelse return;
     var it = tab.tree.iterator();
     while (it.next()) |entry| {
@@ -1851,7 +1854,7 @@ pub fn refreshSessionBar(self: *Window, force: bool) void {
     self.invalidateSessionBar();
 }
 
-fn sessionBarHeight(self: *Window) i32 {
+pub fn sessionBarHeight(self: *Window) i32 {
     if (self.session_bar.pending != null or self.session_bar.failed) return self.scale(26);
     const tab = self.activeTab() orelse return 0;
     var iterator = tab.tree.iterator();
@@ -3581,6 +3584,12 @@ pub fn wndProc(
         },
 
         winapi.WM_SETFOCUS, winapi.WM_KILLFOCUS => {
+            if (msg == winapi.WM_SETFOCUS) {
+                if (self.palette) |palette| if (palette.embedded) {
+                    _ = winapi.SetFocus(palette.hwnd);
+                    return 0;
+                };
+            }
             if (self.activeSurface()) |surface| {
                 surface.core_surface.focusCallback(msg == winapi.WM_SETFOCUS) catch |err| {
                     log.err("error in focus callback err={}", .{err});

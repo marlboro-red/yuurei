@@ -2,7 +2,8 @@
 /// with a typed filter and a selectable list of commands from the
 /// `command-palette-entry` config (defaults to every named binding
 /// action). Enter or click performs the selected command on the
-/// window's focused surface; Escape or focus loss dismisses.
+/// window's focused surface; Escape or focus loss dismisses. Session mode
+/// is an embedded terminal-area view and stays open across focus changes.
 const CommandPalette = @This();
 
 const std = @import("std");
@@ -21,8 +22,10 @@ pub const class_name = std.unicode.utf8ToUtf16LeStringLiteral("ghostty-palette")
 /// The window the palette is summoned over.
 window: *Window,
 
-/// The popup window.
+/// The popup or embedded child window.
 hwnd: winapi.HWND,
+/// Session navigation occupies the terminal area as a child view.
+embedded: bool = false,
 
 /// The typed filter, as WM_CHAR delivered it (UTF-16).
 filter: std.ArrayList(u16) = .empty,
@@ -60,14 +63,22 @@ const max_visible_rows: usize = 8;
 const filter_max_units: usize = 512 / 3;
 
 pub fn create(alloc: Allocator, window: *Window) !*CommandPalette {
+    return createView(alloc, window, false);
+}
+
+pub fn createSessions(alloc: Allocator, window: *Window) !*CommandPalette {
+    return createView(alloc, window, true);
+}
+
+fn createView(alloc: Allocator, window: *Window, embedded: bool) !*CommandPalette {
     const self = try alloc.create(CommandPalette);
     errdefer alloc.destroy(self);
 
     const hwnd = winapi.CreateWindowExW(
-        winapi.WS_EX_TOOLWINDOW,
+        if (embedded) 0 else winapi.WS_EX_TOOLWINDOW,
         class_name,
         std.unicode.utf8ToUtf16LeStringLiteral(""),
-        winapi.WS_POPUP,
+        if (embedded) winapi.WS_CHILD | winapi.WS_CLIPSIBLINGS else winapi.WS_POPUP,
         0,
         0,
         1,
@@ -79,7 +90,7 @@ pub fn create(alloc: Allocator, window: *Window) !*CommandPalette {
     ) orelse return error.CreateWindowFailed;
     errdefer _ = winapi.DestroyWindow(hwnd);
 
-    self.* = .{ .window = window, .hwnd = hwnd, .session_arena = .init(alloc) };
+    self.* = .{ .window = window, .hwnd = hwnd, .embedded = embedded, .mode = if (embedded) .sessions else .commands, .session_arena = .init(alloc) };
     _ = winapi.SetWindowLongPtrW(
         hwnd,
         winapi.GWLP_USERDATA,
@@ -102,6 +113,7 @@ pub fn destroy(self: *CommandPalette) void {
     if (self.font_desc) |f| _ = winapi.DeleteObject(f);
     _ = winapi.SetWindowLongPtrW(self.hwnd, winapi.GWLP_USERDATA, 0);
     _ = winapi.DestroyWindow(self.hwnd);
+    if (self.embedded) self.window.refreshActiveTab();
     self.filter.deinit(alloc);
     self.matches.deinit(alloc);
     self.session_arena.deinit();
@@ -424,15 +436,32 @@ fn refilter(self: *CommandPalette) void {
 }
 
 fn visibleRows(self: *const CommandPalette) usize {
+    if (self.embedded) {
+        var client: winapi.RECT = undefined;
+        _ = winapi.GetClientRect(self.window.hwnd, &client);
+        const room = client.bottom - self.window.titlebarHeight() - self.window.sessionBarHeight() - self.window.scale(input_height_logical + 30);
+        const rows: usize = @intCast(@max(1, @divTrunc(room, self.window.scale(row_height_logical))));
+        return @min(self.matches.items.len, rows);
+    }
     return @min(self.matches.items.len, max_visible_rows);
 }
 
 /// Size and position the popup over the parent: centered horizontally,
 /// just below the title strip, shrinking with the match count.
-fn layout(self: *CommandPalette) void {
+pub fn layout(self: *CommandPalette) void {
     const window = self.window;
     var client: winapi.RECT = undefined;
     _ = winapi.GetClientRect(window.hwnd, &client);
+    if (self.embedded) {
+        const top = window.titlebarHeight();
+        _ = winapi.SetWindowPos(self.hwnd, null, 0, top, @max(1, client.right), @max(1, client.bottom - top - window.sessionBarHeight()), winapi.SWP_NOACTIVATE);
+        if (self.matches.items.len > 0) {
+            self.scroll = @min(self.scroll, self.selected);
+            if (self.selected >= self.scroll + self.visibleRows()) self.scroll = self.selected - self.visibleRows() + 1;
+        }
+        _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+        return;
+    }
     var origin: winapi.POINT = .{ .x = 0, .y = 0 };
     _ = winapi.ClientToScreen(window.hwnd, &origin);
 
@@ -489,7 +518,7 @@ fn ensureFonts(self: *CommandPalette) void {
     if (self.font_dpi == dpi and self.font_title != null) return;
     if (self.font_title) |f| _ = winapi.DeleteObject(f);
     if (self.font_desc) |f| _ = winapi.DeleteObject(f);
-    const face = std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI");
+    const face = if (self.embedded) std.unicode.utf8ToUtf16LeStringLiteral("Consolas") else std.unicode.utf8ToUtf16LeStringLiteral("Segoe UI");
     self.font_title = winapi.CreateFontW(-self.window.scale(13), 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 5, 0, face);
     self.font_desc = winapi.CreateFontW(-self.window.scale(10), 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 5, 0, face);
     self.font_dpi = dpi;
@@ -501,11 +530,13 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
     _ = winapi.GetClientRect(self.hwnd, &client);
 
     const light = window.isLight();
-    const bg: u32 = if (light) 0x00F5F5F5 else 0x001F1F1F;
-    const select_bg: u32 = if (light) 0x00DDDDDD else 0x00383838;
+    const terminal_bg = window.app.config.background;
+    const terminal_fg = window.app.config.foreground;
+    const bg: u32 = if (self.embedded) @as(u32, terminal_bg.b) << 16 | @as(u32, terminal_bg.g) << 8 | terminal_bg.r else if (light) 0x00F5F5F5 else 0x001F1F1F;
+    const fg: u32 = if (self.embedded) @as(u32, terminal_fg.b) << 16 | @as(u32, terminal_fg.g) << 8 | terminal_fg.r else if (light) 0x00000000 else 0x00FFFFFF;
+    const select_bg: u32 = if (self.embedded) fg else if (light) 0x00DDDDDD else 0x00383838;
     const border: u32 = if (light) 0x00B0B0B0 else 0x00484848;
-    const fg: u32 = if (light) 0x00000000 else 0x00FFFFFF;
-    const fg_dim: u32 = if (light) 0x00505050 else 0x00A0A0A0;
+    const fg_dim: u32 = if (self.embedded) fg else if (light) 0x00505050 else 0x00A0A0A0;
 
     const bg_brush = winapi.CreateSolidBrush(bg) orelse return;
     defer _ = winapi.DeleteObject(bg_brush);
@@ -541,7 +572,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
                     _ = winapi.FillRect(hdc, &text_rect, brush);
                 }
             }
-            _ = winapi.SetTextColor(hdc, fg);
+            _ = winapi.SetTextColor(hdc, if (self.embedded and self.mode == .rename_session and self.rename_fresh) bg else fg);
             var buf: [512:0]u16 = undefined;
             const n = @min(self.filter.items.len, buf.len - 1);
             @memcpy(buf[0..n], self.filter.items[0..n]);
@@ -603,6 +634,8 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
     // Match rows: title with the description below it, dim.
     const end = @min(self.scroll + self.visibleRows(), self.matches.items.len);
     for (self.matches.items[self.scroll..end], self.scroll..) |cmd_idx, row| {
+        const row_fg = if (self.embedded and row == self.selected) bg else fg;
+        const row_dim = if (self.embedded and row == self.selected) bg else fg_dim;
         var title_buf: [256]u8 = undefined;
         var label_buf: [32]u8 = undefined;
         const cmd = self.entryAt(cmd_idx, &title_buf, &label_buf);
@@ -638,7 +671,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             defer if (old) |o| {
                 _ = winapi.SelectObject(hdc, o);
             };
-            _ = winapi.SetTextColor(hdc, fg);
+            _ = winapi.SetTextColor(hdc, row_fg);
             const n = std.unicode.utf8ToUtf16Le(
                 buf[0 .. buf.len - 1],
                 // Config entry titles are unbounded; cap before the
@@ -667,7 +700,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             defer if (old) |o| {
                 _ = winapi.SelectObject(hdc, o);
             };
-            _ = winapi.SetTextColor(hdc, fg_dim);
+            _ = winapi.SetTextColor(hdc, row_dim);
             var kbuf: [128]u16 = undefined;
             const kn = std.unicode.utf8ToUtf16Le(kbuf[0 .. kbuf.len - 1], label) catch 0;
             if (kn > 0) {
@@ -692,7 +725,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             defer if (old) |o| {
                 _ = winapi.SelectObject(hdc, o);
             };
-            _ = winapi.SetTextColor(hdc, fg_dim);
+            _ = winapi.SetTextColor(hdc, row_dim);
             const n = std.unicode.utf8ToUtf16Le(
                 buf[0 .. buf.len - 1],
                 Window.utf8Capped(cmd.description, buf.len - 1),
@@ -736,10 +769,10 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
     }
 
     // Border.
-    if (winapi.CreateSolidBrush(border)) |b| {
+    if (!self.embedded) if (winapi.CreateSolidBrush(border)) |b| {
         defer _ = winapi.DeleteObject(b);
         _ = winapi.FrameRect(hdc, &client, b);
-    }
+    };
 }
 
 // ---------------------------------------------------------------------
@@ -785,10 +818,10 @@ pub fn wndProc(
                 winapi.VK_F1 + 4 => if (self.mode == .sessions) self.refreshSessions(),
                 winapi.VK_DELETE => self.endSelectedSession(),
                 winapi.VK_PRIOR => self.moveSelection(
-                    -@as(i32, @intCast(max_visible_rows)),
+                    -@as(i32, @intCast(@max(1, self.visibleRows()))),
                 ),
                 winapi.VK_NEXT => self.moveSelection(
-                    @as(i32, @intCast(max_visible_rows)),
+                    @as(i32, @intCast(@max(1, self.visibleRows()))),
                 ),
                 // Ctrl+V pastes clipboard text into the filter.
                 'V' => if (winapi.GetKeyState(winapi.VK_CONTROL) < 0) self.paste(),
@@ -866,7 +899,7 @@ pub fn wndProc(
         },
 
         winapi.WM_KILLFOCUS => {
-            self.destroy();
+            if (!self.embedded) self.destroy();
             return 0;
         },
 

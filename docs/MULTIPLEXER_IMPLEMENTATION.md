@@ -98,7 +98,9 @@ pipe authentication/version checks remain authoritative.
 
 ### Keyboard session navigation and names
 
-**Ctrl+Shift+S** opens the session picker. Type to fuzzy-search names, IDs, or
+**Ctrl+Shift+S** opens the session picker inside the terminal area, above the
+session bar. It follows window resizing and uses the terminal colors and
+monospace text; it is not a separate popup. Type to fuzzy-search names, IDs, or
 PIDs; use **Up/Down**, **Ctrl+P/Ctrl+N**, or **Page Up/Page Down** to navigate.
 **Enter** focuses an existing local pane or attaches a detached session.
 **Delete** ends the selected session, including a detached or exited session,
