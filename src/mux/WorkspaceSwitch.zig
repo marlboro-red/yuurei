@@ -2,6 +2,48 @@
 const std = @import("std");
 const workspace = @import("Workspace.zig");
 
+/// Append an extracted tab to the first destination window and select it.
+/// New arrays belong to alloc; nested data and the empty-target result borrow inputs.
+pub fn appendTab(alloc: std.mem.Allocator, target: workspace.State, selected: workspace.State) !workspace.State {
+    try workspace.validate(target);
+    try validate(selected, &.{});
+    if (selected.windows.len != 1 or selected.windows[0].tabs.len != 1) return error.InvalidWorkspace;
+    if (target.windows.len == 0) return selected;
+    const windows = try alloc.dupe(workspace.Window, target.windows);
+    errdefer alloc.free(windows);
+    const tabs = try alloc.alloc(workspace.Tab, windows[0].tabs.len + 1);
+    errdefer alloc.free(tabs);
+    @memcpy(tabs[0 .. tabs.len - 1], windows[0].tabs);
+    tabs[tabs.len - 1] = selected.windows[0].tabs[0];
+    windows[0].tabs = tabs;
+    windows[0].active = tabs.len - 1;
+    const result: workspace.State = .{ .windows = windows };
+    try validate(result, &.{});
+    return result;
+}
+
+test "mux workspace move appends intact tabs and supports empty destinations" {
+    const t = std.testing;
+    var arena: std.heap.ArenaAllocator = .init(t.allocator);
+    defer arena.deinit();
+    const source_nodes = [_]workspace.Node{.{ .leaf = .{ .session = "source" } }};
+    const target_nodes = [_]workspace.Node{.{ .leaf = .{ .session = "target" } }};
+    const source_tabs = [_]workspace.Tab{.{ .title = "Source", .nodes = &source_nodes, .focused = 0, .zoomed = 0 }};
+    const target_tabs = [_]workspace.Tab{.{ .title = "Target", .nodes = &target_nodes, .focused = 0 }};
+    const source_windows = [_]workspace.Window{.{ .tabs = &source_tabs, .active = 0 }};
+    const target_windows = [_]workspace.Window{.{ .tabs = &target_tabs, .active = 0 }};
+    const source: workspace.State = .{ .windows = &source_windows };
+    const result = try appendTab(arena.allocator(), .{ .windows = &target_windows }, source);
+    try t.expectEqual(@as(usize, 2), result.windows[0].tabs.len);
+    try t.expectEqual(@as(usize, 1), result.windows[0].active);
+    try t.expectEqualStrings("Target", result.windows[0].tabs[0].title);
+    try t.expectEqualStrings("Source", result.windows[0].tabs[1].title);
+    try t.expectEqual(@as(?u16, 0), result.windows[0].tabs[1].zoomed);
+    const empty = try appendTab(arena.allocator(), .{ .windows = &.{} }, source);
+    try t.expectEqualStrings("Source", empty.windows[0].tabs[0].title);
+    try t.expectError(error.DuplicateSession, appendTab(arena.allocator(), source, source));
+}
+
 /// Partition one tab without copying terminal state or duplicating shell IDs.
 /// The returned arrays belong to alloc; nested tab data borrows from source.
 pub fn extract(alloc: std.mem.Allocator, source: workspace.State, window_index: usize, tab_index: usize) !struct { remaining: workspace.State, selected: workspace.State } {

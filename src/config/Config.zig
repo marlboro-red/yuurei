@@ -7187,6 +7187,7 @@ pub const Keybinds = struct {
         if (comptime builtin.os.tag == .windows) {
             try self.set.put(alloc, .{ .key = .{ .unicode = 's' }, .mods = .{ .ctrl = true, .shift = true } }, .{ .session = .list });
             try self.set.put(alloc, .{ .key = .{ .unicode = 'n' }, .mods = .{ .ctrl = true, .alt = true, .shift = true } }, .{ .session = .workspace_new });
+            try self.set.put(alloc, .{ .key = .{ .unicode = 'm' }, .mods = .{ .ctrl = true, .alt = true, .shift = true } }, .{ .session = .workspace_move });
             try self.set.put(alloc, .{ .key = .{ .physical = .page_down }, .mods = .{ .ctrl = true, .alt = true } }, .{ .session = .workspace_next });
             try self.set.put(alloc, .{ .key = .{ .physical = .page_up }, .mods = .{ .ctrl = true, .alt = true } }, .{ .session = .workspace_previous });
             try self.set.put(alloc, .{ .key = .{ .physical = .backspace }, .mods = .{ .ctrl = true, .alt = true } }, .{ .session = .workspace_last });

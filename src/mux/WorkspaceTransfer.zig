@@ -161,3 +161,23 @@ test "mux workspace transfer retains its journal when the source replacement fai
     defer catalog.deinit(t.allocator, entries);
     try t.expectEqual(@as(usize, 2), entries.len);
 }
+
+test "mux workspace move rollback restores an existing destination" {
+    const t = std.testing;
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(t.io, ".", t.allocator);
+    defer t.allocator.free(dir);
+    const before = "{\"version\":2,\"windows\":[{\"tabs\":[{\"title\":\"keep\",\"nodes\":[{\"leaf\":{\"session\":\"original\"}}],\"focused\":0}],\"active\":0}]}";
+    const empty = "{\"version\":2,\"windows\":[]}";
+    try apply(t.io, t.allocator, dir, .{ .source = "source", .target = "target", .source_data = empty, .target_data = empty });
+    try apply(t.io, t.allocator, dir, .{ .source = "source", .target = "target", .source_data = empty, .target_data = before });
+    const file = try catalog.filename(t.allocator, "target");
+    defer t.allocator.free(file);
+    const restored = try tmp.dir.readFileAlloc(t.io, file, t.allocator, .limited(4096));
+    defer t.allocator.free(restored);
+    try t.expectEqualStrings(before, restored);
+    const entries = try catalog.list(t.io, t.allocator, dir);
+    defer catalog.deinit(t.allocator, entries);
+    try t.expectEqual(@as(usize, 2), entries.len);
+}

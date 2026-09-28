@@ -572,6 +572,21 @@ pub fn clearWorkspaceUi(self: *Window, retained: ?*const Tree) void {
     self.hover = .none;
 }
 
+/// Detach views after their complete tab layout has been saved elsewhere.
+pub fn detachWorkspaceTab(self: *Window, index: usize) void {
+    self.clearWorkspaceUi(null);
+    var tab = self.tabs.orderedRemove(index);
+    if (tab.custom_title) |title| self.app.core_app.alloc.free(title);
+    tab.tree.deinit();
+    if (self.tabs.items.len == 0) {
+        self.should_close = true;
+    } else {
+        self.activateTab(@min(index, self.tabs.items.len - 1));
+        self.refreshSessionBar(true);
+        _ = winapi.SetFocus(self.hwnd);
+    }
+}
+
 /// Commit a prepared suffix in the same HWND. No allocation or reparenting.
 pub fn installWorkspaceTabs(self: *Window, first: usize, active: usize) void {
     self.clearWorkspaceUi(null);
@@ -919,7 +934,7 @@ pub fn performSessionAction(self: *Window, action: @FieldType(input.Binding.Acti
         },
         else => {},
     }
-    if (action != .list and action != .workspaces and action != .workspace_new and surface.core_surface.io.backend != .mux) return false;
+    if (action != .list and action != .workspaces and action != .workspace_new and action != .workspace_move and surface.core_surface.io.backend != .mux) return false;
     if (action == .terminate) {
         self.terminateSession(surface);
         return true;
@@ -932,7 +947,8 @@ pub fn performSessionAction(self: *Window, action: @FieldType(input.Binding.Acti
     if (self.palette) |palette| palette.destroy();
     const palette = try CommandPalette.createSessions(self.app.core_app.alloc, self);
     self.palette = palette;
-    if (action == .workspaces or action == .workspace_new) palette.showWorkspaces() else palette.showSessions();
+    if (action == .workspaces or action == .workspace_new or action == .workspace_move) palette.showWorkspaces() else palette.showSessions();
+    if (action == .workspace_move) palette.move_workspace = true;
     if (action == .workspace_new) palette.newWorkspace();
     if (action == .rename) palette.renameSession(surface.core_surface.io.backend.mux.name);
     _ = winapi.SetFocus(palette.hwnd);

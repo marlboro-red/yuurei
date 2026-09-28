@@ -92,6 +92,7 @@ shortcuts settings:
 | Default shortcut | Action | Behavior |
 | --- | --- | --- |
 | Ctrl+Alt+Shift+N | `session:workspace_new` | Open name entry for a workspace from the current tab |
+| Ctrl+Alt+Shift+M | `session:workspace_move` | Choose an existing destination for the current tab |
 | Ctrl+Alt+PageDown | `session:workspace_next` | Switch to the next saved workspace by name |
 | Ctrl+Alt+PageUp | `session:workspace_previous` | Switch to the previous saved workspace by name |
 | Ctrl+Alt+Backspace | `session:workspace_last` | Return to the last active workspace |
@@ -113,6 +114,22 @@ tab. Other tabs and windows remain saved in the original workspace with their
 shells detached and still running. No new shell is launched. Moving the last
 tab leaves an empty source layout. An existing saved name or a name owned by
 another GUI is rejected.
+
+**Move Tab to Workspace** opens an embedded destination picker. Type to filter,
+press **Enter** to send the current tab, or **Escape** to cancel. The tab is
+appended to the destination's first saved window and selected for its next
+restore. Split ratios, pane session IDs, title, focus, and zoom are retained;
+the destination's other tabs and windows are preserved. Empty saved workspaces
+are valid destinations. The source remains active with its other tabs. Moving
+its last tab closes that window, leaving its shells running in the destination.
+No shell is started or terminated by a move.
+
+The destination must not be open in another GUI. Both layouts are locked and
+updated through the same recovery journal used for workspace creation. The
+source views detach only after the paired save succeeds; cancellation restores
+both original layouts, including an existing destination. The current workspace
+cannot be its own destination. Missing, overlapping, nonpersistent, or oversized
+layouts are rejected without detaching the source tab.
 
 Named workspaces use the existing `windows-workspace` setting, or the launch
 argument `--windows-workspace=project-name`. Enable persistent sessions and
@@ -155,6 +172,10 @@ Win32 desktop. It checks round-trip switching, unchanged PIDs, restored input,
 tab/split/zoom state, retained search and pane HWNDs, multi-window reuse, last-tab
 extraction, journal recovery, target ownership conflicts, and missing-session
 failures.
+
+`test/windows/mux-workspace-move.ps1` also checks populated and empty destinations,
+busy ownership, cancellation, refresh mode, split/title/zoom restoration,
+multi-window targets, last-tab closure, shell identity, and keyboard isolation.
 
 ### Persistent panes
 

@@ -42,6 +42,7 @@ selected: usize = 0,
 /// Index into matches of the first visible row.
 scroll: usize = 0,
 mode: enum { commands, sessions, rename_session, workspaces, create_workspace } = .commands,
+move_workspace: bool = false,
 workspace_listing: ?*WorkspaceJob = null,
 workspace_loaded: bool = false,
 workspaces: []session.catalog.Entry = &.{},
@@ -168,6 +169,7 @@ pub fn showSessions(self: *CommandPalette) void {
 }
 
 pub fn showWorkspaces(self: *CommandPalette) void {
+    self.move_workspace = false;
     if (self.preview) |preview| preview.destroy();
     self.preview = null;
     if (self.workspace_listing) |job| job.destroy();
@@ -385,7 +387,9 @@ fn execute(self: *CommandPalette) void {
     if (self.mode == .create_workspace) return self.createWorkspace();
     if (self.mode == .workspaces) {
         if (self.matches.items.len == 0) return;
-        session.beginSwitch(window.app, self.hwnd, self.workspaces[self.matches.items[self.selected]].name) catch |err| {
+        const name = self.workspaces[self.matches.items[self.selected]].name;
+        const result = if (self.move_workspace) session.beginMove(window.app, self.hwnd, name) else session.beginSwitch(window.app, self.hwnd, name);
+        result catch |err| {
             self.workspaceFailed(err);
             return;
         };
@@ -802,7 +806,7 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
             const placeholder = switch (self.mode) {
                 .commands => std.unicode.utf8ToUtf16LeStringLiteral("Type a command\u{2026}"),
                 .sessions, .rename_session => std.unicode.utf8ToUtf16LeStringLiteral("Search sessions\u{2026}"),
-                .workspaces => std.unicode.utf8ToUtf16LeStringLiteral("Search workspaces\u{2026}"),
+                .workspaces => if (self.move_workspace) std.unicode.utf8ToUtf16LeStringLiteral("Move tab to workspace\u{2026}") else std.unicode.utf8ToUtf16LeStringLiteral("Search workspaces\u{2026}"),
                 .create_workspace => std.unicode.utf8ToUtf16LeStringLiteral("New workspace name"),
             };
             _ = winapi.DrawTextW(
@@ -1030,6 +1034,8 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
     if (self.mode != .commands) {
         const hint = self.error_text orelse if (self.mode == .create_workspace)
             "Move current tab to workspace · Enter save · Esc cancel"
+        else if (self.mode == .workspaces and self.move_workspace)
+            "Enter move tab · F5 refresh · Esc cancel"
         else if (self.mode == .workspaces)
             "Enter switch · F2 workspace from tab · F5 refresh · F6 sessions · Esc close"
         else if (self.mode == .rename_session)
@@ -1129,8 +1135,12 @@ pub fn wndProc(
                     } else self.filter.clearRetainingCapacity();
                     self.refilter();
                 },
-                winapi.VK_F1 + 1 => if (self.mode == .sessions and self.matches.items.len > 0) self.renameSession(self.sessions[self.matches.items[self.selected]].name) else if (self.mode == .workspaces) self.newWorkspace(),
-                winapi.VK_F1 + 4 => if (self.mode == .sessions) self.refreshSessions() else if (self.mode == .workspaces) self.showWorkspaces(),
+                winapi.VK_F1 + 1 => if (self.mode == .sessions and self.matches.items.len > 0) self.renameSession(self.sessions[self.matches.items[self.selected]].name) else if (self.mode == .workspaces and !self.move_workspace) self.newWorkspace(),
+                winapi.VK_F1 + 4 => if (self.mode == .sessions) self.refreshSessions() else if (self.mode == .workspaces) {
+                    const moving = self.move_workspace;
+                    self.showWorkspaces();
+                    self.move_workspace = moving;
+                },
                 winapi.VK_F1 + 5 => if (self.mode == .sessions) self.showWorkspaces() else if (self.mode == .workspaces) {
                     session.cancelSwitch(self.window.app);
                     self.showSessions();

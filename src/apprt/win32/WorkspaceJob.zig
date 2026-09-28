@@ -24,6 +24,8 @@ entries: ?[]session.catalog.Entry = null,
 target: ?[]const u8 = null,
 direction: ?session.catalog.Direction = null,
 create_new: bool = false,
+move_tab: bool = false,
+original_target_data: ?[]const u8 = null,
 source_window: usize = 0,
 source_tab: usize = 0,
 owner: ?w.HWND = null,
@@ -62,6 +64,7 @@ pub fn destroy(self: *Self) void {
     if (self.source_name) |value| alloc.free(value);
     if (self.source_path) |value| alloc.free(value);
     if (self.source_data) |value| alloc.free(value);
+    if (self.original_target_data) |value| alloc.free(value);
     alloc.destroy(self);
 }
 fn run(self: *Self) void {
@@ -84,7 +87,7 @@ fn rollbackTransfer(self: *Self) !void {
         .source = self.source_name.?,
         .target = self.target.?,
         .source_data = self.source_data.?,
-        .target_data = null,
+        .target_data = self.original_target_data,
     });
 }
 fn work(self: *Self) !void {
@@ -121,14 +124,16 @@ fn work(self: *Self) !void {
             .split => {},
         };
     };
-    self.prepared = if (self.create_new) try session.prepareCreate(alloc, target) else try session.prepareSwitch(alloc, target, ids[0..count]);
-    if (self.create_new) {
+    self.prepared = if (self.create_new) try session.prepareCreate(alloc, target) else if (self.move_tab) try session.prepareMove(alloc, target, ids[0..count]) else try session.prepareSwitch(alloc, target, ids[0..count]);
+    if (self.create_new or self.move_tab) {
         var arena: std.heap.ArenaAllocator = .init(alloc);
         defer arena.deinit();
         const a = arena.allocator();
         const extraction = try @import("../../mux/WorkspaceSwitch.zig").extract(a, parsed.value, self.source_window, self.source_tab);
         const source_data = try std.json.Stringify.valueAlloc(a, extraction.remaining, .{});
-        const target_data = try std.json.Stringify.valueAlloc(a, extraction.selected, .{});
+        if (self.move_tab) self.original_target_data = try std.json.Stringify.valueAlloc(alloc, self.prepared.?.layout.value, .{});
+        const target_layout = if (self.move_tab) try @import("../../mux/WorkspaceSwitch.zig").appendTab(a, self.prepared.?.layout.value, extraction.selected) else extraction.selected;
+        const target_data = try std.json.Stringify.valueAlloc(a, target_layout, .{});
         const directory = std.fs.path.dirname(self.source_path.?) orelse return error.WorkspaceUnavailable;
         if (self.cancelled.load(.acquire)) return error.Cancelled;
         self.transfer_started = true;

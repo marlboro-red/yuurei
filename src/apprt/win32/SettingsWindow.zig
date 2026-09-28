@@ -211,12 +211,12 @@ pub fn create(alloc: Allocator, window: *Window) !*SettingsWindow {
 }
 
 const shortcut_actions = [_][]const u8{
-    "new_tab",               "new_window",             "close_surface",              "close_tab",              "copy_to_clipboard",  "paste_from_clipboard",
-    "new_split:right",       "new_split:down",         "goto_split:left",            "goto_split:right",       "goto_split:up",      "goto_split:down",
-    "toggle_split_zoom",     "equalize_splits",        "goto_tab:next",              "goto_tab:previous",      "toggle_fullscreen",  "increase_font_size:1",
-    "decrease_font_size:1",  "reset_font_size",        "clear_screen",               "toggle_command_palette", "open_config",        "reload_config",
-    "session:list",          "session:rename",         "session:detach",             "session:terminate",      "session:workspaces", "ignore",
-    "session:workspace_new", "session:workspace_next", "session:workspace_previous", "session:workspace_last",
+    "new_tab",               "new_window",             "close_surface",              "close_tab",              "copy_to_clipboard",      "paste_from_clipboard",
+    "new_split:right",       "new_split:down",         "goto_split:left",            "goto_split:right",       "goto_split:up",          "goto_split:down",
+    "toggle_split_zoom",     "equalize_splits",        "goto_tab:next",              "goto_tab:previous",      "toggle_fullscreen",      "increase_font_size:1",
+    "decrease_font_size:1",  "reset_font_size",        "clear_screen",               "toggle_command_palette", "open_config",            "reload_config",
+    "session:list",          "session:rename",         "session:detach",             "session:terminate",      "session:workspaces",     "ignore",
+    "session:workspace_new", "session:workspace_next", "session:workspace_previous", "session:workspace_last", "session:workspace_move",
 };
 
 fn layoutShortcuts(self: *SettingsWindow) void {

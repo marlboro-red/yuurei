@@ -59,16 +59,20 @@ pub const PreparedWorkspace = struct {
 /// current_ids must be an owned snapshot when called from a worker. The UI
 /// must reject completion if its workspace/layout generation changed meanwhile.
 pub fn prepareSwitch(alloc: std.mem.Allocator, name: []const u8, current_ids: []const []const u8) !PreparedWorkspace {
-    return prepareTarget(alloc, name, current_ids, false);
+    return prepareTarget(alloc, name, current_ids, false, false);
+}
+
+pub fn prepareMove(alloc: std.mem.Allocator, name: []const u8, current_ids: []const []const u8) !PreparedWorkspace {
+    return prepareTarget(alloc, name, current_ids, false, true);
 }
 
 /// Reserve a previously unused workspace identity without publishing a layout.
 /// Cancelling releases the lock; no shell or saved workspace has been created.
 pub fn prepareCreate(alloc: std.mem.Allocator, name: []const u8) !PreparedWorkspace {
-    return prepareTarget(alloc, name, &.{}, true);
+    return prepareTarget(alloc, name, &.{}, true, false);
 }
 
-fn prepareTarget(alloc: std.mem.Allocator, name: []const u8, current_ids: []const []const u8, create: bool) !PreparedWorkspace {
+fn prepareTarget(alloc: std.mem.Allocator, name: []const u8, current_ids: []const []const u8, create: bool, allow_empty: bool) !PreparedWorkspace {
     if (!catalog.validName(name)) return error.InvalidWorkspaceName;
     try recoverTransfers(alloc);
     const base = try global.environ().getAlloc(alloc, "LOCALAPPDATA");
@@ -99,7 +103,11 @@ fn prepareTarget(alloc: std.mem.Allocator, name: []const u8, current_ids: []cons
     // Own every string independently of the temporary file buffer.
     const parsed = try std.json.parseFromSlice(workspace.State, alloc, data, .{ .allocate = .alloc_always });
     errdefer parsed.deinit();
-    if (!create) try @import("../../mux/WorkspaceSwitch.zig").validate(parsed.value, current_ids);
+    if (!create) {
+        if (allow_empty and parsed.value.windows.len == 0) {
+            try workspace.validate(parsed.value);
+        } else try @import("../../mux/WorkspaceSwitch.zig").validate(parsed.value, current_ids);
+    }
     return .{ .alloc = alloc, .name = try alloc.dupe(u8, name), .lock = lock, .layout = parsed };
 }
 
@@ -229,19 +237,24 @@ pub fn writeSaved(alloc: std.mem.Allocator, path: []const u8, name: []const u8, 
 }
 
 pub fn beginSwitch(app: *App, hwnd: w.HWND, name: []const u8) !void {
-    return beginWorkspace(app, hwnd, name, false, null);
+    return beginWorkspace(app, hwnd, name, false, false, null);
+}
+
+pub fn beginMove(app: *App, hwnd: w.HWND, name: []const u8) !void {
+    if (!app.config.@"windows-persistent-sessions" or !app.config.@"windows-restore-session") return error.WorkspacePersistenceDisabled;
+    return beginWorkspace(app, hwnd, name, false, true, null);
 }
 
 pub fn beginNavigation(app: *App, hwnd: w.HWND, direction: catalog.Direction) !void {
-    return beginWorkspace(app, hwnd, null, false, direction);
+    return beginWorkspace(app, hwnd, null, false, false, direction);
 }
 
 pub fn beginCreate(app: *App, hwnd: w.HWND, name: []const u8) !void {
     if (!app.config.@"windows-persistent-sessions" or !app.config.@"windows-restore-session") return error.WorkspacePersistenceDisabled;
-    return beginWorkspace(app, hwnd, name, true, null);
+    return beginWorkspace(app, hwnd, name, true, false, null);
 }
 
-fn beginWorkspace(app: *App, hwnd: w.HWND, name: ?[]const u8, create: bool, direction: ?catalog.Direction) !void {
+fn beginWorkspace(app: *App, hwnd: w.HWND, name: ?[]const u8, create: bool, move: bool, direction: ?catalog.Direction) !void {
     if (name) |value| if (!catalog.validName(value)) return error.InvalidWorkspaceName;
     if (app.workspace_job != null) return error.WorkspaceSwitchInProgress;
     if (name) |value| if (std.mem.eql(u8, app.workspace_name orelse "default", value)) return error.WorkspaceAlreadyActive;
@@ -250,6 +263,7 @@ fn beginWorkspace(app: *App, hwnd: w.HWND, name: ?[]const u8, create: bool, dire
     const job = try Job.create(hwnd);
     errdefer job.destroy();
     job.create_new = create;
+    job.move_tab = move;
     job.direction = direction;
     var saved_index: usize = 0;
     const owner = for (app.windows.items) |window| {
@@ -326,6 +340,18 @@ fn reportFailure(app: *App, hwnd: w.HWND, failure: anyerror) void {
 }
 
 fn commitSwitch(app: *App, job: *@import("WorkspaceJob.zig")) !void {
+    if (job.move_tab) {
+        const owner = for (app.windows.items) |window| {
+            if (window.hwnd == job.owner) break window;
+        } else return error.WorkspaceChanged;
+        if (job.source_tab >= owner.tabs.items.len) return error.WorkspaceChanged;
+        app.session_restoring = true;
+        defer app.session_restoring = false;
+        owner.detachWorkspaceTab(job.source_tab);
+        app.workspace_generation +%= 1;
+        job.accepted.store(true, .release);
+        return;
+    }
     const prepared = &job.prepared.?;
     const name = try app.core_app.alloc.dupe(u8, prepared.name);
     errdefer app.core_app.alloc.free(name);
