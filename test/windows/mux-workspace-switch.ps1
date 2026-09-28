@@ -91,9 +91,64 @@ try {
  $window=[TabNative]::Windows($gui.Id)[0]
  $saved=Get-Content $alphaPath -Raw|ConvertFrom-Json
  Assert (($saved.windows[0].tabs|ConvertTo-Json -Depth 12 -Compress) -eq ($alpha.windows[0].tabs|ConvertTo-Json -Depth 12 -Compress)) 'Switch lost alpha tab layout'
+ # Create from the embedded list. Empty/duplicate names must not change views.
+ Key $window 0x7B
+ Wait-For {[WorkspacePicker]::Find($window) -ne 0} 'Workspace picker missing before create'
+ $picker=[WorkspacePicker]::Find($window);Start-Sleep -Milliseconds 500
+ foreach($ch in 'alpha'.ToCharArray()){[void][WorkspacePicker]::Post($picker,0x102,[int]$ch,0)}
+ Key $picker 0x71;Key $picker 0x0D;Start-Sleep -Milliseconds 200
+ Assert ([TabNative]::Windows($gui.Id)[0] -eq $window) 'Empty name changed workspace'
+ foreach($ch in 'alpha'.ToCharArray()){[void][WorkspacePicker]::Post($picker,0x102,[int]$ch,0)}
+ Key $picker 0x0D;Start-Sleep -Milliseconds 500
+ Assert ([TabNative]::Windows($gui.Id)[0] -eq $window) 'Duplicate name changed workspace'
+ Assert (@(Mux @('workspaces')|ConvertFrom-Json).Count -eq 2) 'Duplicate create changed catalog'
+ Key $picker 0x1B
+ # Cancellation keeps the alpha filter/selection: Enter still switches to it.
+ Key $picker 0x0D
+ Wait-For {[TabNative]::Windows($gui.Id)[0] -ne $window} 'Create cancellation lost the previous selection'
+ $window=[TabNative]::Windows($gui.Id)[0]
+ Key $window 0x7B
+ Wait-For {[WorkspacePicker]::Find($window) -ne 0} 'Picker missing before new workspace'
+ $picker=[WorkspacePicker]::Find($window);Start-Sleep -Milliseconds 500;Key $picker 0x71
+ foreach($ch in 'cancelled'.ToCharArray()){[void][WorkspacePicker]::Post($picker,0x102,[int]$ch,0)}
+ [void][WorkspacePicker]::Post($picker,0x100,0x0D,0)
+ [void][WorkspacePicker]::Post($picker,0x100,0x1B,0)
+ Start-Sleep -Milliseconds 500
+ Assert ([TabNative]::Windows($gui.Id)[0] -eq $window) 'Cancelled creation replaced current views'
+ Assert (!(Test-Path (LayoutPath 'cancelled'))) 'Cancelled creation published a workspace'
+ Assert (@(Mux @('list')|ConvertFrom-Json).Count -eq 4) 'Cancelled creation started a shell'
+ Key $picker 0x71
+ foreach($ch in 'gamma 日本'.ToCharArray()){[void][WorkspacePicker]::Post($picker,0x102,[int]$ch,0)}
+ Key $picker 0x0D
+ Wait-For {[TabNative]::Windows($gui.Id).Count -eq 1 -and [TabNative]::Windows($gui.Id)[0] -ne $window} 'New workspace did not open'
+ $window=[TabNative]::Windows($gui.Id)[0]
+ $gammaPath=LayoutPath 'gamma 日本'
+ Wait-For {(Test-Path "$gammaPath.name") -and @(Get-ChildItem "$dir/*.started").Count -eq 5} 'New workspace was not saved or did not start a shell'
+ $gamma=Get-Content $gammaPath -Raw|ConvertFrom-Json
+ Assert ($gamma.windows.Count -eq 1 -and $gamma.windows[0].tabs.Count -eq 1) 'New workspace layout incorrect'
+ $live=@(@(Mux @('list')|ConvertFrom-Json).shell_pid|Sort-Object)
+ Assert ($live.Count -eq 5 -and @($ids|Where-Object {$_ -notin $live}).Count -eq 0) 'Creation replaced existing shells'
+ $ids=$live
+ Key $window 0x72
+ Wait-For {@(Get-ChildItem "$dir/*.input").Count -eq 2} 'New workspace input failed'
+ foreach($inputFile in Get-ChildItem "$dir/*.input"){Assert ((Get-Content $inputFile.FullName -Raw) -match '^x\r?\n$') 'Picker keystrokes leaked into a shell'}
+ SelectWorkspace $window 'alpha'
+ Wait-For {[TabNative]::Windows($gui.Id)[0] -ne $window} 'Could not switch back after creation'
+ $window=[TabNative]::Windows($gui.Id)[0]
+ Assert (@([TabNative]::Hosts($window,$true)).Count -eq 1) 'Creation lost source zoom'
+ SelectWorkspace $window 'beta'
+ Wait-For {[TabNative]::Windows($gui.Id)[0] -ne $window} 'Could not return to beta after creation'
+ $window=[TabNative]::Windows($gui.Id)[0]
  # Another GUI owns alpha: beta must remain intact and its picker must stay open.
  $peer=Launch 'alpha'
  Wait-For {[TabNative]::Windows($peer.Id).Count -eq 1} 'Peer window missing'
+ Key $window 0x7B
+ Wait-For {[WorkspacePicker]::Find($window) -ne 0} 'Picker missing before busy create'
+ $picker=[WorkspacePicker]::Find($window);Start-Sleep -Milliseconds 500;Key $picker 0x71
+ foreach($ch in 'alpha'.ToCharArray()){[void][WorkspacePicker]::Post($picker,0x102,[int]$ch,0)}
+ Key $picker 0x0D;Start-Sleep -Milliseconds 500
+ Assert ([TabNative]::Windows($gui.Id)[0] -eq $window) 'Busy creation discarded source'
+ Key $picker 0x1B;Key $picker 0x1B
  SelectWorkspace $window 'alpha';Start-Sleep -Milliseconds 700
  Assert ([TabNative]::Windows($gui.Id)[0] -eq $window -and [WorkspacePicker]::Find($window) -ne 0) 'Busy workspace discarded current views'
  Key ([WorkspacePicker]::Find($window)) 0x1B
@@ -133,9 +188,9 @@ try {
  Start-Sleep -Milliseconds 300
  SelectWorkspace $window 'alpha';Start-Sleep -Milliseconds 700
  Assert ([TabNative]::Windows($gui.Id)[0] -eq $window -and [WorkspacePicker]::Find($window) -ne 0) 'Missing session discarded current views'
- Assert (@(Mux @('list')|ConvertFrom-Json).Count -eq 3) 'Missing shell was resurrected'
+ Assert (@(Mux @('list')|ConvertFrom-Json).Count -eq 4) 'Missing shell was resurrected'
  Key ([WorkspacePicker]::Find($window)) 0x1B
- Write-Output "PASS: workspace discovery, keyboard switching, original PIDs, input, split/title/zoom preservation, cancellation, close during preparation, F6 navigation, busy target and partial-attachment rollback. Artifacts: $dir"
+ Write-Output "PASS: workspace creation, empty/duplicate rejection, cancelled name entry preserves filter/selection, discovery, keyboard switching, original PIDs, input, split/title/zoom preservation, cancellation, close during preparation, F6 navigation, busy target and partial-attachment rollback. Artifacts: $dir"
 } finally {
  foreach($p in @($peer,$gui)){if($p){if(!$p.HasExited){$p.Kill();$p.WaitForExit()};$p.Dispose()}}
  foreach($entry in @(Mux @('list')|ConvertFrom-Json)){try{Mux @('stop',$entry.name)|Out-Null}catch{}}

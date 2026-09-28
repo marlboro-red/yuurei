@@ -57,6 +57,16 @@ pub const PreparedWorkspace = struct {
 /// current_ids must be an owned snapshot when called from a worker. The UI
 /// must reject completion if its workspace/layout generation changed meanwhile.
 pub fn prepareSwitch(alloc: std.mem.Allocator, name: []const u8, current_ids: []const []const u8) !PreparedWorkspace {
+    return prepareTarget(alloc, name, current_ids, false);
+}
+
+/// Reserve a previously unused workspace identity without publishing a layout.
+/// Cancelling releases the lock; no shell or saved workspace has been created.
+pub fn prepareCreate(alloc: std.mem.Allocator, name: []const u8) !PreparedWorkspace {
+    return prepareTarget(alloc, name, &.{}, true);
+}
+
+fn prepareTarget(alloc: std.mem.Allocator, name: []const u8, current_ids: []const []const u8, create: bool) !PreparedWorkspace {
     if (!catalog.validName(name)) return error.InvalidWorkspaceName;
     const base = try global.environ().getAlloc(alloc, "LOCALAPPDATA");
     defer alloc.free(base);
@@ -71,12 +81,22 @@ pub fn prepareSwitch(alloc: std.mem.Allocator, name: []const u8, current_ids: []
     const lock = w.CreateFileW(wide, w.GENERIC_READ | w.GENERIC_WRITE, 0, null, 4, 0x80, null);
     if (lock == std.os.windows.INVALID_HANDLE_VALUE) return error.WorkspaceUnavailable;
     errdefer _ = w.CloseHandle(lock);
-    const data = try std.Io.Dir.cwd().readFileAlloc(global.io(), path, alloc, .limited(max_file_size));
+    if (create) {
+        const existing: ?std.Io.File = std.Io.Dir.cwd().openFile(global.io(), path, .{}) catch |err| switch (err) {
+            error.FileNotFound => null,
+            else => return err,
+        };
+        if (existing) |file| {
+            file.close(global.io());
+            return error.WorkspaceAlreadyExists;
+        }
+    }
+    const data = if (create) try alloc.dupe(u8, "{\"version\":2,\"windows\":[]}") else try std.Io.Dir.cwd().readFileAlloc(global.io(), path, alloc, .limited(max_file_size));
     defer alloc.free(data);
     // Own every string independently of the temporary file buffer.
     const parsed = try std.json.parseFromSlice(workspace.State, alloc, data, .{ .allocate = .alloc_always });
     errdefer parsed.deinit();
-    try @import("../../mux/WorkspaceSwitch.zig").validate(parsed.value, current_ids);
+    if (!create) try @import("../../mux/WorkspaceSwitch.zig").validate(parsed.value, current_ids);
     return .{ .alloc = alloc, .name = try alloc.dupe(u8, name), .lock = lock, .layout = parsed };
 }
 
@@ -202,12 +222,23 @@ pub fn writeSaved(alloc: std.mem.Allocator, path: []const u8, name: []const u8, 
 }
 
 pub fn beginSwitch(app: *App, hwnd: w.HWND, name: []const u8) !void {
+    return beginWorkspace(app, hwnd, name, false);
+}
+
+pub fn beginCreate(app: *App, hwnd: w.HWND, name: []const u8) !void {
+    if (!app.config.@"windows-persistent-sessions" or !app.config.@"windows-restore-session") return error.WorkspacePersistenceDisabled;
+    return beginWorkspace(app, hwnd, name, true);
+}
+
+fn beginWorkspace(app: *App, hwnd: w.HWND, name: []const u8, create: bool) !void {
+    if (!catalog.validName(name)) return error.InvalidWorkspaceName;
     if (app.workspace_job != null) return error.WorkspaceSwitchInProgress;
     if (std.mem.eql(u8, app.workspace_name orelse "default", name)) return error.WorkspaceAlreadyActive;
     if (!ownWorkspace(app)) return error.WorkspaceUnavailable;
     const Job = @import("WorkspaceJob.zig");
     const job = try Job.create(hwnd);
     errdefer job.destroy();
+    job.create_new = create;
     job.backend_alloc = app.core_app.alloc;
     job.target = try Job.alloc.dupe(u8, name);
     job.source_name = try Job.alloc.dupe(u8, app.workspace_name orelse "default");
@@ -278,6 +309,12 @@ fn commitSwitch(app: *App, job: *@import("WorkspaceJob.zig")) !void {
         const window = app.windows.pop().?;
         window.destroy();
     };
+    if (job.create_new) {
+        const window = newRestoredWindow(app) orelse return error.CreateWindowFailed;
+        // Use the normal new-tab startup/error handling, but never inherit an
+        // explicit attachment target from this GUI's launch arguments.
+        _ = try window.newTabWithOpts(.{ .fresh_persistent = true });
+    }
     for (prepared.layout.value.windows) |saved| {
         const window = newRestoredWindow(app) orelse return error.CreateWindowFailed;
         if (saved.geometry) |g| {
@@ -315,6 +352,10 @@ fn commitSwitch(app: *App, job: *@import("WorkspaceJob.zig")) !void {
     }
     for (app.windows.items[index..]) |window| window.applyStartupShow();
     app.workspace_generation +%= 1;
+    if (job.create_new) {
+        app.session_restoring = false;
+        changed(app);
+    }
 }
 
 /// Replace the session file atomically: write a sibling temp and rename

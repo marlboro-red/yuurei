@@ -22,6 +22,7 @@ active: ?*Mux = null,
 failure: ?anyerror = null,
 entries: ?[]session.catalog.Entry = null,
 target: ?[]const u8 = null,
+create_new: bool = false,
 source_name: ?[]const u8 = null,
 source_path: ?[]const u8 = null,
 source_data: ?[]const u8 = null,
@@ -81,7 +82,7 @@ fn work(self: *Self) !void {
             .split => {},
         };
     };
-    self.prepared = try session.prepareSwitch(alloc, target, ids[0..count]);
+    self.prepared = if (self.create_new) try session.prepareCreate(alloc, target) else try session.prepareSwitch(alloc, target, ids[0..count]);
     try self.muxes.ensureTotalCapacity(alloc, 64);
     for (self.prepared.?.layout.value.windows) |window| for (window.tabs) |tab| {
         for (tab.nodes) |node| switch (node) {

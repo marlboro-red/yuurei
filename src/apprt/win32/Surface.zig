@@ -321,7 +321,10 @@ pub fn init(
         );
     defer config.deinit();
 
-    if (spawn_opts.mux_session) |name| {
+    if (spawn_opts.fresh_persistent) {
+        config.@"windows-mux-session" = null;
+        config.@"windows-persistent-sessions" = true;
+    } else if (spawn_opts.mux_session) |name| {
         config.@"windows-mux-session" = try config._arena.?.allocator().dupeZ(u8, name);
         if (!spawn_opts.mux_restore) config.@"windows-persistent-sessions" = false;
     } else if (context != .window and config.@"windows-mux-session" != null) {

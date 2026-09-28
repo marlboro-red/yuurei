@@ -86,6 +86,14 @@ workspaces. **Enter** switches the selected workspace, **F5** refreshes, and
 session list. The command palette also exposes **Switch Workspace**, and
 `session:workspaces` can be assigned in Keyboard shortcuts settings.
 
+In the workspace list, **F2** starts a new workspace. Type its name in the
+inline input and press **Enter** to create it, or **Escape** to cancel and keep
+the current filter and selection. Persistent sessions and session restore must
+be enabled. The source layout is saved and its shells remain alive; the new
+workspace starts one fresh persistent shell using the base configuration.
+An existing saved name or a name owned by another GUI is rejected. As with a
+normal new tab, shell startup failures appear in the new pane.
+
 Named workspaces use the existing `windows-workspace` setting, or the launch
 argument `--windows-workspace=project-name`. Enable persistent sessions and
 workspace restoration when creating them. All normal windows, tabs, split

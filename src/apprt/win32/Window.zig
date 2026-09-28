@@ -461,6 +461,8 @@ fn closeAllTabs(self: *Window) void {
 /// How to spawn a surface: under a profile, in a specific working
 /// directory (session restore), or plainly (all defaults).
 pub const SpawnOpts = struct {
+    /// Start a new workspace shell, ignoring an initial attachment argument.
+    fresh_persistent: bool = false,
     mux_session: ?[]const u8 = null,
     mux_restore: bool = false,
     prepared_mux: ?*@import("../../termio/Mux.zig") = null,
