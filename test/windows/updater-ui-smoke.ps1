@@ -50,6 +50,8 @@ Expand-Archive -LiteralPath $PackageZip -DestinationPath $isolation
 $package=Get-ChildItem -LiteralPath $isolation -Directory | Select-Object -First 1
 $testExe=Join-Path $package.FullName 'bin/ghostty.exe'
 Copy-Item -LiteralPath $Executable -Destination $testExe -Force
+$broker = Join-Path (Split-Path $Executable) 'yuurei-mux.exe'
+if (Test-Path -LiteralPath $broker) { Copy-Item -LiteralPath $broker -Destination (Join-Path $package.FullName 'bin/yuurei-mux.exe') -Force }
 $configRoot=Join-Path $isolation 'config'
 [void][IO.Directory]::CreateDirectory((Join-Path $configRoot 'ghostty'))
 $config=Join-Path $configRoot 'ghostty/config'
@@ -72,7 +74,9 @@ try {
     $resultFile=Get-ChildItem -LiteralPath $configRoot -Recurse -Filter result.json | Select-Object -First 1
     $result=[IO.File]::ReadAllText($resultFile.FullName) | ConvertFrom-Json
     Assert ($result.state -eq 'idle' -and $result.message -eq 'Yuurei is up to date.') "Unexpected check result: $($result.message)"
-    [void][UpdateUi]::SendMessageW([UpdateUi]::GetDlgItem($settings,119),0xF5,0,0)
+    $autoUpdate = @(100..140 | ForEach-Object { [UpdateUi]::GetDlgItem($settings,$_) } | Where-Object { $_ -ne 0 -and (Button-Text $_) -eq 'Automatic updates' })
+    Assert ($autoUpdate.Count -eq 1) 'Automatic update toggle missing.'
+    [void][UpdateUi]::SendMessageW($autoUpdate[0],0xF5,0,0)
     [void][UpdateUi]::SendMessageW([UpdateUi]::GetDlgItem($settings,11),0xF5,0,0)
     Assert ([IO.File]::ReadAllText($config).Contains('windows-auto-update = false')) 'Automatic update toggle did not save.'
     $cache=$resultFile.Directory.Parent.FullName
