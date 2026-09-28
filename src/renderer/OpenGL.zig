@@ -245,6 +245,11 @@ pub fn threadEnter(self: *OpenGL, surface: *apprt.Surface) !void {
     if (comptime apprt.runtime == apprt.win32) {
         try surface.glMakeCurrent();
         errdefer apprt.win32.Surface.glReleaseCurrent();
+        // A pooled worker may have unloaded another surface's dispatch table.
+        // GLAD's custom-resolver loader fills function pointers but leaves its
+        // own library handle alone. Reset the whole table before loading so a
+        // subsequent unload cannot pass poisoned/stale storage to FreeLibrary.
+        gl.glad.context = std.mem.zeroes(gl.glad.Context);
         try prepareContext(&apprt.win32.winapi.glGetProcAddress);
         self.win32_surface = surface;
         self.win32_dispatch = gl.glad.context;
