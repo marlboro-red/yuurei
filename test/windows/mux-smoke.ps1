@@ -202,10 +202,7 @@ keybind = f9=scroll_to_bottom
     $broker.Refresh()
     [pscustomobject]@{IdleIntervalSeconds=2;CpuMilliseconds=$broker.TotalProcessorTime.TotalMilliseconds-$cpuBefore;PrivateMiB=$broker.PrivateMemorySize64/1MB;ResidentMiB=$broker.WorkingSet64/1MB} | ConvertTo-Json | Set-Content "$dir/idle.json"
     Invoke-Mux @('input',$name,'q') | Out-Null
-    Start-Sleep -Milliseconds 500
-    Assert ((Invoke-Mux @('status',$name) | ConvertFrom-Json).exited) 'Child exit was not observed'
-    Invoke-Mux @('stop',$name) | Out-Null
-    Assert ($broker.WaitForExit(5000)) 'Broker did not stop cleanly'
+    Assert ($broker.WaitForExit(5000)) 'Shell exit did not release its broker'
     Assert ($broker.ExitCode -eq 0) 'Broker shutdown failed'
     if($NativePane -and $GuiExecutable) {
         # The same config now names a missing broker. Keep an error pane;

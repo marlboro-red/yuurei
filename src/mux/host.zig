@@ -114,7 +114,7 @@ const Session = struct {
     }
 
     fn writeLoop(self: *Session) void {
-        var io = transport.Io.init(null) catch {
+        var io = transport.Io.init(self.stop_event) catch {
             self.failed.store(true, .release);
             return;
         };
@@ -159,6 +159,10 @@ const Session = struct {
         self.publishRecord();
         self.mutex.unlock(global.io());
         _ = SetEvent(self.output_event);
+        // Allow an attached view to receive the exit event, then release the
+        // broker even if the view is detached, suspended, or unresponsive.
+        _ = WaitForSingleObject(self.stop_event, 1000);
+        _ = SetEvent(self.stop_event);
     }
 
     fn read(self: *Session) void {
@@ -465,7 +469,9 @@ pub fn run(operation: []const u8, name: []const u8, args: anytype) !void {
         var argv: std.ArrayList([]const u8) = .empty;
         defer argv.deinit(alloc);
         while (args.next()) |arg| try argv.append(alloc, arg);
-        return @import("Lifecycle.zig").start(alloc, name, argv.items, null, null);
+        const process = try @import("Lifecycle.zig").start(alloc, name, argv.items, null, null);
+        _ = w.CloseHandle(process);
+        return;
     }
     if (std.mem.eql(u8, operation, "list")) {
         var arena: std.heap.ArenaAllocator = .init(alloc);

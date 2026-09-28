@@ -130,11 +130,39 @@ pub fn showSessions(self: *CommandPalette) void {
         self.error_text = "Unable to load sessions. Press F5 to retry.";
         break :block &.{};
     };
+    // Exit records exist briefly while the broker notifies attached views.
+    // They are no longer attachable sessions.
+    var live: usize = 0;
+    for (self.sessions) |entry| {
+        if (entry.exited) continue;
+        self.sessions[live] = entry;
+        live += 1;
+    }
+    self.sessions = self.sessions[0..live];
     std.mem.sort(Registry.Entry, self.sessions, {}, struct {
         fn less(_: void, a: Registry.Entry, b: Registry.Entry) bool {
             return std.ascii.lessThanIgnoreCase(if (a.label.len > 0) a.label else a.name, if (b.label.len > 0) b.label else b.name);
         }
     }.less);
+    self.refilter();
+}
+
+pub fn sessionClosed(self: *CommandPalette, name: []const u8) void {
+    if (self.mode == .commands) return;
+    var live: usize = 0;
+    for (self.sessions) |entry| {
+        if (std.mem.eql(u8, entry.name, name)) continue;
+        self.sessions[live] = entry;
+        live += 1;
+    }
+    self.sessions = self.sessions[0..live];
+    if (self.mode == .rename_session) {
+        if (self.rename_id) |id| if (std.mem.eql(u8, id, name)) {
+            self.mode = .sessions;
+            self.filter.clearRetainingCapacity();
+            self.error_text = "Session ended.";
+        };
+    }
     self.refilter();
 }
 

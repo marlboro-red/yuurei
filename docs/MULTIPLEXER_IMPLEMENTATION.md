@@ -103,7 +103,7 @@ session bar. It follows window resizing and uses the terminal colors and
 monospace text; it is not a separate popup. Type to fuzzy-search names, IDs, or
 PIDs; use **Up/Down**, **Ctrl+P/Ctrl+N**, or **Page Up/Page Down** to navigate.
 **Enter** focuses an existing local pane or attaches a detached session.
-**Delete** ends the selected session, including a detached or exited session,
+**Delete** ends the selected session, including a detached session,
 without attaching it first. The bottom session bar asks for confirmation:
 press **Y** to end the named session, or **Esc** / **N** to cancel. Enter does
 not confirm. Confirmation keys are consumed instead of being sent to a shell.
@@ -121,7 +121,7 @@ or **Escape** to cancel. **F5** refreshes discovery without clearing the search.
 
 Session names support Unicode and spaces, up to 128 UTF-8 bytes. They are
 independent of tab titles and stable session IDs. The broker retains the name
-across detach, GUI crash/restart, and shell exit. Terminating the broker ends
+across detach and GUI crash/restart. Shell exit or explicit termination ends
 the session and its name; this does not add persistence across machine restart.
 Duplicate display names are allowed; the picker also shows the session ID/PID.
 
@@ -142,7 +142,7 @@ The helper supports `yuurei-mux.exe rename <session-id> "Backend"`; `list`
 returns both stable IDs and display labels. Control-channel renaming works while
 a native view is attached. `test/windows/mux-picker.ps1` verifies the complete
 keyboard workflow, Unicode names, validation, original shell identity, and GUI
-restart; the exit test also verifies name retention after shell termination.
+restart; the exit test verifies cleanup after shell termination.
 
 `windows-workspace = dev` selects a named saved layout; `windows-restore-session`
 controls saving/restoration. Version 2 preserves complete split trees, ratios,
@@ -232,10 +232,12 @@ the broker, logout, and reboot are outside the persistence guarantee.
 view at a time, so detach it before issuing capture/input/resize diagnostics.
 `status` and `stop` use a separate authenticated control endpoint and work while
 a view remains attached. Control connections cannot subscribe, resize, or input.
-The broker retains an exited shell's screen until explicitly stopped.
+Shell exit closes its attached pane and ends the broker. Detached sessions also
+end when their shell exits. The broker allows up to one second for exit-event
+delivery, then cleans up independently of whether a view is responsive.
 
-`test/windows/mux-exit.ps1` checks exit code display, retained final output,
-discovery, and reattachment after exit. `test/windows/mux-transport.ps1` uses
+`test/windows/mux-exit.ps1` checks attached/detached cleanup, split isolation,
+nonzero and immediate exits, and a suspended view. `test/windows/mux-transport.ps1` uses
 an isolated installation to exercise real pipe framing and timeout failures.
 The four-second suspended-view benchmark verifies automatic history recovery
 and subsequent input to the original shell.
@@ -295,8 +297,8 @@ experimental backend.
   timer. A broker process handle also wakes it on broker exit. Connection errors retain
   the view and leave the broker alive. **Reconnect Session** retries an existing
   session without silently launching a replacement shell. An event-driven process
-  watch reports shell exit independently of ConPTY EOF; final output remains
-  readable and exited sessions remain discoverable until explicitly terminated.
+  watch detects shell exit independently of ConPTY EOF, closes the attached
+  pane, and releases the broker and its discovery record.
 - The updater waits for both GUI and broker processes from the installation;
   closing the GUI alone no longer makes a live broker eligible for replacement.
 

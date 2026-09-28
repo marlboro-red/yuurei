@@ -10,6 +10,8 @@ extern "kernel32" fn GetCurrentProcess() callconv(.winapi) H;
 extern "kernel32" fn OpenProcess(u32, w.BOOL, u32) callconv(.winapi) ?H;
 extern "kernel32" fn DuplicateHandle(H, H, H, *H, u32, w.BOOL, u32) callconv(.winapi) w.BOOL;
 extern "kernel32" fn WaitNamedPipeW([*:0]const u16, u32) callconv(.winapi) w.BOOL;
+extern "kernel32" fn WaitForSingleObject(H, u32) callconv(.winapi) u32;
+extern "kernel32" fn GetExitCodeProcess(H, *u32) callconv(.winapi) w.BOOL;
 const Client = @This();
 
 pipe: H,
@@ -17,6 +19,14 @@ io: transport.Io,
 server_pid: u32,
 notification: ?H = null,
 server: ?H = null,
+
+/// A clean broker shutdown means its session ended. Crashes remain visible
+/// as disconnections instead of silently closing a recoverable view.
+pub fn exitedNormally(process: H, timeout_ms: u32) bool {
+    if (WaitForSingleObject(process, timeout_ms) != 0) return false;
+    var code: u32 = 1;
+    return GetExitCodeProcess(process, &code) != 0 and code == 0;
+}
 pub fn init(name: []const u8, stop: ?H) !Client {
     return connect(name, stop, false);
 }

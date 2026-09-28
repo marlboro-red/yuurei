@@ -8,7 +8,8 @@ extern "kernel32" fn IsProcessInJob(w.HANDLE, ?w.HANDLE, *w.BOOL) callconv(.wina
 extern "kernel32" fn WaitForSingleObject(w.HANDLE, u32) callconv(.winapi) u32;
 extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
 
-pub fn start(alloc: std.mem.Allocator, name: []const u8, args: []const []const u8, cwd: ?[]const u8, env: ?*const std.process.Environ.Map) !void {
+/// Return the broker process handle; the caller closes it after attaching.
+pub fn start(alloc: std.mem.Allocator, name: []const u8, args: []const []const u8, cwd: ?[]const u8, env: ?*const std.process.Environ.Map) !w.HANDLE {
     if (!protocol.validName(name)) return error.InvalidSessionName;
     var arena: std.heap.ArenaAllocator = .init(alloc);
     defer arena.deinit();
@@ -50,20 +51,23 @@ pub fn start(alloc: std.mem.Allocator, name: []const u8, args: []const []const u
         return if (in_job != 0) error.BrokerJobBreakawayFailed else error.BrokerLaunchFailed;
     }
     _ = w.CloseHandle(pi.hThread.?);
-    defer _ = w.CloseHandle(pi.hProcess.?);
+    errdefer _ = w.CloseHandle(pi.hProcess.?);
     errdefer {
         _ = w.TerminateProcess(pi.hProcess.?, 1);
         _ = WaitForSingleObject(pi.hProcess.?, 3000);
     }
     const started = GetTickCount64();
     while (GetTickCount64() - started < 10000) {
-        if (WaitForSingleObject(pi.hProcess.?, 10) == 0) return error.BrokerExitedDuringStartup;
+        if (WaitForSingleObject(pi.hProcess.?, 10) == 0) return if (Client.exitedNormally(pi.hProcess.?, 0)) error.SessionEnded else error.BrokerExitedDuringStartup;
         var client = Client.initControl(name, null) catch continue;
         defer client.deinit();
         if (client.server_pid != pi.dwProcessId) return error.SessionAlreadyExists;
         var buffer: [4096]u8 = undefined;
-        _ = try client.request(.status, "", 0, &buffer);
-        return;
+        _ = client.request(.status, "", 0, &buffer) catch |err| {
+            if (Client.exitedNormally(pi.hProcess.?, 1500)) return error.SessionEnded;
+            return err;
+        };
+        return pi.hProcess.?;
     }
     return error.BrokerStartupTimeout;
 }

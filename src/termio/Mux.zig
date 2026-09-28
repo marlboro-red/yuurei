@@ -59,8 +59,12 @@ fn connect(self: *Mux, name: []const u8, launch: ?*const @import("Exec.zig")) !v
     self.load(name) catch |err| {
         if (err != error.SessionNotFound) return err;
         const exec = launch orelse return err;
-        try @import("../mux/Lifecycle.zig").start(self.alloc, name, exec.subprocess.args, exec.subprocess.cwd, if (exec.subprocess.env) |*env| env else null);
-        try self.load(name);
+        const process = try @import("../mux/Lifecycle.zig").start(self.alloc, name, exec.subprocess.args, exec.subprocess.cwd, if (exec.subprocess.env) |*env| env else null);
+        defer _ = w.CloseHandle(process);
+        self.load(name) catch |attach_err| {
+            if (Client.exitedNormally(process, 1500)) return error.SessionEnded;
+            return attach_err;
+        };
     };
 }
 
@@ -110,6 +114,10 @@ pub fn threadEnter(self: *Mux, io: *termio.Termio, td: *termio.Termio.ThreadData
     self.io = io;
     td.backend = .{ .mux = {} };
     if (self.init_error) |err| {
+        if (err == error.SessionEnded) {
+            self.closeSession();
+            return;
+        }
         self.setTitle("Session unavailable");
         io.renderer_state.mutex.lockUncancelable(global.io());
         defer io.renderer_state.mutex.unlock(global.io());
@@ -217,12 +225,27 @@ fn showExit(self: *Mux, code: ?u32) void {
     if (code) |value| {
         var buffer: [80]u8 = undefined;
         self.setTitle(std.fmt.bufPrint(&buffer, "Session exited (code {d})", .{value}) catch "Session exited");
+        self.closeSession();
     } else self.setTitle("Session output closed");
+}
+
+fn closeSession(self: *Mux) void {
+    self.ended.store(true, .release);
+    if (comptime @import("../build_config.zig").app_runtime == .win32) {
+        const core = self.io.surface_mailbox.surface;
+        _ = w.PostMessageW(core.rt_surface.window.hwnd, w.WM_APP_MUX_CLOSED, @intCast(core.id), 0);
+    }
 }
 
 fn run(self: *Mux) void {
     self.loop() catch |err| {
         if (WaitForSingleObject(self.stop, 0) == 0) return;
+        if (err == error.PipeIo or err == error.PipeClosed or err == error.BrokerExited) if (self.client) |client| if (client.server) |process| {
+            if (Client.exitedNormally(process, 1500)) {
+                self.closeSession();
+                return;
+            }
+        };
         self.disconnected.store(true, .release);
         std.log.scoped(.mux).err("native session disconnected: {}", .{err});
         self.setTitle(if (err == error.SessionHistoryExpired) "Session history expired - reopen pane" else "Session disconnected - reopen pane");

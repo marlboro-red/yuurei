@@ -3500,6 +3500,22 @@ pub fn wndProc(
             }
             return 0;
         },
+        winapi.WM_APP_MUX_CLOSED => {
+            // Notifications carry a stable ID, never a potentially freed
+            // surface pointer. Closing one pane must not affect its siblings.
+            for (self.tabs.items) |*tab| {
+                var iterator = tab.tree.iterator();
+                while (iterator.next()) |entry| {
+                    if (entry.view.core_surface.id == wparam and entry.view.core_surface.io.backend == .mux) {
+                        if (self.palette) |palette| palette.sessionClosed(entry.view.core_surface.io.backend.mux.name);
+                        entry.view.should_close = true;
+                        self.app.wakeup();
+                        return 0;
+                    }
+                }
+            }
+            return 0;
+        },
         winapi.WM_APP_RENAME => {
             self.startRenameTab(@truncate(wparam));
             return 0;
