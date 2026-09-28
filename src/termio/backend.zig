@@ -85,10 +85,11 @@ pub const Backend = union(Kind) {
         self: *Backend,
         grid_size: renderer.GridSize,
         screen_size: renderer.ScreenSize,
+        cell_size: renderer.CellSize,
     ) !void {
         switch (self.*) {
             .exec => |*exec| try exec.resize(grid_size, screen_size),
-            .mux => |mux| if (is_windows) try mux.resize(grid_size),
+            .mux => |mux| if (is_windows) try mux.resize(grid_size, cell_size),
         }
     }
 

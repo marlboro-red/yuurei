@@ -5,7 +5,7 @@ pub const header_size = 24;
 pub const max_request = 64 * 1024;
 pub const max_response = 16 * 1024 * 1024;
 pub const Status = struct { shell_pid: u32, broker_pid: u32, exited: bool, failed: bool, output_closed: bool = false, exit_code: u32 = 0 };
-pub const Op = enum(u16) { status = 1, snapshot = 2, input = 3, resize = 4, stop = 5, hello = 6, events = 7, resync = 8, subscribe = 9, retry = 10, rename = 11, preview = 12 };
+pub const Op = enum(u16) { status = 1, snapshot = 2, input = 3, resize = 4, stop = 5, hello = 6, events = 7, resync = 8, subscribe = 9, retry = 10, rename = 11, preview = 12, shell = 13, clear = 14 };
 
 pub fn validLabel(label: []const u8) bool {
     if (label.len == 0 or label.len > 128 or !std.unicode.utf8ValidateSlice(label)) return false;
@@ -27,7 +27,7 @@ pub const Header = struct {
     pub fn encode(self: Header) [header_size]u8 {
         var bytes: [header_size]u8 = @splat(0);
         bytes[0..4].* = "YMUX".*;
-        std.mem.writeInt(u16, bytes[4..6], 5, .little);
+        std.mem.writeInt(u16, bytes[4..6], 6, .little);
         std.mem.writeInt(u16, bytes[6..8], @intFromEnum(self.op), .little);
         std.mem.writeInt(u32, bytes[8..12], self.length, .little);
         std.mem.writeInt(u64, bytes[16..24], self.sequence, .little);
@@ -36,7 +36,7 @@ pub const Header = struct {
 
     pub fn decode(bytes: *const [header_size]u8, limit: u32) !Header {
         if (!std.mem.eql(u8, bytes[0..4], "YMUX")) return error.InvalidMagic;
-        if (std.mem.readInt(u16, bytes[4..6], .little) != 5) return error.IncompatibleVersion;
+        if (std.mem.readInt(u16, bytes[4..6], .little) != 6) return error.IncompatibleVersion;
         if (std.mem.readInt(u32, bytes[12..16], .little) != 0) return error.InvalidFlags;
         const op = std.enums.fromInt(Op, std.mem.readInt(u16, bytes[6..8], .little)) orelse return error.InvalidOperation;
         const length = std.mem.readInt(u32, bytes[8..12], .little);
@@ -59,7 +59,7 @@ test "mux framing validates versions bounds flags and operations" {
     try t.expectError(error.PayloadTooLarge, Header.decode(&bytes, 1023));
     bytes[4] = 1;
     try t.expectError(error.IncompatibleVersion, Header.decode(&bytes, max_response));
-    bytes[4] = 5;
+    bytes[4] = 6;
     bytes[12] = 1;
     try t.expectError(error.InvalidFlags, Header.decode(&bytes, max_response));
     bytes[12] = 0;

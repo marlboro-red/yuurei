@@ -506,7 +506,7 @@ pub fn resize(
     const grid_size = size.grid();
 
     // Update the size of our pty.
-    try self.backend.resize(grid_size, size.terminal());
+    try self.backend.resize(grid_size, size.terminal(), size.cell);
 
     // Enter the critical area that we want to keep small
     if (self.backend.localResize()) {
@@ -583,54 +583,14 @@ pub fn resetSynchronizedOutput(self: *Termio) void {
 
 /// Clear the screen.
 pub fn clearScreen(self: *Termio, td: *ThreadData, history: bool) !void {
+    if (comptime @import("builtin").os.tag == .windows) {
+        if (self.backend == .mux) return self.backend.mux.clear(history);
+    }
     {
         self.renderer_state.mutex.lockUncancelable(global.io());
         defer self.renderer_state.mutex.unlock(global.io());
 
-        // If we're on the alternate screen, we do not clear. Since this is an
-        // emulator-level screen clear, this messes up the running programs
-        // knowledge of where the cursor is and causes rendering issues. So,
-        // for alt screen, we do nothing.
-        if (self.terminal.screens.active_key == .alternate) return;
-
-        // Clear our selection
-        self.terminal.screens.active.clearSelection();
-
-        // Clear our scrollback
-        if (history) self.terminal.eraseDisplay(.scrollback, false);
-
-        // If we're not at a prompt, we just delete above the cursor.
-        if (!self.terminal.cursorIsAtPrompt()) {
-            if (self.terminal.screens.active.cursor.y > 0) {
-                self.terminal.screens.active.eraseActive(
-                    self.terminal.screens.active.cursor.y - 1,
-                );
-            }
-
-            // Clear all Kitty graphics state for this screen. This copies
-            // Kitty's behavior when Cmd+K deletes all Kitty graphics. I
-            // didn't spend time researching whether it only deletes Kitty
-            // graphics that are placed above the cursor or if it deletes
-            // all of them. We delete all of them for now but if this behavior
-            // isn't fully correct we should fix this later.
-            self.terminal.screens.active.kitty_images.delete(
-                self.terminal.io(),
-                self.terminal.screens.active.alloc,
-                &self.terminal,
-                .{ .all = true },
-            );
-
-            return;
-        }
-
-        // At a prompt, we want to first fully clear the screen, and then after
-        // send a FF (0x0C) to the shell so that it can repaint the screen.
-        // Mark the current row as a not a prompt so we can properly
-        // clear the full screen in the next eraseDisplay call.
-        // TODO: fix this
-        // self.terminal.markSemanticPrompt(.command);
-        // assert(!self.terminal.cursorIsAtPrompt());
-        self.terminal.eraseDisplay(.complete, false);
+        if (!@import("../mux/terminal_ops.zig").clear(&self.terminal, history)) return;
     }
 
     // If we reached here it means we're at a prompt, so we send a form-feed.

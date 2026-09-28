@@ -19,8 +19,12 @@ extern "kernel32" fn SetEvent(w.HANDLE) callconv(.winapi) w.BOOL;
 extern "kernel32" fn WaitForSingleObject(w.HANDLE, u32) callconv(.winapi) u32;
 extern "kernel32" fn WaitForMultipleObjects(u32, [*]const w.HANDLE, w.BOOL, u32) callconv(.winapi) u32;
 
+extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
+
 alloc: std.mem.Allocator,
 name: [:0]const u8,
+shell: ?[]const u8 = null,
+render_hold: @import("../mux/RenderHold.zig") = .{},
 client: ?Client = null,
 initial: ?snapshot.Decoded = null,
 init_error: ?anyerror = null,
@@ -36,7 +40,8 @@ ended: std.atomic.Value(bool) = .init(false),
 initial_exit_code: ?u32 = null,
 mutex: std.Io.Mutex = .init,
 input: InputQueue = .{},
-pending_size: ?[4]u8 = null,
+pending_size: ?[12]u8 = null,
+pending_clear: ?bool = null,
 
 pub fn init(alloc: std.mem.Allocator, name: []const u8, launch: ?*const @import("Exec.zig")) !*Mux {
     const stop = CreateEventW(null, 1, 0, null) orelse return error.CreateEvent;
@@ -86,6 +91,8 @@ fn load(self: *Mux, name: []const u8) !void {
         self.ended.store(true, .release);
         self.initial_exit_code = if (status.value.exited) status.value.exit_code else null;
     }
+    const shell_reply = try client.request(.shell, "", 0, bytes);
+    self.shell = try alloc.dupe(u8, bytes[0..shell_reply.length]);
     self.client = client;
     self.initial = decoded;
     self.sequence = header.sequence;
@@ -147,9 +154,11 @@ pub fn threadEnter(self: *Mux, io: *termio.Termio, td: *termio.Termio.ThreadData
     self.initial.?.deinit(self.alloc);
     self.initial = null;
     self.stream.handler.effects.title_changed = titleChanged;
+    self.stream.handler.effects.render_hold = renderHold;
+    renderHold(&self.stream.handler, io.terminal.modes.get(.synchronized_output));
     self.setTitle(io.terminal.getTitle() orelse "Multiplexer session");
     if (self.ended.load(.acquire)) self.showExit(self.initial_exit_code);
-    try self.resize(io.size.grid());
+    try self.resize(io.size.grid(), io.size.cell);
     self.thread = try std.Thread.spawn(@import("../os/windows.zig").worker_thread_config, run, .{self});
 }
 
@@ -179,20 +188,46 @@ pub fn deinit(self: *Mux) void {
     _ = w.CloseHandle(self.stop);
     _ = w.CloseHandle(self.wake);
     self.alloc.free(self.name);
+    if (self.shell) |shell| self.alloc.free(shell);
     self.input.deinit(self.alloc);
     self.alloc.destroy(self);
 }
 
-pub fn resize(self: *Mux, grid: renderer.GridSize) !void {
+pub fn resize(self: *Mux, grid: renderer.GridSize, cell: renderer.CellSize) !void {
     if (self.ended.load(.acquire)) return;
     if (grid.columns == 0 or grid.rows == 0 or grid.columns > 512 or grid.rows > 256) return error.InvalidSize;
-    var bytes: [4]u8 = undefined;
+    var bytes: [12]u8 = undefined;
     std.mem.writeInt(u16, bytes[0..2], @intCast(grid.columns), .little);
     std.mem.writeInt(u16, bytes[2..4], @intCast(grid.rows), .little);
     self.mutex.lockUncancelable(global.io());
+    std.mem.writeInt(u32, bytes[4..8], cell.width, .little);
+    std.mem.writeInt(u32, bytes[8..12], cell.height, .little);
     self.pending_size = bytes;
     self.mutex.unlock(global.io());
     _ = SetEvent(self.wake);
+}
+
+pub fn clear(self: *Mux, history: bool) !void {
+    self.mutex.lockUncancelable(global.io());
+    defer self.mutex.unlock(global.io());
+    if (self.ended.load(.acquire)) return error.SessionExited;
+    if (self.disconnected.load(.acquire)) return error.SessionDisconnected;
+    self.pending_clear = history or (self.pending_clear orelse false);
+    _ = SetEvent(self.wake);
+}
+
+fn renderHold(handler: *Stream.Handler, held: bool) void {
+    const stream: *Stream = @fieldParentPtr("handler", handler);
+    const self: *Mux = @fieldParentPtr("stream", stream);
+    self.render_hold.set(held, GetTickCount64());
+}
+
+fn expireRenderHold(self: *Mux) void {
+    if (!self.render_hold.expire(GetTickCount64())) return;
+    self.io.renderer_state.mutex.lockUncancelable(global.io());
+    defer self.io.renderer_state.mutex.unlock(global.io());
+    self.io.terminal.modes.set(.synchronized_output, false);
+    self.io.renderer_wakeup.notify() catch {};
 }
 
 pub fn queueWrite(self: *Mux, data: []const u8, linefeed: bool) !void {
@@ -246,6 +281,8 @@ fn run(self: *Mux) void {
                 return;
             }
         };
+        self.render_hold.set(true, 0);
+        self.expireRenderHold();
         self.disconnected.store(true, .release);
         std.log.scoped(.mux).err("native session disconnected: {}", .{err});
         self.setTitle(if (err == error.SessionHistoryExpired) "Session history expired - reopen pane" else "Session disconnected - reopen pane");
@@ -265,13 +302,37 @@ fn loop(self: *Mux) !void {
     defer self.alloc.free(buffer);
     var input: [protocol.max_request]u8 = undefined;
     while (WaitForSingleObject(self.stop, 0) != 0) {
+        self.expireRenderHold();
         self.mutex.lockUncancelable(global.io());
+        const clear_history = self.pending_clear;
+        self.pending_clear = null;
         const len = @min(input.len, self.input.pending().len);
         @memcpy(input[0..len], self.input.pending()[0..len]);
         const size = self.pending_size;
         self.pending_size = null;
         self.mutex.unlock(global.io());
-        if (size) |bytes| _ = try self.client.?.request(.resize, &bytes, 0, buffer);
+        if (size) |bytes| _ = self.client.?.request(.resize, &bytes, 0, buffer) catch |err| switch (err) {
+            error.SessionBackpressure => retry: {
+                self.mutex.lockUncancelable(global.io());
+                if (self.pending_size == null) self.pending_size = bytes;
+                self.mutex.unlock(global.io());
+                // Events below drain a full journal; the broker signals when
+                // its input queue frees space. Do not spin on backpressure.
+                break :retry protocol.Header{ .op = .retry, .length = 0 };
+            },
+            else => return err,
+        };
+        if (clear_history) |history| _ = self.client.?.request(.clear, &.{@intFromBool(history)}, 0, buffer) catch |err| switch (err) {
+            error.SessionBackpressure => retry: {
+                self.mutex.lockUncancelable(global.io());
+                self.pending_clear = history or (self.pending_clear orelse false);
+                self.mutex.unlock(global.io());
+                // Events below drain a full journal; the broker signals when
+                // its input queue frees space. Do not spin on backpressure.
+                break :retry protocol.Header{ .op = .retry, .length = 0 };
+            },
+            else => return err,
+        };
         var more_input = false;
         if (len > 0) {
             const accepted = block: {
@@ -296,9 +357,13 @@ fn loop(self: *Mux) !void {
             var events: []const u8 = buffer[0..reply.length];
             while (try Journal.next(&events)) |event| switch (event.kind) {
                 .output => self.stream.nextSlice(event.data),
-                .resize => try self.io.terminal.resize(self.alloc, .{
+                .clear => {
+                    _ = @import("../mux/terminal_ops.zig").clear(&self.io.terminal, event.data[0] != 0);
+                },
+                .resize => try self.stream.handler.resize(.{
                     .cols = std.mem.readInt(u16, event.data[0..2], .little),
                     .rows = std.mem.readInt(u16, event.data[2..4], .little),
+                    .cell_size_px = if (event.data.len == 12) .{ .width = std.mem.readInt(u32, event.data[4..8], .little), .height = std.mem.readInt(u32, event.data[8..12], .little) } else null,
                 }),
                 .exited => {
                     self.showExit(if (std.mem.readInt(u32, event.data[4..8], .little) == 1) std.mem.readInt(u32, event.data[0..4], .little) else null);
@@ -314,9 +379,9 @@ fn loop(self: *Mux) !void {
         // for input, output, shutdown, or broker death without a polling timer.
         if (reply.length == 0 and !more_input) {
             const handles = [_]w.HANDLE{ self.stop, self.wake, self.client.?.notification.?, self.client.?.server.? };
-            switch (WaitForMultipleObjects(handles.len, &handles, 0, w.INFINITE)) {
+            switch (WaitForMultipleObjects(handles.len, &handles, 0, self.render_hold.wait(GetTickCount64()))) {
                 0 => return,
-                1, 2 => {},
+                1, 2, 0x102 => {},
                 else => return error.BrokerExited,
             }
         }

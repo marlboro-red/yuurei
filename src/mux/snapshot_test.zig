@@ -50,7 +50,7 @@ test "mux snapshot reconnect preserves pending UTF8 CSI OSC and both screens" {
     }
 }
 
-test "mux native replica applies ordered output and resize after a snapshot" {
+test "mux native replica applies ordered output resize and clear after a snapshot" {
     const t = std.testing;
     var source = try terminal.Terminal.init(t.io, t.allocator, .{ .cols = 40, .rows = 5 });
     defer source.deinit(t.allocator);
@@ -86,10 +86,15 @@ test "mux native replica applies ordered output and resize after a snapshot" {
     const second = "\x1b[?1049l\r\nafter resize\r\n";
     stream.nextSlice(second);
     journal.append(.output, second);
+    _ = @import("terminal_ops.zig").clear(&source, true);
+    journal.append(.clear, &.{1});
     var out: [1024]u8 = undefined;
     var events = try journal.read(cursor, &out);
     while (try Journal.next(&events)) |event| switch (event.kind) {
         .exited => return error.UnexpectedExitEvent,
+        .clear => {
+            _ = @import("terminal_ops.zig").clear(&replica, event.data[0] != 0);
+        },
         .output => live.nextSlice(event.data),
         .resize => try replica.resize(t.allocator, .{
             .cols = std.mem.readInt(u16, event.data[0..2], .little),

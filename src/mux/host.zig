@@ -191,7 +191,7 @@ const Session = struct {
             // A disconnected or unresponsive view must not stall a detached
             // shell forever. The connection owns the cursor under this lock.
             while (self.protected_cursor) |cursor| {
-                if (self.journal.canAppend(cursor, count + 2 * Journal.header_size + 4 + 8)) break;
+                if (self.journal.canAppend(cursor, count + 3 * Journal.header_size + 12 + 8 + 1)) break;
                 self.mutex.unlock(global.io());
                 const waited = WaitForSingleObject(self.space_event, 3000);
                 self.mutex.lockUncancelable(global.io());
@@ -245,6 +245,21 @@ const Session = struct {
             .stop => {
                 if (payload.len != 0) return error.InvalidPayload;
             },
+            .shell => {
+                if (payload.len != 0) return error.InvalidPayload;
+                try out.writeAll(self.command.path);
+            },
+            .clear => {
+                if (payload.len != 1 or payload[0] > 1) return error.InvalidPayload;
+                if (self.protected_cursor) |cursor| if (!self.journal.canAppend(cursor, payload.len)) return error.Backpressure;
+                // Reserve the prompt repaint before mutation, so a retry cannot
+                // clear twice or lose its form-feed when the input queue is full.
+                if (self.term.screens.active_key != .alternate and self.term.cursorIsAtPrompt()) try self.write("\x0c");
+                _ = @import("terminal_ops.zig").clear(&self.term, payload[0] != 0);
+                self.journal.append(.clear, payload);
+                self.sequence = self.journal.end;
+                _ = SetEvent(self.output_event);
+            },
             .status => {
                 if (payload.len != 0) return error.InvalidPayload;
                 var code: u32 = 0;
@@ -256,10 +271,11 @@ const Session = struct {
                 });
             },
             .resize => {
-                if (payload.len != 4) return error.InvalidPayload;
+                if (payload.len != 4 and payload.len != 12) return error.InvalidPayload;
                 const cols = std.mem.readInt(u16, payload[0..2], .little);
                 const rows = std.mem.readInt(u16, payload[2..4], .little);
                 if (cols == 0 or rows == 0 or cols > 512 or rows > 256) return error.InvalidSize;
+                if (payload.len == 12 and (std.mem.readInt(u32, payload[4..8], .little) > 65535 or std.mem.readInt(u32, payload[8..12], .little) > 65535)) return error.InvalidSize;
                 if (self.protected_cursor) |cursor| if (!self.journal.canAppend(cursor, payload.len)) return error.Backpressure;
                 const old_cols = self.term.cols;
                 const old_rows = self.term.rows;
@@ -270,6 +286,14 @@ const Session = struct {
                     };
                     return err;
                 };
+                try self.stream.handler.resize(.{
+                    .cols = cols,
+                    .rows = rows,
+                    .cell_size_px = if (payload.len == 12) .{
+                        .width = std.mem.readInt(u32, payload[4..8], .little),
+                        .height = std.mem.readInt(u32, payload[8..12], .little),
+                    } else null,
+                });
                 self.journal.append(.resize, payload);
                 self.sequence = self.journal.end;
                 _ = SetEvent(self.output_event);
@@ -347,6 +371,12 @@ fn serve(name: []const u8, args: anytype) !void {
     current = &session;
     defer current = null;
     session.stream.handler.effects.write_pty = Session.reply;
+    session.stream.handler.effects.size = struct {
+        fn size(handler: *Handler) ?@import("../terminal/size_report.zig").Size {
+            const t = handler.terminal;
+            return .{ .columns = t.cols, .rows = t.rows, .cell_width = t.width_px / t.cols, .cell_height = t.height_px / t.rows };
+        }
+    }.size;
     session.stream.handler.effects.pwd_changed = @import("cwd.zig").changed;
     session.stream.handler.effects.device_attributes = struct {
         fn attributes(_: *Handler) @import("../terminal/device_attributes.zig").Attributes {
@@ -461,7 +491,7 @@ fn connection(session: *Session, pipe: H, io: *transport.Io, identity: transport
             defer session.mutex.unlock(global.io());
             session.respond(header, payload, &writer) catch |err| switch (err) {
                 error.StaleCursor => response_op = .resync,
-                error.InputQueueFull, error.SessionExited => response_op = .retry,
+                error.Backpressure, error.InputQueueFull, error.SessionExited => response_op = .retry,
                 else => return err,
             };
             ready = true;
