@@ -76,6 +76,7 @@ try {
  $gui=Launch 'alpha'
  Wait-For {[TabNative]::Windows($gui.Id).Count -eq 1} 'Alpha window missing'
  $window=[TabNative]::Windows($gui.Id)[0];[void][TabNative]::ShowWindow($window,5)
+ Wait-For {@(Get-ChildItem "$dir/*.started").Count -eq 1 -and @([TabNative]::Hosts($window,$false)).Count -eq 1} 'Alpha shell not ready'
  Key $window 0x74;Key $window 0x78;Key $window 0x76;Key $window 0x73;Key $window 0x77
  $alphaPath=LayoutPath 'alpha';$betaPath=LayoutPath 'beta'
  Wait-For {(Test-Path "$alphaPath.name") -and (Get-Content $alphaPath -Raw|ConvertFrom-Json).windows[0].tabs.Count -eq 2} 'Alpha layout missing'

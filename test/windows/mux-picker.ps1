@@ -65,6 +65,7 @@ keybind = f11>f12=session:list
 function Mux([string[]]$Arguments){
  $psi=[Diagnostics.ProcessStartInfo]::new("$Bin/yuurei-mux.exe")
  $psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true;$psi.Environment['LOCALAPPDATA']=$dir
+ $psi.StandardOutputEncoding=[Text.UTF8Encoding]::new($false)
  foreach($arg in $Arguments){$psi.ArgumentList.Add($arg)}
  $p=[Diagnostics.Process]::Start($psi)
  try{$out=$p.StandardOutput.ReadToEndAsync();$err=$p.StandardError.ReadToEndAsync();if(!$p.WaitForExit(10000)){$p.Kill();throw 'Helper timeout'};$result=$out.GetAwaiter().GetResult();$log=$err.GetAwaiter().GetResult();if($p.ExitCode -ne 0){throw $log};return $result}finally{$p.Dispose()}

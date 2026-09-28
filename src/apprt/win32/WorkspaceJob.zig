@@ -142,6 +142,8 @@ fn work(self: *Self) !void {
             .target = target,
             .source_data = source_data,
             .target_data = target_data,
+            .can_cancel = true,
+            .cancel_target_data = self.original_target_data,
         });
         return;
     }

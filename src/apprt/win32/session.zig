@@ -88,6 +88,7 @@ fn prepareTarget(alloc: std.mem.Allocator, name: []const u8, current_ids: []cons
     const lock = w.CreateFileW(wide, w.GENERIC_READ | w.GENERIC_WRITE, 0, null, 4, 0x80, null);
     if (lock == std.os.windows.INVALID_HANDLE_VALUE) return error.WorkspaceUnavailable;
     errdefer _ = w.CloseHandle(lock);
+    try Transfer.requireAvailable(global.io(), alloc, std.fs.path.dirname(path).?, name);
     if (create) {
         const existing: ?std.Io.File = std.Io.Dir.cwd().openFile(global.io(), path, .{}) catch |err| switch (err) {
             error.FileNotFound => null,
@@ -131,6 +132,10 @@ fn ownWorkspace(app: *App) bool {
         log.warn("workspace is already owned or unavailable; layout restore/save disabled", .{});
         return false;
     }
+    Transfer.requireAvailable(global.io(), alloc, std.fs.path.dirname(path).?, app.workspace_name orelse "default") catch {
+        _ = w.CloseHandle(handle);
+        return false;
+    };
     app.session_lock = handle;
     return true;
 }
@@ -226,6 +231,7 @@ fn captureLayout(app: *App, output_alloc: std.mem.Allocator) ![]const u8 {
 }
 
 pub fn writeSaved(alloc: std.mem.Allocator, path: []const u8, name: []const u8, data: []const u8) !void {
+    try Transfer.refreshSource(global.io(), alloc, std.fs.path.dirname(path).?, name, data);
     try writeAtomic(global.io(), alloc, path, data);
     // Existing configurations with non-displayable names can still save their
     // layouts. Only publish names suitable for the embedded workspace picker.
