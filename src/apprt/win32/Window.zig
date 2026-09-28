@@ -1878,13 +1878,24 @@ fn paintSessionBar(self: *Window, hdc: winapi.HDC) void {
     var rect: winapi.RECT = undefined;
     _ = winapi.GetClientRect(self.hwnd, &rect);
     rect.top = @max(0, rect.bottom - height);
-    const fg = self.app.config.foreground;
-    const bg = self.app.config.background;
+    const config = if (self.activeSurface()) |surface| surface.configForReload(&self.app.config) else &self.app.config;
+    const fg = config.foreground;
+    const bg = config.background;
     const color: u32 = @as(u32, fg.b) << 16 | @as(u32, fg.g) << 8 | fg.r;
     const background: u32 = @as(u32, bg.b) << 16 | @as(u32, bg.g) << 8 | bg.r;
-    if (winapi.CreateSolidBrush(color)) |brush| {
+    if (winapi.CreateSolidBrush(background)) |brush| {
         defer _ = winapi.DeleteObject(brush);
         _ = winapi.FillRect(hdc, &rect, brush);
+    }
+    // Separate the bar from terminal output without inverting the theme.
+    const separator: u32 = (@as(u32, bg.r) * 4 + fg.r) / 5 |
+        ((@as(u32, bg.g) * 4 + fg.g) / 5) << 8 |
+        ((@as(u32, bg.b) * 4 + fg.b) / 5) << 16;
+    if (winapi.CreateSolidBrush(separator)) |brush| {
+        defer _ = winapi.DeleteObject(brush);
+        var edge = rect;
+        edge.bottom = edge.top + self.scale(1);
+        _ = winapi.FillRect(hdc, &edge, brush);
     }
     const dpi = winapi.GetDpiForWindow(self.hwnd);
     if (self.session_font == null or self.session_font_dpi != dpi) {
@@ -1897,7 +1908,7 @@ fn paintSessionBar(self: *Window, hdc: winapi.HDC) void {
         _ = winapi.SelectObject(hdc, font);
     };
     _ = winapi.SetBkMode(hdc, winapi.TRANSPARENT_BK);
-    _ = winapi.SetTextColor(hdc, background);
+    _ = winapi.SetTextColor(hdc, color);
     var text_buffer: [512]u8 = undefined;
     const content = if (self.session_bar.pending) |target|
         std.fmt.bufPrint(&text_buffer, "End session \"{s}\" and its programs?", .{target.title()}) catch "End session?"
