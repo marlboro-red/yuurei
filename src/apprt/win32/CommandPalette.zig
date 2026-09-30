@@ -415,7 +415,7 @@ fn execute(self: *CommandPalette) void {
         self.dismiss();
         const list = window.app.ensureProfiles();
         if (pi < list.items.len) {
-            _ = window.newTabWithProfile(&list.items[pi]) catch |err| {
+            window.requestNewTab(&list.items[pi], null) catch |err| {
                 log.err("error opening profile tab err={}", .{err});
             };
         }

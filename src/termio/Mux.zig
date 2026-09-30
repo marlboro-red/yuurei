@@ -32,6 +32,7 @@ sequence: u64 = 0,
 stop: w.HANDLE,
 wake: w.HANDLE,
 thread: ?std.Thread = null,
+startup_process: ?w.HANDLE = null,
 io: *termio.Termio = undefined,
 stream: Stream = undefined,
 stream_ready: bool = false,
@@ -65,6 +66,33 @@ pub fn createUnconnected(alloc: std.mem.Allocator, name: []const u8) !*Mux {
     errdefer alloc.destroy(self);
     self.* = .{ .alloc = alloc, .name = try alloc.dupeZ(u8, name), .stop = stop, .wake = wake };
     return self;
+}
+
+/// Only for a fresh, generated session identity; never takes over an existing broker.
+/// The caller retains ownership of the new broker until acceptStartup.
+pub fn connectNew(self: *Mux, launch: *const @import("Exec.zig")) !void {
+    @import("../perf.zig").markContext("mux-broker-start-begin", self.name);
+    self.startup_process = try @import("../mux/Lifecycle.zig").startCancelable(self.alloc, self.name, launch.subprocess.args, launch.subprocess.cwd, if (launch.subprocess.env) |*env| env else null, self.stop);
+    errdefer self.abortStartup();
+    @import("../perf.zig").markContext("mux-broker-ready", self.name);
+    try self.load(self.name);
+    @import("../perf.zig").markContext("mux-attach-ready", self.name);
+}
+
+pub fn acceptStartup(self: *Mux) void {
+    if (self.startup_process) |process| _ = w.CloseHandle(process);
+    self.startup_process = null;
+}
+
+fn abortStartup(self: *Mux) void {
+    if (self.startup_process) |process| {
+        // This handle is only for a broker spawned by this unpublished request.
+        // Never terminate a discovered/reattached persistent session.
+        _ = w.TerminateProcess(process, 1);
+        _ = WaitForSingleObject(process, 3000);
+        _ = w.CloseHandle(process);
+        self.startup_process = null;
+    }
 }
 
 pub fn connectExisting(self: *Mux) !void {
@@ -197,6 +225,7 @@ pub fn deinit(self: *Mux) void {
     if (self.stream_ready) self.stream.deinit();
     if (self.initial) |*initial| initial.deinit(self.alloc);
     if (self.client) |*client| client.deinit();
+    self.abortStartup();
     _ = w.CloseHandle(self.stop);
     _ = w.CloseHandle(self.wake);
     self.alloc.free(self.name);

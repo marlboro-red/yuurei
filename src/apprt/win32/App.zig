@@ -945,6 +945,7 @@ pub fn run(self: *App) !void {
         try self.core_app.tick(self);
         session.tick(self);
         session.pollSwitch(self);
+        for (self.windows.items) |window| window.pollSurfaceStartups();
         // Restore the host's initial session before forwarded launches,
         // including when several processes start simultaneously.
         if (!self.quit) if (self.instance) |instance| instance.drain();
@@ -1110,12 +1111,7 @@ pub fn performAction(
             // No focused surface: a tab in no window is a window.
             .app => _ = try self.newSurface(null),
             .surface => |parent| {
-                const surface = try parent.rt_surface.window.newTab();
-                if (self.config.@"window-inherit-font-size") {
-                    surface.core_surface.setFontSize(parent.font_size) catch |err| {
-                        log.warn("error inheriting font size err={}", .{err});
-                    };
-                }
+                try parent.rt_surface.window.requestNewTab(null, if (self.config.@"window-inherit-font-size") parent.font_size else null);
             },
         },
 
@@ -1224,12 +1220,7 @@ pub fn performAction(
         .new_split => switch (target) {
             .app => return false,
             .surface => |parent| {
-                const surface = try parent.rt_surface.window.newSplit(value);
-                if (self.config.@"window-inherit-font-size") {
-                    surface.core_surface.setFontSize(parent.font_size) catch |err| {
-                        log.warn("error inheriting font size err={}", .{err});
-                    };
-                }
+                try parent.rt_surface.window.requestNewSplit(value);
             },
         },
 

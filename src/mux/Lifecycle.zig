@@ -7,9 +7,15 @@ const w = @import("../apprt/win32/winapi.zig");
 extern "kernel32" fn IsProcessInJob(w.HANDLE, ?w.HANDLE, *w.BOOL) callconv(.winapi) w.BOOL;
 extern "kernel32" fn WaitForSingleObject(w.HANDLE, u32) callconv(.winapi) u32;
 extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
+extern "kernel32" fn WaitForMultipleObjects(u32, [*]const w.HANDLE, w.BOOL, u32) callconv(.winapi) u32;
 
 /// Return the broker process handle; the caller closes it after attaching.
 pub fn start(alloc: std.mem.Allocator, name: []const u8, args: []const []const u8, cwd: ?[]const u8, env: ?*const std.process.Environ.Map) !w.HANDLE {
+    return startCancelable(alloc, name, args, cwd, env, null);
+}
+
+pub fn startCancelable(alloc: std.mem.Allocator, name: []const u8, args: []const []const u8, cwd: ?[]const u8, env: ?*const std.process.Environ.Map, stop: ?w.HANDLE) !w.HANDLE {
+    if (stop) |event| if (WaitForSingleObject(event, 0) == 0) return error.Cancelled;
     if (!protocol.validName(name)) return error.InvalidSessionName;
     var arena: std.heap.ArenaAllocator = .init(alloc);
     defer arena.deinit();
@@ -58,12 +64,21 @@ pub fn start(alloc: std.mem.Allocator, name: []const u8, args: []const []const u
     }
     const started = GetTickCount64();
     while (GetTickCount64() - started < 10000) {
-        if (WaitForSingleObject(pi.hProcess.?, 10) == 0) return if (Client.exitedNormally(pi.hProcess.?, 0)) error.SessionEnded else error.BrokerExitedDuringStartup;
-        var client = Client.initControl(name, null) catch continue;
+        const handles = [_]w.HANDLE{ pi.hProcess.?, stop orelse pi.hProcess.? };
+        const ready = WaitForMultipleObjects(if (stop != null) 2 else 1, &handles, 0, 10);
+        if (ready == 0) return if (Client.exitedNormally(pi.hProcess.?, 0)) error.SessionEnded else error.BrokerExitedDuringStartup;
+        if (ready == 1) return error.Cancelled;
+        var client = Client.initControl(name, stop) catch |err| {
+            if (stop) |event| if (WaitForSingleObject(event, 0) == 0) return error.Cancelled;
+            if (err == error.Stopped) return error.Cancelled;
+            continue;
+        };
         defer client.deinit();
         if (client.server_pid != pi.dwProcessId) return error.SessionAlreadyExists;
         var buffer: [4096]u8 = undefined;
         _ = client.request(.status, "", 0, &buffer) catch |err| {
+            if (stop) |event| if (WaitForSingleObject(event, 0) == 0) return error.Cancelled;
+            if (err == error.Stopped) return error.Cancelled;
             if (Client.exitedNormally(pi.hProcess.?, 1500)) return error.SessionEnded;
             return err;
         };

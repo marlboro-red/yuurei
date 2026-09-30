@@ -131,6 +131,11 @@ refs: u32 = 1,
 /// pty (or, if never consumed, deinit via `defterm.closeHandoff`) closes.
 pending_handoff: ?defterm.Handoff = null,
 pending_mux: ?*@import("../../termio/Mux.zig") = null,
+requested_id: ?u64 = null,
+
+pub fn requestedId(self: *const Self) ?u64 {
+    return self.requested_id;
+}
 
 pub fn takePreparedMux(self: *Self) ?*@import("../../termio/Mux.zig") {
     const result = self.pending_mux;
@@ -251,6 +256,7 @@ pub fn init(
         // pty, which keeps conhost's ConPTY alive and releases it on close).
         .pending_handoff = handoff_owned,
         .pending_mux = mux_owned,
+        .requested_id = spawn_opts.surface_id,
     };
     // Ownership handed to self: from here a failure releases the handoff
     // through pending_handoff (null once takeHandoff consumed it into
@@ -287,7 +293,9 @@ pub fn init(
     // restore override — the overlay applied via the standard load
     // pipeline. A failed overlay falls back to the base config rather
     // than failing the spawn.
-    var profile_base: ?configpkg.Config = if (spawn_opts.profile != null or
+    var profile_base: ?configpkg.Config = if (spawn_opts.prepared_config) |config|
+        try config.clone(app.core_app.alloc)
+    else if (spawn_opts.profile != null or
         spawn_opts.cwd != null or spawn_opts.command != null)
         app.spawnConfig(spawn_opts) catch |err| base: {
             if (spawn_opts.command != null) return err;
@@ -299,8 +307,8 @@ pub fn init(
     defer if (profile_base) |*c| c.deinit();
     perf.mark("spawn-config-done");
 
-    if (spawn_opts.profile) |p| {
-        self.profile_name = app.core_app.alloc.dupeZ(u8, p.name) catch null;
+    if (spawn_opts.prepared_profile orelse if (spawn_opts.profile) |p| p.name else null) |name| {
+        self.profile_name = app.core_app.alloc.dupeZ(u8, name) catch null;
     }
     errdefer if (self.profile_name) |n| {
         app.core_app.alloc.free(n);
@@ -311,7 +319,7 @@ pub fn init(
     // (session restore), skip newConfig's working-directory
     // inheritance — it would clobber the override with the focused
     // surface's pwd.
-    var config = if (spawn_opts.cwd != null and profile_base != null)
+    var config = if ((spawn_opts.prepared_config != null or spawn_opts.cwd != null) and profile_base != null)
         profile_base.?.shallowClone(app.core_app.alloc)
     else
         try apprt.surface.newConfig(
@@ -344,7 +352,7 @@ pub fn init(
         self,
     );
     errdefer self.core_surface.deinit();
-    if (spawn_opts.profile != null) {
+    if (spawn_opts.profile != null or spawn_opts.prepared_profile != null) {
         self.profile_config = profile_base;
         profile_base = null;
     }
