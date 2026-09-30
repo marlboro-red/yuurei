@@ -78,6 +78,12 @@ The helper-removal case operates on a temporary copy of the installation.
 Cleanup only targets this fixture's recorded processes and isolated sessions.
 Do not use either test-only environment variable for ordinary usage.
 
+The startup delay holds back attachment listeners after PID publication while
+terminal input/output threads remain active. This lets ConPTY complete its
+startup queries during the delay; withholding terminal replies would add an
+unrelated shell-initialization timeout to cancellation checks. Target closure
+still requires both the unpublished broker and shell to exit within 1500 ms.
+
 `timing.json` separates UI responsiveness from time to the shell's output
 marker. It is a deterministic regression check, not a production speedup
 benchmark. For a real comparison, use the same ReleaseFast build, shell,

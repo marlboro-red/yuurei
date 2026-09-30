@@ -399,14 +399,6 @@ fn serve(name: []const u8, args: anytype) !void {
         std.Io.Dir.deleteFileAbsolute(global.io(), record) catch {};
         alloc.free(record);
     }
-    // Deterministic Windows responsiveness/cancellation regression fixture.
-    // No delay unless explicitly requested; bound accidental configuration.
-    if (global.environ().getWindows(std.unicode.utf8ToUtf16LeStringLiteral("GHOSTTY_MUX_TEST_STARTUP_DELAY_MS"))) |value| {
-        var utf8: [16]u8 = undefined;
-        const length = if (value.len <= 5) std.unicode.utf16LeToUtf8(&utf8, value) catch 0 else 0;
-        const delay = std.fmt.parseInt(u32, utf8[0..length], 10) catch 0;
-        Sleep(@min(delay, 10000));
-    }
     const input_writer = try std.Thread.spawn(worker_config, Session.writeLoop, .{&session});
     defer {
         session.stopping.store(true, .release);
@@ -421,6 +413,16 @@ fn serve(name: []const u8, args: anytype) !void {
         _ = SetEvent(session.space_event);
         while (WaitForSingleObject(reader.getHandle(), 10) != 0) _ = CancelSynchronousIo(reader.getHandle());
         reader.join();
+    }
+    // Delay attachment readiness, not terminal IO. ConPTY needs replies to
+    // startup queries even before any client attaches; starving that exchange
+    // makes the shell outlive a canceled broker until its own query timeout.
+    // Keep the fixture after PID publication and before either listener starts.
+    if (global.environ().getWindows(std.unicode.utf8ToUtf16LeStringLiteral("GHOSTTY_MUX_TEST_STARTUP_DELAY_MS"))) |value| {
+        var utf8: [16]u8 = undefined;
+        const length = if (value.len <= 5) std.unicode.utf16LeToUtf8(&utf8, value) catch 0 else 0;
+        const delay = std.fmt.parseInt(u32, utf8[0..length], 10) catch 0;
+        Sleep(@min(delay, 10000));
     }
     const control_thread = try std.Thread.spawn(worker_config, controlLoop, .{ &session, control_pipe, identity });
     defer {

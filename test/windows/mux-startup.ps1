@@ -249,7 +249,7 @@ try {
     Key $window 0x74
     $first = Wait-Pending $success $window @($beforeBurst.name) 2 'burst-first-pending'
     Key $window 0x74
-    $second = Wait-Pending $success $window @($beforeBurst.name + $first.name) 2 'burst-second-pending'
+    $second = Wait-Pending $success $window (@($beforeBurst.name) + @($first.name)) 2 'burst-second-pending'
     Wait-For {
         Probe $window 'burst-output'
         [MuxStartupNative]::Hosts($window) -eq 4
@@ -279,9 +279,9 @@ try {
     Key $window 0x74 # Tab request
     $newTab = Wait-Pending $mixed $window @($original.name) 1 'mixed-tab-pending'
     Key $window 0x70 # Right split, targeting original
-    $right = Wait-Pending $mixed $window @($original.name + $newTab.name) 1 'mixed-right-pending'
+    $right = Wait-Pending $mixed $window (@($original.name) + @($newTab.name)) 1 'mixed-right-pending'
     Key $window 0x71 # Down split, still targeting original
-    $down = Wait-Pending $mixed $window @($original.name + $newTab.name + $right.name) 1 'mixed-down-pending'
+    $down = Wait-Pending $mixed $window (@($original.name) + @($newTab.name) + @($right.name)) 1 'mixed-down-pending'
     Key $window 0x7E # Zoom original while workers run; publication must show new splits
     Wait-Output $mixed $window $down 'mixed-final-output'
     Wait-For { Probe $window 'mixed-visible'; [MuxStartupNative]::VisibleHosts($window) -eq 3 } 'Splits did not publish into the original tab or left panes hidden'
@@ -349,7 +349,7 @@ try {
         Key $window 0x71
         $abandoned = Wait-Pending $cancelTarget $window @($existing.name) 2 'target-split-pending'
         Key $window 0x74
-        $survivor = Wait-Pending $cancelTarget $window @($existing.name + $abandoned.name) 2 'target-surviving-tab-pending'
+        $survivor = Wait-Pending $cancelTarget $window (@($existing.name) + @($abandoned.name)) 2 'target-surviving-tab-pending'
         Key $window $(if ($targetKind -eq 'pane') { 0x7A } else { 0x73 })
         Wait-For {
             Probe $window 'target-closed'
