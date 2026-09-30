@@ -187,7 +187,7 @@ fn execute(self: *ProfileMenu) void {
     if (row >= l.items.len) return self.dismiss();
     const profile = &l.items[row];
     self.dismiss();
-    _ = window.newTabWithProfile(profile) catch |err| {
+    window.requestNewTab(profile, null) catch |err| {
         log.err("error opening profile tab err={}", .{err});
     };
 }

@@ -83,6 +83,13 @@ pub fn sinceKeyMs() ?i64 {
 var mark_epoch_ns: std.atomic.Value(i64) = .init(0);
 
 pub fn mark(name: []const u8) void {
+    markContext(name, null);
+}
+
+/// Correlate overlapping asynchronous session requests without conflating
+/// request return, broker readiness and publication. Timestamps remain on the
+/// same process epoch as the existing startup marks.
+pub fn markContext(name: []const u8, context: ?[]const u8) void {
     if (!isEnabled()) return;
     const now: i64 = @intCast(std.Io.Timestamp.now(global.io(), .awake).toNanoseconds());
     var epoch = mark_epoch_ns.load(.monotonic);
@@ -92,10 +99,16 @@ pub fn mark(name: []const u8) void {
         else
             now;
     }
-    std.log.scoped(.perf).info("mark {s} t=+{d}ms", .{
-        name,
-        @divTrunc(now - epoch, std.time.ns_per_ms),
-    });
+    if (context) |value| {
+        std.log.scoped(.perf).info("mark {s} t=+{d}ms context={s}", .{
+            name, @divTrunc(now - epoch, std.time.ns_per_ms), value,
+        });
+    } else {
+        std.log.scoped(.perf).info("mark {s} t=+{d}ms", .{
+            name,
+            @divTrunc(now - epoch, std.time.ns_per_ms),
+        });
+    }
     memoryMark(name);
 }
 

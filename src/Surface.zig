@@ -470,6 +470,16 @@ const DerivedConfig = struct {
     }
 };
 
+/// Allocate an identity before asynchronous native session preparation.
+pub fn newId() u64 {
+    const source: std.Random.IoSource = .{ .io = global.io() };
+    const random = source.interface();
+    while (true) {
+        const candidate = random.int(u64);
+        if (candidate != 0) return candidate;
+    }
+}
+
 /// Create a new surface. This must be called from the main thread. The
 /// pointer to the memory for the surface must be provided and must be
 /// stable due to interfacing with various callbacks.
@@ -595,17 +605,10 @@ pub fn init(
     errdefer io_thread.deinit();
 
     self.* = .{
-        .id = id: {
-            while (true) {
-                const candidate = candidate: {
-                    const rng_impl: std.Random.IoSource = .{ .io = global.io() };
-                    const rng = rng_impl.interface();
-                    break :candidate rng.int(u64);
-                };
-                if (candidate == 0) continue;
-                break :id candidate;
-            }
-        },
+        .id = if (comptime @hasDecl(@TypeOf(rt_surface.*), "requestedId"))
+            rt_surface.requestedId() orelse newId()
+        else
+            newId(),
         .alloc = alloc,
         .app = app,
         .rt_app = rt_app,

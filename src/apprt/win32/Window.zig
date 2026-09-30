@@ -12,6 +12,7 @@ const input = @import("../../input.zig");
 const datastruct = @import("../../datastruct/main.zig");
 const App = @import("App.zig");
 const Surface = @import("Surface.zig");
+const SurfaceStartup = @import("SurfaceStartup.zig");
 const CommandPalette = @import("CommandPalette.zig");
 const ProfileMenu = @import("ProfileMenu.zig");
 const profiles = @import("profiles.zig");
@@ -142,6 +143,9 @@ tooltip_hash: u64 = 0,
 
 /// The command palette popup while it is open.
 palette: ?*CommandPalette = null,
+/// FIFO publication preserves repeated new-tab requests even if workers finish
+/// out of order. All requests are cancelled before this window is destroyed.
+surface_startups: @import("../../mux/StartupQueue.zig").Queue(SurfaceStartup) = .{},
 
 /// The profile dropdown popup while it is open.
 profile_menu: ?*ProfileMenu = null,
@@ -432,6 +436,8 @@ pub fn create(alloc: Allocator, app: *App, opts: CreateOptions) !*Window {
 /// Destroy the window and any remaining tabs. Must not be called from
 /// inside the window procedure.
 pub fn destroy(self: *Window) void {
+    self.cancelSurfaceStartups();
+    self.surface_startups.deinit(self.app.core_app.alloc);
     self.cancelLeader();
     const alloc = self.app.core_app.alloc;
     if (self.session_font) |font| _ = winapi.DeleteObject(font);
@@ -468,6 +474,11 @@ pub const SpawnOpts = struct {
     mux_session: ?[]const u8 = null,
     mux_restore: bool = false,
     prepared_mux: ?*@import("../../termio/Mux.zig") = null,
+    prepared_config: ?*const @import("../../config.zig").Config = null,
+    prepared_profile: ?[]const u8 = null,
+    surface_id: ?u64 = null,
+    // Revalidate the window after native Surface.init can dispatch messages.
+    pending_request: bool = false,
     profile: ?*const profiles.Profile = null,
     cwd: ?[]const u8 = null,
     /// Resolved startup command from a separately launched process.
@@ -483,7 +494,10 @@ pub const SpawnOpts = struct {
 /// single-leaf tree. The tree holds the only reference on return.
 fn newSurfaceTree(self: *Window, opts: SpawnOpts, context: apprt.surface.NewSurfaceContext) !Tree {
     const alloc = self.app.core_app.alloc;
-    const surface = try alloc.create(Surface);
+    const surface = alloc.create(Surface) catch |err| {
+        if (opts.prepared_mux) |mux| mux.deinit();
+        return err;
+    };
     errdefer alloc.destroy(surface);
 
     try surface.init(self.app, self, opts, context);
@@ -493,6 +507,164 @@ fn newSurfaceTree(self: *Window, opts: SpawnOpts, context: apprt.surface.NewSurf
     // Tree.init took its own reference; release our creation one.
     surface.refs -= 1;
     return tree;
+}
+
+/// User-facing new tabs/splits prepare broker startup on a worker. Existing callers
+/// that need an immediate Surface (initial windows, restore, handoff) keep the
+/// synchronous newTabWithOpts API.
+pub fn requestNewTab(self: *Window, profile: ?*const profiles.Profile, font_size: ?@import("../../font/main.zig").face.DesiredSize) !void {
+    return self.requestSurface(.tab, profile, font_size);
+}
+
+pub fn requestNewSplit(self: *Window, direction: apprt.action.SplitDirection) !void {
+    const target = self.activeSurface() orelse return error.NoActiveTab;
+    if (target.should_close) return;
+    const profile = if (target.profile_name) |name| self.app.ensureProfiles().byName(name) else null;
+    const font_size = if (self.app.config.@"window-inherit-font-size") target.core_surface.font_size else null;
+    return self.requestSurface(.{ .split = .{ .surface_id = target.core_surface.id, .direction = direction } }, profile, font_size);
+}
+
+fn requestSurface(self: *Window, destination: SurfaceStartup.Destination, profile: ?*const profiles.Profile, font_size: ?@import("../../font/main.zig").face.DesiredSize) !void {
+    if (self.should_close) return;
+    if (self.surface_startups.pending.items.len >= @TypeOf(self.surface_startups).limit) return error.TooManyPendingSurfaces;
+    perf.mark(if (destination == .tab) "new-tab-request" else "new-split-request");
+    const alloc = self.app.core_app.alloc;
+    var base = if (profile != null) self.app.spawnConfig(.{ .profile = profile }) catch |err| fallback: {
+        log.warn("spawn config failed, using base config err={}", .{err});
+        break :fallback try self.app.config.clone(alloc);
+    } else try self.app.config.clone(alloc);
+    defer base.deinit();
+    var inherited = switch (destination) {
+        .tab => try apprt.surface.newConfig(self.app.core_app, &base, .tab),
+        .split => base.shallowClone(alloc),
+    };
+    defer inherited.deinit();
+    if (destination == .split and apprt.surface.shouldInheritWorkingDirectory(.split, &base)) {
+        const location = @import("StartupTarget.zig").find(self.tabs.items, destination.split.surface_id) orelse return error.SplitTargetClosed;
+        const target = self.tabs.items[location.tab].tree.nodes[location.node].leaf;
+        if (try target.core_surface.pwd(inherited._arena.?.allocator())) |cwd| inherited.@"working-directory" = .{ .path = cwd };
+    }
+    // Match Surface.init: a new tab/split must not reattach the launch pane.
+    const attached_launch = inherited.@"windows-mux-session" != null;
+    if (attached_launch) {
+        inherited.@"windows-mux-session" = null;
+        inherited.@"windows-persistent-sessions" = true;
+    }
+    var conditional = inherited.changeConditionalState(self.app.core_app.config_conditional_state) catch |err| fallback: {
+        log.warn("failed to apply conditional state to config err={}", .{err});
+        break :fallback null;
+    };
+    defer if (conditional) |*value| value.deinit();
+    const effective = if (conditional) |*value| state: {
+        // Match core Surface.init: inherited cwd wins over replayed config.
+        value.@"working-directory" = inherited.@"working-directory";
+        break :state value;
+    } else &inherited;
+    var config = try effective.clone(alloc);
+    // Conditional replay must not resurrect a launch-only attachment target
+    // or undo the new persistent-session intent inherited from that target.
+    if (attached_launch or config.@"windows-mux-session" != null) {
+        config.@"windows-mux-session" = null;
+        config.@"windows-persistent-sessions" = true;
+    }
+    var config_owned = true;
+    defer if (config_owned) config.deinit();
+    const label = if (profile) |value| value.name else null;
+    if (!config.@"windows-persistent-sessions" and self.surface_startups.pending.items.len == 0) {
+        const opts: SpawnOpts = .{ .prepared_config = &config, .prepared_profile = label };
+        const surface = switch (destination) {
+            .tab => try self.newTabWithOpts(opts),
+            .split => |target| try self.publishSplit(target.surface_id, target.direction, opts),
+        };
+        if (font_size) |size| try surface.core_surface.setFontSize(size);
+        return;
+    }
+    const job = if (config.@"windows-persistent-sessions")
+        try SurfaceStartup.create(self, destination, config, label, font_size)
+    else
+        try SurfaceStartup.createDirect(self, destination, config, label, font_size);
+    config_owned = false;
+    errdefer job.destroy();
+    try self.surface_startups.append(alloc, job);
+    errdefer _ = self.surface_startups.pending.pop();
+    if (job.mux) |mux| job.mark(.queued, mux.name);
+    try job.start();
+    self.layoutActiveTab();
+    if (job.mux) |mux| job.mark(.returned, mux.name);
+}
+
+pub fn cancelSurfaceStartups(self: *Window) void {
+    // Signal every request before joining any, so shutdown time cannot grow
+    // by a full broker-startup timeout for each queued surface.
+    self.surface_startups.cancelAll();
+}
+
+/// App-loop only, outside window procedures and before the close sweep.
+pub fn pollSurfaceStartups(self: *Window) void {
+    if (self.surface_startups.pending.items.len == 0) return;
+    if (!self.canPublishSurface()) {
+        self.cancelSurfaceStartups();
+        return;
+    }
+    // Do not wait behind a slow worker for a pane which has already closed,
+    // moved to another window, or been replaced during a workspace switch.
+    const before = self.surface_startups.pending.items.len;
+    self.surface_startups.cancelMatching(self, startupTargetClosed);
+    if (before != self.surface_startups.pending.items.len) self.layoutActiveTab();
+    while (self.surface_startups.popReady()) |job| {
+        defer job.destroy();
+        const opts: SpawnOpts = .{
+            .prepared_mux = job.takeMux(),
+            .prepared_config = &job.config,
+            .prepared_profile = job.profile_name,
+            .surface_id = job.surface_id,
+            .pending_request = true,
+        };
+        const surface = (switch (job.destination) {
+            .tab => self.newTabWithOpts(opts),
+            .split => |target| self.publishSplit(target.surface_id, target.direction, opts),
+        }) catch |err| {
+            if (!self.canPublishSurface()) self.cancelSurfaceStartups();
+            if (err == error.StartupCancelled or err == error.SplitTargetClosed) continue;
+            log.err("asynchronous surface creation failed: {}", .{err});
+            self.session_bar.failed = true;
+            self.session_bar.failure_text = "Unable to open terminal. See the log for details. Esc dismisses.";
+            self.layoutActiveTab();
+            continue;
+        };
+        if (job.font_size) |size| surface.core_surface.setFontSize(size) catch |err| log.warn("error inheriting font size: {}", .{err});
+        if (surface.core_surface.io.backend == .mux) job.mark(.published, surface.core_surface.io.backend.mux.name);
+        // Publish at most one surface per message-loop turn. A burst of ready
+        // workers must not turn into another long GUI-thread batch.
+        if (self.surface_startups.pending.items.len > 0) self.app.wakeup();
+        break;
+    }
+}
+
+fn canPublishSurface(self: *Window) bool {
+    if (self.should_close or self.app.quit) return false;
+    for (self.tabs.items) |tab| for (tab.tree.nodes) |node| {
+        if (node == .leaf and !node.leaf.should_close) return true;
+    };
+    return false;
+}
+
+/// Deterministic regression hook for a close dispatched by native creation.
+/// Only asynchronous publication calls this; ordinary usage has no variable.
+fn testCloseAtPublication(self: *Window) void {
+    const value = global.environ().getWindows(std.unicode.utf8ToUtf16LeStringLiteral("GHOSTTY_MUX_TEST_CLOSE_ON_PUBLISH")) orelse return;
+    if (std.mem.eql(u16, value, std.unicode.utf8ToUtf16LeStringLiteral("window"))) {
+        _ = winapi.SendMessageW(self.hwnd, winapi.WM_CLOSE, 0, 0);
+    } else if (std.mem.eql(u16, value, std.unicode.utf8ToUtf16LeStringLiteral("last-pane"))) {
+        if (self.activeSurface()) |surface| surface.core_surface.close();
+    }
+}
+
+fn startupTargetClosed(self: *Window, job: *SurfaceStartup) bool {
+    return switch (job.destination) {
+        .tab => false,
+        .split => |target| @import("StartupTarget.zig").find(self.tabs.items, target.surface_id) == null,
+    };
 }
 
 /// Create and activate a new tab.
@@ -514,6 +686,12 @@ pub fn newTabWithOpts(self: *Window, opts: SpawnOpts) !*Surface {
     const alloc = self.app.core_app.alloc;
     var tree = try self.newSurfaceTree(opts, if (self.tabs.items.len == 0) .window else .tab);
     errdefer tree.deinit();
+    if (opts.pending_request) {
+        self.testCloseAtPublication();
+        // The new tree is not published yet: last-live-pane checks must only
+        // see the old tabs, never let this pending request keep a closed UI alive.
+        if (!self.canPublishSurface()) return error.StartupCancelled;
+    }
 
     const surface = tree.nodes[0].leaf;
     try self.tabs.append(alloc, .{ .tree = tree, .focused = surface });
@@ -521,12 +699,13 @@ pub fn newTabWithOpts(self: *Window, opts: SpawnOpts) !*Surface {
     // Label the tab with the profile name (WT-style): clearer than the
     // generic title, especially for shells that never set one. A
     // manual rename still overwrites it.
-    if (opts.profile) |p| {
+    if (opts.prepared_profile orelse if (opts.profile) |p| p.name else null) |name| {
         self.tabs.items[self.tabs.items.len - 1].custom_title =
-            alloc.dupe(u8, p.name) catch null;
+            alloc.dupe(u8, name) catch null;
     }
 
     self.activateTab(self.tabs.items.len - 1);
+    if (surface.core_surface.io.backend == .mux) surface.core_surface.io.backend.mux.acceptStartup();
     perf.mark("new-tab-end");
     return surface;
 }
@@ -557,6 +736,7 @@ pub fn discardWorkspaceTabs(self: *Window, first: usize) void {
 
 /// Clear view-specific UI before freeing or moving any old terminal pages.
 pub fn clearWorkspaceUi(self: *Window, retained: ?*const Tree) void {
+    self.cancelSurfaceStartups();
     self.cancelLeader();
     if (self.palette) |palette| palette.destroy();
     if (self.profile_menu) |menu| menu.destroy();
@@ -1149,9 +1329,9 @@ fn showStripMenu(self: *Window, idx: ?usize) void {
         },
         2 => if (idx) |i| self.closeTabsFrom(.this, i),
         3 => if (idx) |i| self.closeTabsFrom(.other, i),
-        10 => _ = self.newTab() catch |err| log.err("menu new tab err={}", .{err}),
-        11 => _ = self.newSplit(.right) catch |err| log.err("menu split err={}", .{err}),
-        12 => _ = self.newSplit(.down) catch |err| log.err("menu split err={}", .{err}),
+        10 => self.requestNewTab(null, null) catch |err| log.err("menu new tab err={}", .{err}),
+        11 => self.requestNewSplit(.right) catch |err| log.err("menu split err={}", .{err}),
+        12 => self.requestNewSplit(.down) catch |err| log.err("menu split err={}", .{err}),
         13 => self.togglePalette() catch |err| log.err("menu palette err={}", .{err}),
         14 => _ = self.app.performAction(.app, .open_config, .os_open) catch |err|
             log.err("menu settings err={}", .{err}),
@@ -1163,7 +1343,7 @@ fn showStripMenu(self: *Window, idx: ?usize) void {
             const list = self.app.ensureProfiles();
             const i: usize = @intCast(cmd - 100);
             if (i < list.items.len) {
-                _ = self.newTabWithProfile(&list.items[i]) catch |err|
+                self.requestNewTab(&list.items[i], null) catch |err|
                     log.err("menu profile tab err={}", .{err});
             }
         },
@@ -1792,22 +1972,21 @@ fn pointToSurface(self: *Window, surface: *const Surface, x: i32, y: i32) winapi
     return .{ .x = x - tl.x, .y = y - tl.y };
 }
 
-/// Split the focused surface of the active tab in the given direction.
-pub fn newSplit(self: *Window, direction: apprt.action.SplitDirection) !*Surface {
+/// Publish into the originally requested pane, resolving its current tree
+/// position only on the UI thread. Surface creation consumes opts on failure
+/// too; an unpublished prepared broker remains owned until insertion commits.
+fn publishSplit(self: *Window, target_id: u64, direction: apprt.action.SplitDirection, opts: SpawnOpts) !*Surface {
     const alloc = self.app.core_app.alloc;
-    const tab = self.activeTab() orelse return error.NoActiveTab;
-    const handle = handleOf(&tab.tree, tab.focused) orelse return error.NoFocusedSurface;
-
-    // Splits inherit the focused surface's profile (resolved by name;
-    // a since-removed profile falls back to the base config).
-    const profile: ?*const profiles.Profile = if (tab.focused.profile_name) |name|
-        self.app.ensureProfiles().byName(name)
-    else
-        null;
-
-    var insert = try self.newSurfaceTree(.{ .profile = profile }, .split);
+    var insert = try self.newSurfaceTree(opts, .split);
     defer insert.deinit();
     const surface = insert.nodes[0].leaf;
+    if (opts.pending_request) self.testCloseAtPublication();
+    if (self.should_close or self.app.quit) return error.SplitTargetClosed;
+    // Resolve after Surface.init: native window creation may dispatch messages.
+    // Neither a tab-array pointer nor a SplitTree handle survives that call.
+    const location = @import("StartupTarget.zig").find(self.tabs.items, target_id) orelse return error.SplitTargetClosed;
+    const tab = &self.tabs.items[location.tab];
+    const handle: Tree.Node.Handle = @enumFromInt(location.node);
 
     const tree_direction: Tree.Split.Direction = switch (direction) {
         .right => .right,
@@ -1822,9 +2001,13 @@ pub fn newSplit(self: *Window, direction: apprt.action.SplitDirection) !*Surface
     tab.tree = new_tree;
     old_tree.deinit();
 
-    surface.setVisible(true);
-    self.layoutActiveTab();
+    // A split exits zoom so every newly inserted pane is visible, including
+    // when the user zoomed the original target while preparation was pending.
+    tab.tree.zoomed = null;
+    self.activateTab(location.tab);
     self.focusSurface(surface);
+    self.layoutActiveTab();
+    if (surface.core_surface.io.backend == .mux) surface.core_surface.io.backend.mux.acceptStartup();
     return surface;
 }
 
@@ -2070,7 +2253,7 @@ pub fn workspaceFailed(self: *Window, err: anyerror) void {
 }
 
 pub fn sessionBarHeight(self: *Window) i32 {
-    if (self.leader_active or self.session_bar.pending != null or self.session_bar.failed or self.workspaceSwitchPending()) return self.scale(26);
+    if (self.surface_startups.pending.items.len > 0 or self.leader_active or self.session_bar.pending != null or self.session_bar.failed or self.workspaceSwitchPending()) return self.scale(26);
     const tab = self.activeTab() orelse return 0;
     var iterator = tab.tree.iterator();
     while (iterator.next()) |entry| if (entry.view.core_surface.io.backend == .mux) return self.scale(26);
@@ -2128,6 +2311,8 @@ fn paintSessionBar(self: *Window, hdc: winapi.HDC) void {
         std.fmt.bufPrint(&text_buffer, "End session \"{s}\" and its programs?", .{target.title()}) catch "End session?"
     else if (self.session_bar.failed)
         self.session_bar.failure_text orelse "Unable to end session. Refresh the session list and retry."
+    else if (self.surface_startups.pending.items.len > 0)
+        "Starting terminal…"
     else if (self.workspaceSwitchPending())
         "Switching workspace…"
     else if (self.leader_active)
@@ -4394,7 +4579,7 @@ pub fn wndProc(
                         .tab => {},
                         // Closing a tab closes every split in it.
                         .tab_close => |i| self.closeTabsFrom(.this, i),
-                        .new_tab => _ = self.newTab() catch |err| {
+                        .new_tab => self.requestNewTab(null, null) catch |err| {
                             log.err("error creating tab err={}", .{err});
                         },
                         .new_tab_chevron => self.openProfileMenu(),
@@ -4561,7 +4746,7 @@ fn keyEvent(
         const i: usize = vk - '1';
         if (i >= list.items.len) break :profile;
         // The paired text was already consumed above.
-        _ = self.newTabWithProfile(&list.items[i]) catch |err|
+        self.requestNewTab(&list.items[i], null) catch |err|
             log.err("profile shortcut err={}", .{err});
         return;
     }
