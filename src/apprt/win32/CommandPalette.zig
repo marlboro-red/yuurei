@@ -1325,6 +1325,9 @@ fn lparamY(lparam: winapi.LPARAM) i16 {
 }
 
 test "session navigator selection confirmation cancellation and stale entries" {
+    // The none-runtime suite also discovers this module, but native event
+    // dispatch requires matching core/runtime Surface types.
+    if (comptime @import("../../apprt.zig").App != App) return error.SkipZigTest;
     const testing = std.testing;
     const hwnd = winapi.CreateWindowExW(0, std.unicode.utf8ToUtf16LeStringLiteral("STATIC"), std.unicode.utf8ToUtf16LeStringLiteral(""), 0, 0, 0, 800, 600, null, null, @ptrCast(winapi.GetModuleHandleW(null).?), null) orelse return error.CreateWindowFailed;
     defer _ = winapi.DestroyWindow(hwnd);
