@@ -891,6 +891,15 @@ fn toggleQuickTerminal(self: *App) !void {
     _ = winapi.SetForegroundWindow(window.hwnd);
 }
 
+/// Modal navigator keys must not leave translated text queued after the
+/// prompt closes. Dispatch still delivers keydown/up to the owning view.
+fn translateMessage(self: *App, msg: *const winapi.MSG) void {
+    for (self.windows.items) |window| {
+        if (window.palette) |palette| if (palette.consumesKeyText(msg)) return;
+    }
+    _ = winapi.TranslateMessage(msg);
+}
+
 /// Run the event loop. This doesn't return until the app exits.
 pub fn run(self: *App) !void {
     self.updater.init();
@@ -906,7 +915,7 @@ pub fn run(self: *App) !void {
             self.handleHotkey(msg.wParam);
         } else {
             if (!(if (self.settings) |settings| settings.routeMessage(&msg) else false)) {
-                _ = winapi.TranslateMessage(&msg);
+                self.translateMessage(&msg);
                 _ = winapi.DispatchMessageW(&msg);
             }
         }
@@ -925,7 +934,7 @@ pub fn run(self: *App) !void {
                 continue;
             }
             if (!(if (self.settings) |settings| settings.routeMessage(&msg) else false)) {
-                _ = winapi.TranslateMessage(&msg);
+                self.translateMessage(&msg);
                 _ = winapi.DispatchMessageW(&msg);
             }
         }
@@ -981,7 +990,7 @@ pub fn run(self: *App) !void {
                 window.removeSurface(flagged orelse break :sweep);
             }
 
-            if (window.tabs.items.len == 0) {
+            if (window.tabs.items.len == 0 and (window.should_close or !window.hasSessionNavigator())) {
                 if (self.quick == window) self.quick = null;
                 window.destroy();
                 _ = self.windows.orderedRemove(wi);

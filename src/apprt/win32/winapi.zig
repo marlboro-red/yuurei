@@ -1052,6 +1052,7 @@ pub const BITMAPINFO = extern struct {
 pub const DIB_RGB_COLORS: UINT = 0;
 pub const SRCCOPY: DWORD = 0x00CC0020;
 pub extern "gdi32" fn CreateCompatibleDC(?HDC) callconv(.winapi) ?HDC;
+pub extern "gdi32" fn CreateCompatibleBitmap(HDC, i32, i32) callconv(.winapi) ?*anyopaque;
 pub extern "gdi32" fn DeleteDC(HDC) callconv(.winapi) BOOL;
 pub extern "gdi32" fn CreateDIBSection(?HDC, *const BITMAPINFO, UINT, *?[*]u8, ?HANDLE, DWORD) callconv(.winapi) ?*anyopaque;
 pub extern "gdi32" fn BitBlt(HDC, i32, i32, i32, i32, ?HDC, i32, i32, DWORD) callconv(.winapi) BOOL;

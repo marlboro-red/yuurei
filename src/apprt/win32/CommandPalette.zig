@@ -53,6 +53,7 @@ rename_fresh: bool = false,
 rename_text: std.ArrayList(u16) = .empty,
 error_text: ?[]const u8 = null,
 preview: ?*SessionPreview = null,
+end_confirmation: @import("SessionBar.zig") = .{},
 
 /// Cached fonts, recreated on DPI change. The palette repaints on every
 /// keystroke; re-creating fonts each paint is measurable GDI churn.
@@ -130,6 +131,7 @@ pub fn destroy(self: *CommandPalette) void {
     _ = winapi.SetWindowLongPtrW(self.hwnd, winapi.GWLP_USERDATA, 0);
     _ = winapi.DestroyWindow(self.hwnd);
     if (self.embedded) self.window.refreshActiveTab();
+    if (self.window.tabs.items.len == 0) self.window.app.wakeup();
     self.filter.deinit(alloc);
     self.rename_text.deinit(alloc);
     self.matches.deinit(alloc);
@@ -257,6 +259,14 @@ pub fn workspaceError(err: anyerror) []const u8 {
 
 pub fn sessionClosed(self: *CommandPalette, name: []const u8) void {
     if (self.mode == .commands or self.workspaceMode()) return;
+    if (self.end_confirmation.pending) |target| {
+        if (std.mem.eql(u8, target.name(), name)) {
+            self.end_confirmation.cancel();
+            self.error_text = "Session already ended.";
+        }
+    }
+    const previous = self.selected;
+    const selected_id = if (self.selected < self.matches.items.len) self.sessions[self.matches.items[self.selected]].name else "";
     const editing = self.mode == .rename_session;
     if (editing) self.mode = .sessions;
     var live: usize = 0;
@@ -267,11 +277,15 @@ pub fn sessionClosed(self: *CommandPalette, name: []const u8) void {
     }
     self.sessions = self.sessions[0..live];
     self.refilter();
+    const next = for (self.matches.items, 0..) |index, position| {
+        if (std.mem.eql(u8, self.sessions[index].name, selected_id)) break position;
+    } else @min(previous, self.matches.items.len -| 1);
+    self.moveSelection(@intCast(next));
     if (editing) {
         if (self.rename_id) |id| {
             for (self.matches.items, 0..) |index, position| {
                 if (!std.mem.eql(u8, self.sessions[index].name, id)) continue;
-                self.moveSelection(@intCast(position));
+                self.moveSelection(@as(i32, @intCast(position)) - @as(i32, @intCast(self.selected)));
                 self.mode = .rename_session;
                 return;
             }
@@ -282,6 +296,7 @@ pub fn sessionClosed(self: *CommandPalette, name: []const u8) void {
 }
 
 fn refreshSessions(self: *CommandPalette) void {
+    const previous_position = self.selected;
     var selected_id: [128]u8 = undefined;
     const id = if (self.selected < self.matches.items.len) self.sessions[self.matches.items[self.selected]].name else "";
     const id_len = @min(id.len, selected_id.len);
@@ -295,8 +310,9 @@ fn refreshSessions(self: *CommandPalette) void {
     for (self.matches.items, 0..) |entry, i| {
         if (!std.mem.eql(u8, self.sessions[entry].name, selected_id[0..id_len])) continue;
         self.moveSelection(@intCast(i));
-        break;
+        return;
     }
+    self.moveSelection(@intCast(@min(previous_position, self.matches.items.len -| 1)));
 }
 
 pub fn renameSession(self: *CommandPalette, id: []const u8) void {
@@ -359,18 +375,27 @@ fn saveName(self: *CommandPalette, name: []const u8) !void {
 }
 
 fn endSelectedSession(self: *CommandPalette) void {
-    if (self.mode != .sessions or self.matches.items.len == 0) return;
-    const window = self.window;
-    const alloc = window.app.core_app.alloc;
+    if (self.mode != .sessions or self.matches.items.len == 0 or self.end_confirmation.pending != null) return;
     const entry = self.sessions[self.matches.items[self.selected]];
-    const name = alloc.dupe(u8, entry.name) catch return;
-    defer alloc.free(name);
-    const label = alloc.dupe(u8, if (entry.label.len > 0) entry.label else entry.name) catch return;
-    defer alloc.free(label);
-    // Copy the selection before dismissing the palette. The window owns
-    // the inline confirmation, including for detached sessions.
-    self.dismiss();
-    window.endSession(name, label);
+    self.end_confirmation.begin(entry.name, if (entry.label.len > 0) entry.label else entry.name);
+    self.error_text = if (self.end_confirmation.failed) "Unable to confirm this session." else null;
+    _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+}
+
+fn confirmEndSession(self: *CommandPalette) void {
+    const target = self.end_confirmation.pending orelse return;
+    self.end_confirmation.cancel();
+    self.window.stopSession(target.name()) catch |err| {
+        log.err("session termination failed: {}", .{err});
+        if (err == error.SessionNotFound) {
+            self.sessionClosed(target.name());
+            self.error_text = "Session already ended.";
+        } else self.error_text = "Unable to end session. Press F5 to refresh and retry.";
+        _ = winapi.InvalidateRect(self.hwnd, null, winapi.FALSE);
+        return;
+    };
+    self.sessionClosed(target.name());
+    self.error_text = "Session ended.";
 }
 
 /// Dismiss the palette and return focus to the parent window.
@@ -689,11 +714,13 @@ fn moveSelection(self: *CommandPalette, delta: i32) void {
     const count = self.matches.items.len;
     if (count == 0) return;
     const max: i32 = @intCast(count - 1);
-    self.selected = @intCast(std.math.clamp(
+    const selected: usize = @intCast(std.math.clamp(
         @as(i32, @intCast(self.selected)) + delta,
         0,
         max,
     ));
+    if (selected == self.selected) return;
+    self.selected = selected;
     if (self.selected < self.scroll) self.scroll = self.selected;
     const visible = self.visibleRows();
     if (self.selected >= self.scroll + visible)
@@ -729,6 +756,22 @@ fn ensureFonts(self: *CommandPalette) void {
     self.font_title = winapi.CreateFontW(-self.window.scale(13), 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 5, 0, face);
     self.font_desc = winapi.CreateFontW(-self.window.scale(10), 0, 0, 0, 400, 0, 0, 0, 0, 0, 0, 5, 0, face);
     self.font_dpi = dpi;
+}
+
+/// Compose the background, rows, and preview off-screen. Suppressing
+/// WM_ERASEBKGND alone does not hide paint's own full-client FillRect.
+fn paintBuffered(self: *CommandPalette, hdc: winapi.HDC) void {
+    var client: winapi.RECT = undefined;
+    _ = winapi.GetClientRect(self.hwnd, &client);
+    if (client.right <= 0 or client.bottom <= 0) return;
+    const memory = winapi.CreateCompatibleDC(hdc) orelse return self.paint(hdc);
+    defer _ = winapi.DeleteDC(memory);
+    const bitmap = winapi.CreateCompatibleBitmap(hdc, client.right, client.bottom) orelse return self.paint(hdc);
+    defer _ = winapi.DeleteObject(bitmap);
+    const old = winapi.SelectObject(memory, bitmap) orelse return self.paint(hdc);
+    defer _ = winapi.SelectObject(memory, old);
+    self.paint(memory);
+    _ = winapi.BitBlt(hdc, 0, 0, client.right, client.bottom, memory, 0, 0, winapi.SRCCOPY);
 }
 
 fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
@@ -1032,19 +1075,23 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
     }
 
     if (self.mode != .commands) {
-        const hint = self.error_text orelse if (self.mode == .create_workspace)
-            "Move current tab to workspace · Enter save · Esc cancel"
-        else if (self.mode == .workspaces and self.move_workspace)
-            "Enter move tab · F5 refresh · Esc cancel"
-        else if (self.mode == .workspaces)
-            "Enter switch · F2 workspace from tab · F5 refresh · F6 sessions · Esc close"
-        else if (self.mode == .rename_session)
-            "Rename session · Enter save · Esc cancel"
-        else if (self.matches.items.len == 0)
-            "No matching sessions · F5 refresh"
+        var confirm_buffer: [512]u8 = undefined;
+        const hint = if (self.end_confirmation.pending) |target|
+            std.fmt.bufPrint(&confirm_buffer, "End session? Y end / N or Esc cancel - \"{s}\"", .{target.title()}) catch "End session? Y end / N or Esc cancel"
         else
-            "Enter switch · F2 rename · Del end · F5 refresh · F6 workspaces · Esc close";
-        var wide: [256]u16 = undefined;
+            self.error_text orelse if (self.mode == .create_workspace)
+                "Move current tab to workspace · Enter save · Esc cancel"
+            else if (self.mode == .workspaces and self.move_workspace)
+                "Enter move tab · F5 refresh · Esc cancel"
+            else if (self.mode == .workspaces)
+                "Enter switch · F2 workspace from tab · F5 refresh · F6 sessions · Esc close"
+            else if (self.mode == .rename_session)
+                "Rename session · Enter save · Esc cancel"
+            else if (self.matches.items.len == 0)
+                "No matching sessions · F5 refresh"
+            else
+                "Enter switch · F2 rename · Del end · F5 refresh · F6 workspaces · Esc close";
+        var wide: [512]u16 = undefined;
         const n = std.unicode.utf8ToUtf16Le(&wide, hint) catch 0;
         var rect: winapi.RECT = .{ .left = margin, .top = client.bottom - window.scale(30), .right = client.right - margin, .bottom = client.bottom };
         const old_font = if (desc_font) |font| winapi.SelectObject(hdc, font) else null;
@@ -1065,6 +1112,14 @@ fn paint(self: *CommandPalette, hdc: winapi.HDC) void {
 
 // ---------------------------------------------------------------------
 // Window procedure
+
+/// Consume modal keydowns before TranslateMessage enqueues text for them.
+/// Keep consuming repeats through keyup after the prompt closes, so prompt
+/// input cannot become a search or reach a terminal.
+pub fn consumesKeyText(self: *const CommandPalette, msg: *const winapi.MSG) bool {
+    return msg.hwnd == self.hwnd and msg.message == winapi.WM_KEYDOWN and
+        (self.end_confirmation.pending != null or self.end_confirmation.captured[@as(u8, @truncate(msg.wParam))]);
+}
 
 pub fn wndProc(
     hwnd: winapi.HWND,
@@ -1112,13 +1167,25 @@ pub fn wndProc(
         winapi.WM_PAINT => {
             var ps: winapi.PAINTSTRUCT = undefined;
             if (winapi.BeginPaint(hwnd, &ps)) |hdc| {
-                self.paint(hdc);
+                self.paintBuffered(hdc);
                 _ = winapi.EndPaint(hwnd, &ps);
             }
             return 0;
         },
 
         winapi.WM_KEYDOWN => {
+            const vk: u8 = @truncate(wparam);
+            if (self.end_confirmation.pending != null or self.end_confirmation.captured[vk]) {
+                const repeated = self.end_confirmation.captured[vk] or (lparam & (1 << 30)) != 0;
+                self.end_confirmation.captured[vk] = true;
+                if (!repeated and winapi.GetKeyState(winapi.VK_CONTROL) >= 0 and winapi.GetKeyState(winapi.VK_MENU) >= 0) {
+                    if (vk == 'Y') self.confirmEndSession() else if (vk == 'N' or vk == winapi.VK_ESCAPE) {
+                        self.end_confirmation.cancel();
+                        _ = winapi.InvalidateRect(hwnd, null, winapi.FALSE);
+                    }
+                }
+                return 0;
+            }
             // Once submitted, keep the displayed name aligned with the job.
             // Escape cancels preparation; no confirmation key reaches a shell.
             if (self.mode == .create_workspace and self.window.app.workspace_job != null and wparam != winapi.VK_ESCAPE) return 0;
@@ -1145,7 +1212,7 @@ pub fn wndProc(
                     session.cancelSwitch(self.window.app);
                     self.showSessions();
                 },
-                winapi.VK_DELETE => self.endSelectedSession(),
+                winapi.VK_DELETE => if ((lparam & (1 << 30)) == 0) self.endSelectedSession(),
                 winapi.VK_PRIOR => self.moveSelection(
                     -@as(i32, @intCast(@max(1, self.visibleRows()))),
                 ),
@@ -1160,6 +1227,7 @@ pub fn wndProc(
         },
 
         winapi.WM_CHAR => {
+            if (self.end_confirmation.pending != null) return 0;
             if (self.mode == .create_workspace and self.window.app.workspace_job != null) return 0;
             const edit = self.editText();
             const alloc = self.window.app.core_app.alloc;
@@ -1190,6 +1258,7 @@ pub fn wndProc(
         },
 
         winapi.WM_MOUSEMOVE => {
+            if (self.end_confirmation.pending != null) return 0;
             if (self.isEditing()) return 0;
             if (self.rowAt(@as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lparam)))))), lparamY(lparam))) |row| {
                 if (row != self.selected) {
@@ -1202,6 +1271,7 @@ pub fn wndProc(
         },
 
         winapi.WM_LBUTTONDOWN => {
+            if (self.end_confirmation.pending != null) return 0;
             if (self.isEditing()) return 0;
             if (self.rowAt(@as(i16, @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lparam)))))), lparamY(lparam))) |row| {
                 self.selected = row;
@@ -1211,6 +1281,7 @@ pub fn wndProc(
         },
 
         winapi.WM_MOUSEWHEEL => {
+            if (self.end_confirmation.pending != null) return 0;
             if (self.isEditing()) return 0;
             const delta: i16 = @bitCast(@as(u16, @truncate(wparam >> 16)));
             const rows: i32 = if (delta > 0) -3 else 3;
@@ -1234,7 +1305,13 @@ pub fn wndProc(
             return 0;
         },
 
+        winapi.WM_KEYUP => {
+            self.end_confirmation.captured[@as(u8, @truncate(wparam))] = false;
+            return 0;
+        },
+
         winapi.WM_KILLFOCUS => {
+            self.end_confirmation.captured = @splat(false);
             if (!self.embedded) self.destroy();
             return 0;
         },
@@ -1245,4 +1322,70 @@ pub fn wndProc(
 
 fn lparamY(lparam: winapi.LPARAM) i16 {
     return @bitCast(@as(u16, @truncate(@as(usize, @bitCast(lparam)) >> 16)));
+}
+
+test "session navigator selection confirmation cancellation and stale entries" {
+    const testing = std.testing;
+    const hwnd = winapi.CreateWindowExW(0, std.unicode.utf8ToUtf16LeStringLiteral("STATIC"), std.unicode.utf8ToUtf16LeStringLiteral(""), 0, 0, 0, 800, 600, null, null, @ptrCast(winapi.GetModuleHandleW(null).?), null) orelse return error.CreateWindowFailed;
+    defer _ = winapi.DestroyWindow(hwnd);
+    // Only allocator, titlebar config, and native geometry are used here;
+    // no broker or real terminal surface is involved in this state test.
+    var core: @import("../../App.zig") = undefined;
+    core.alloc = testing.allocator;
+    var app: App = undefined;
+    app.core_app = &core;
+    app.config.@"windows-titlebar-thin" = false;
+    var window: Window = .{ .app = &app, .hwnd = hwnd };
+    var picker: CommandPalette = .{ .window = &window, .hwnd = hwnd, .mode = .sessions, .session_arena = .init(testing.allocator) };
+    defer picker.session_arena.deinit();
+    defer picker.matches.deinit(testing.allocator);
+    defer picker.filter.deinit(testing.allocator);
+    _ = winapi.SetWindowLongPtrW(hwnd, winapi.GWLP_USERDATA, @bitCast(@intFromPtr(&picker)));
+    var entries = [_]Registry.Entry{
+        .{ .name = "alpha", .broker_pid = 0, .shell_pid = 0, .created = 0, .version = "" },
+        .{ .name = "beta", .broker_pid = 0, .shell_pid = 0, .created = 0, .version = "" },
+        .{ .name = "gamma", .broker_pid = 0, .shell_pid = 0, .created = 0, .version = "" },
+    };
+    picker.sessions = &entries;
+    picker.refilter();
+    for (0..100) |_| picker.moveSelection(1);
+    try testing.expectEqual(@as(usize, 2), picker.selected);
+    picker.moveSelection(-1);
+    picker.endSelectedSession();
+    var key_message: winapi.MSG = undefined;
+    key_message.hwnd = hwnd;
+    key_message.message = winapi.WM_KEYDOWN;
+    key_message.wParam = 'N';
+    try testing.expect(picker.consumesKeyText(&key_message));
+    try testing.expectEqualStrings("beta", picker.end_confirmation.pending.?.name());
+    _ = wndProc(hwnd, winapi.WM_KEYDOWN, winapi.VK_DOWN, 0);
+    _ = wndProc(hwnd, winapi.WM_KEYUP, winapi.VK_DOWN, 0);
+    _ = wndProc(hwnd, winapi.WM_CHAR, 'x', 0);
+    try testing.expectEqual(@as(usize, 1), picker.selected);
+    try testing.expectEqual(@as(usize, 0), picker.filter.items.len);
+    _ = wndProc(hwnd, winapi.WM_KEYDOWN, winapi.VK_ESCAPE, 0);
+    _ = wndProc(hwnd, winapi.WM_KEYDOWN, winapi.VK_ESCAPE, 1 << 30);
+    _ = wndProc(hwnd, winapi.WM_KEYUP, winapi.VK_ESCAPE, 0);
+    try testing.expect(picker.end_confirmation.pending == null);
+    try testing.expectEqual(@as(usize, 3), picker.sessions.len);
+    picker.endSelectedSession();
+    _ = wndProc(hwnd, winapi.WM_KEYDOWN, 'N', 0);
+    try testing.expect(picker.end_confirmation.pending == null);
+    try testing.expect(picker.consumesKeyText(&key_message)); // held N after cancel
+    _ = wndProc(hwnd, winapi.WM_KEYUP, 'N', 0);
+    try testing.expect(!picker.consumesKeyText(&key_message));
+    picker.endSelectedSession();
+    picker.sessionClosed("alpha");
+    try testing.expectEqual(@as(usize, 0), picker.selected);
+    try testing.expectEqualStrings("beta", picker.end_confirmation.pending.?.name());
+    picker.sessionClosed("beta");
+    try testing.expect(picker.end_confirmation.pending == null);
+    try testing.expectEqualStrings("gamma", picker.sessions[picker.matches.items[picker.selected]].name);
+    picker.sessionClosed("gamma");
+    picker.sessionClosed("gamma");
+    picker.moveSelection(1);
+    picker.endSelectedSession();
+    try testing.expectEqual(@as(usize, 0), picker.matches.items.len);
+    try testing.expectEqual(@as(usize, 0), picker.selected);
+    try testing.expect(picker.end_confirmation.pending == null);
 }
