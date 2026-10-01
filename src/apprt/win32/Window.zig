@@ -53,8 +53,8 @@ app: *App,
 /// The top-level window.
 hwnd: winapi.HWND,
 
-/// The tabs in visual order. Never empty after create() succeeds,
-/// except transiently during teardown.
+/// The tabs in visual order. May be empty while the session navigator
+/// remains open after the last attached session ends.
 tabs: std.ArrayList(Tab) = .empty,
 
 /// Index of the active (visible) tab.
@@ -1195,7 +1195,12 @@ pub fn removeSurface(self: *Window, surface: *Surface) void {
         }
 
         if (self.tabs.items.len == 0) {
-            self.should_close = true;
+            self.should_close = self.should_close or !self.hasSessionNavigator();
+            if (!self.should_close) {
+                self.session_bar = .{};
+                self.layoutActiveTab();
+                self.invalidateStrip();
+            }
             return;
         }
 
@@ -1426,31 +1431,31 @@ pub fn endSession(self: *Window, name: []const u8, label: []const u8) void {
 fn confirmEndSession(self: *Window) void {
     const target = self.session_bar.pending orelse return;
     self.session_bar.cancel();
-    var client = @import("../../mux/Client.zig").initControl(target.name(), null) catch |err| {
+    self.stopSession(target.name()) catch |err| {
         log.err("session termination failed: {}", .{err});
         self.session_bar.failed = true;
         self.invalidateSessionBar();
         return;
     };
+    self.layoutActiveTab();
+}
+
+/// Shared stop operation; each view owns its own confirmation and errors.
+pub fn stopSession(self: *Window, name: []const u8) !void {
+    var client = try @import("../../mux/Client.zig").initControl(name, null);
     defer client.deinit();
     var buffer: [256]u8 = undefined;
-    _ = client.request(.stop, "", 0, &buffer) catch |err| {
-        log.err("session termination failed: {}", .{err});
-        self.session_bar.failed = true;
-        self.invalidateSessionBar();
-        return;
-    };
+    _ = try client.request(.stop, "", 0, &buffer);
     for (self.app.windows.items) |window| for (window.tabs.items) |tab| {
         var iterator = tab.tree.iterator();
         while (iterator.next()) |entry| {
             const surface = entry.view;
-            if (surface.core_surface.io.backend == .mux and std.mem.eql(u8, surface.core_surface.io.backend.mux.name, target.name())) {
+            if (surface.core_surface.io.backend == .mux and std.mem.eql(u8, surface.core_surface.io.backend.mux.name, name)) {
                 surface.core_surface.io.backend.mux.ended.store(true, .release);
                 surface.should_close = true;
             }
         }
     };
-    self.layoutActiveTab();
     self.app.wakeup();
 }
 /// Begin an in-strip rename of tab `idx`: the tab becomes an editable
@@ -1743,6 +1748,10 @@ fn syncSearchVisibility(self: *Window) void {
     } else {
         _ = winapi.ShowWindow(search.hwnd, winapi.SW_HIDE);
     }
+}
+
+pub fn hasSessionNavigator(self: *const Window) bool {
+    return if (self.palette) |palette| palette.embedded else false;
 }
 
 pub fn activeTab(self: *Window) ?*Tab {

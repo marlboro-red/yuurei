@@ -89,13 +89,14 @@ fn run(self: *Self) void {
         };
         const n = std.unicode.utf8ToUtf16Le(&wide, result) catch 0;
         self.mutex.lockUncancelable(global.io());
-        if (self.generation == generation) {
+        const current = self.generation == generation;
+        if (current) {
             @memcpy(self.text[0..n], wide[0..n]);
             self.text_len = n;
             self.completed = generation;
         }
         self.mutex.unlock(global.io());
-        _ = w.PostMessageW(self.hwnd, ready_message, 0, 0);
+        if (current) _ = w.PostMessageW(self.hwnd, ready_message, 0, 0);
     }
 }
 
