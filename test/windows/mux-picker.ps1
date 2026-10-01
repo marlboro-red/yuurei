@@ -172,19 +172,22 @@ try{
  $picker=Palette;SendText $picker '日本語';Screenshot $picker 'after-restart';Key $picker 0x0D
  Wait-For {[SessionNative]::Title($window).Contains("SESSION_PID=$($first.shell_pid)")} 'Named session was lost after GUI restart'
  Assert ((@(Mux @('list')|ConvertFrom-Json)|Where-Object name -eq $first.name).label -eq 'API 日本語') 'Name did not survive GUI restart'
- # End a detached session directly from the picker using the inline bar.
+ # End a detached session directly inside the navigator.
  # Enter must not confirm; Escape must leave both sessions intact.
  Key $window 0x72;$picker=Palette;SendText $picker 'Frontend';Key $picker 0x2E
  Assert ([SessionNative]::Dialog($gui.Id) -eq 0) 'Session confirmation opened a Windows dialog'
  Screenshot $window 'end-detached-confirmation'
- Key $window 0x0D;Key $window 0x1B
+ Key $picker 0x0D;Key $picker 0x1B
+ Assert ([SessionNative]::Palette($gui.Id) -eq $picker) 'Cancelling termination dismissed the navigator'
  Assert (@(Mux @('list')|ConvertFrom-Json).Count -eq 2) 'Enter or Escape ended a session'
  Assert ((Get-Content "$dir/$($first.shell_pid).input") -eq 'x') 'Confirmation keys leaked into the shell'
- Key $window 0x72;$picker=Palette;SendText $picker 'Frontend';Key $picker 0x2E;Key $window 0x59
+ Key $picker 0x2E;Key $picker 0x59
  Wait-For {@(Mux @('list')|ConvertFrom-Json).Count -eq 1} 'Delete and Y did not remove detached session'
  Wait-For {!(Get-Process -Id $second.shell_pid -ErrorAction SilentlyContinue)} 'Detached shell survived termination'
  Assert (!(Mux @('status',$first.name)|ConvertFrom-Json).exited) 'Ending detached session stopped another session'
  Assert ((Get-Content "$dir/$($first.shell_pid).input") -eq 'x') 'Confirmation Y leaked into another shell'
+ Assert ([SessionNative]::Palette($gui.Id) -eq $picker) 'Ending a detached session dismissed the navigator'
+ Key $picker 0x1B
  # Command palette exposes the action; Esc cancels it. A remapped action
  # then ends the current session and closes its last pane.
  Key $window 0x78;$picker=Palette;SendText $picker 'End Session';Key $picker 0x0D

@@ -33,6 +33,7 @@ public static class NavigatorNative {
     static extern IntPtr SendMessageTimeout(IntPtr h, uint msg, IntPtr w, IntPtr l, uint flags, uint timeout, out UIntPtr result);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int command);
+    [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out Rect rect);
@@ -91,7 +92,11 @@ function Probe([IntPtr]$Window, [string]$Phase) {
 }
 function Key([IntPtr]$Window, [int]$VirtualKey) {
     Assert ([NavigatorNative]::PostMessage($Window, 0x100, $VirtualKey, 1)) 'Could not post key down'
-    Assert ([NavigatorNative]::PostMessage($Window, 0x101, $VirtualKey, 0xC0000001)) 'Could not post key up'
+    $released = [NavigatorNative]::PostMessage($Window, 0x101, $VirtualKey, 0xC0000001)
+    # Escape may destroy the picker before the synthetic release is posted.
+    # Keep failures on live windows (including an active confirmation) visible.
+    if (!$released -and $VirtualKey -eq 0x1B -and ![NavigatorNative]::IsWindow($Window)) { return }
+    Assert $released 'Could not post key up'
 }
 function Mux($Case, [string[]]$Arguments) {
     $psi = [Diagnostics.ProcessStartInfo]::new("$($Case.bin)/yuurei-mux.exe")
@@ -150,7 +155,7 @@ function Launch($Case) {
     $Case.gui = Start-Process "$($Case.bin)/ghostty.exe" -WindowStyle Hidden -PassThru -Environment @{
         LOCALAPPDATA=$Case.path; XDG_CONFIG_HOME=$Case.path; GHOSTTY_NEW_INSTANCE='1'
         GHOSTTY_PERF_TRACE='1'
-    } -RedirectStandardError "$($Case.path)/gui.log"
+    } -RedirectStandardError "$($Case.path)/gui.log" -RedirectStandardOutput "$($Case.path)/gui.stdout.log"
     Wait-For { [NavigatorNative]::Windows($Case.gui.Id).Count -eq 1 } "$($Case.name): window missing"
     $window = [NavigatorNative]::Windows($Case.gui.Id)[0]
     [void][NavigatorNative]::ShowWindow($window, 5)
